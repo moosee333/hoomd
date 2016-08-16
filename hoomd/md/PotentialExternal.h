@@ -68,6 +68,8 @@ class PotentialExternal: public ForceCompute
             GPUArray<param_type> params(m_pdata->getNTypes(), m_exec_conf);
             m_params.swap(params);
             }
+
+        // TODO: NPT_walls, add in a slotBoxChange() or something similar to above
    };
 
 /*! Constructor
@@ -89,6 +91,7 @@ PotentialExternal<evaluator>::PotentialExternal(std::shared_ptr<SystemDefinition
 
     // connect to the ParticleData to receive notifications when the maximum number of particles changes
     m_pdata->getNumTypesChangeSignal().template connect<PotentialExternal<evaluator>, &PotentialExternal<evaluator>::slotNumTypesChange>(this);
+    // TODO: NPT_walls, combine the above (template is important) with the signal used in CellList to watch for the box changes, and the new slot we're adding
     }
 
 /*! Destructor
@@ -97,6 +100,7 @@ template<class evaluator>
 PotentialExternal<evaluator>::~PotentialExternal()
     {
     m_pdata->getNumTypesChangeSignal().template disconnect<PotentialExternal<evaluator>, &PotentialExternal<evaluator>::slotNumTypesChange>(this);
+    // TODO: NPT_walls, disconnect our new signal during destruction
     }
 
 /*! PotentialExternal provides
@@ -153,6 +157,7 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
     const BoxDim& box = m_pdata->getGlobalBox();
     PDataFlags flags = this->m_pdata->getFlags();
 
+    // TODO: NPT_walls, see about the usage of this in the other external evaluators
     if (flags[pdata_flag::external_field_virial])
         {
         bool virial_terms_defined=evaluator::requestFieldVirialTerm();

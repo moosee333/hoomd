@@ -191,4 +191,20 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& positio
     d = (wall.inside) ? d : -d;
     return d;
     };
+
+// TODO: NPT_walls add the new box adjust functions here, one for each type of geometry, and figure out if we want to do it iteratively or based on an original... what's less/easier to store?
+//! Method for rescaling the plane wall properties iteratively
+HOSTDEVICE inline void rescaleWall(PlaneWall& wall, const BoxDim &old_box, const BoxDim &new_box)
+    {
+    // see BoxResizeUpdater.cc
+    // see TwoStepNPTMTK.cc
+    // figure out which we can do with the least information?
+    };
+
+//! Method for rescaling the plane wall properties (would need to be called before wall distance evaluation for every wall)
+HOSTDEVICE inline PlaneWall rescaleWall(const PlaneWall& wall, const BoxDim &original_box, const BoxDim &new_box)
+    {
+    // the other option would be best, but if we can't find a way this will work
+    };
+
 #endif

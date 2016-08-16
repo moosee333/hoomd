@@ -60,6 +60,7 @@ class EvaluatorWalls
         //! Constructs the external wall potential evaluator
         DEVICE EvaluatorWalls(Scalar3 pos, const BoxDim& box, const param_type& p, const field_type& f) : m_pos(pos), m_field(f), m_params(p)
             {
+            // TODO: NPT_walls, could add the calls to change the size here if the slot has been activated?
             }
 
         //! Test if evaluator needs Diameter
@@ -82,11 +83,12 @@ class EvaluatorWalls
             return evaluator::needsCharge();
             }
 
-        //! Declares additional virial cotribututions are needed for the external field
-        DEVICE static bool requestFieldVirialTerm()
-            {
-            return false; //volume change dependence is not currently defined
-            }
+        // TODO: NPT_walls, remove all traces of the old warning flag etc if it's not used by other functions
+        // //! Declares additional virial cotribututions are needed for the external field
+        // DEVICE static bool requestFieldVirialTerm()
+        //     {
+        //     return false; //volume change dependence is not currently defined
+        //     }
 
         //! Accept the optional charge value
         /*! \param qi Charge of particle i
