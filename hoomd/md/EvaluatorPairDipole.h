@@ -126,7 +126,7 @@ class EvaluatorPairDipole
                 return false;
 
             Scalar rinv =  RSQRT(rsq);
-            Scalar r2inv = Scalar(1.0) / rsq;
+            Scalar r2inv = Scalar(1.0)/rsq;
             Scalar r3inv = r2inv*rinv;
             Scalar r5inv = r3inv*r2inv;
 
@@ -141,6 +141,14 @@ class EvaluatorPairDipole
 
             Scalar r = Scalar(1.0)/rinv;
             Scalar prefactor = A*_EXP(-kappa*r);
+
+
+            Scalar rcutinv = fast::rsqrt(rcutsq);
+            Scalar rcut = Scalar(1.0) / rcutinv;
+            Scalar rcut2inv = Scalar(1.0) / rcutsq;
+            Scalar rcut3inv = rcut2inv*rcutinv;
+            Scalar rcut5inv = rcut3inv*rcut2inv;
+            Scalar rcutprefactor = A*_EXP(-kappa*rcut);
 
             // dipole-dipole
             if (mu != Scalar(0.0))
@@ -164,6 +172,14 @@ class EvaluatorPairDipole
                 t_j += -scaledpicrosspj + pre3*cross(p_j, rvec);
 
                 e += prefactor*(r3inv*pidotpj - Scalar(3.0)*r5inv*pidotr*pjdotr);
+
+                if (energy_shift)
+                    {
+                    Scalar pidotrcut = dot(p_i, rvec)*rcut*rinv;
+                    Scalar pjdotrcut = dot(p_j, rvec)*rcut*rinv;
+
+                    e -= rcutprefactor*(rcut3inv*pidotpj - Scalar(3.0)*rcut5inv*pidotrcut*pjdotrcut);
+                    }
                 }
             // dipole i - electrostatic j
             if (mu != Scalar(0.0) && q_j != Scalar(0.0))
@@ -178,6 +194,14 @@ class EvaluatorPairDipole
                 t_i += pre2*cross(p_i, rvec);
 
                 e -= pidotr*pre2;
+
+                if (energy_shift)
+                    {
+                    Scalar pidotrcut = dot(p_i, rvec)*rcut*rinv;
+                    Scalar pre2cut = rcutprefactor*q_j*rcut3inv;
+
+                    e += pidotrcut*pre2cut;
+                    }
                 }
             // electrostatic i - dipole j
             if (q_i != Scalar(0.0) && mu != Scalar(0.0))
@@ -192,6 +216,14 @@ class EvaluatorPairDipole
                 t_j += -pre2*cross(p_j, rvec);
 
                 e += pjdotr*pre2;
+
+                if (energy_shift)
+                    {
+                    Scalar pjdotrcut = dot(p_j, rvec)*rcut*rinv;
+                    Scalar pre2cut = rcutprefactor*q_j*rcut3inv;
+
+                    e -= pjdotrcut*pre2cut;
+                    }
                 }
             // electrostatic-electrostatic
             if (q_i != Scalar(0.0) && q_j != Scalar(0.0))
@@ -201,12 +233,17 @@ class EvaluatorPairDipole
                 f += fforce*rvec;
 
                 e += prefactor*q_i*q_j*rinv;
+                if (energy_shift)
+                    {
+                    e -= rcutprefactor*q_i*q_j*rcutinv;
+                    }
                 }
 
             force = vec_to_scalar3(f);
             torque_i = vec_to_scalar3(t_i);
             torque_j = vec_to_scalar3(t_j);
             pair_eng = e;
+
             return true;
             }
 
