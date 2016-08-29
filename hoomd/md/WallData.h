@@ -13,6 +13,7 @@
 
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/VectorMath.h"
+#include "hoomd/BoxDim.h"
 
 #ifdef NVCC
 #define DEVICE __device__
@@ -194,17 +195,96 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& positio
 
 // TODO: NPT_walls add the new box adjust functions here, one for each type of geometry, and figure out if we want to do it iteratively or based on an original... what's less/easier to store?
 //! Method for rescaling the plane wall properties iteratively
-HOSTDEVICE inline void rescaleWall(PlaneWall& wall, const BoxDim &old_box, const BoxDim &new_box)
+//DEVICE inline void rescaleWall()
+//Andres:Rescale Plane Walls
+
+DEVICE inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
     {
-    // see BoxResizeUpdater.cc
-    // see TwoStepNPTMTK.cc
+		 //Get the Column Vectors of the old and new box
+		 //Old Box
+			Scalar3 a_old = old_box.getLatticeVector(0);
+		  Scalar3 b_old = old_box.getLatticeVector(1);
+		  Scalar3 c_old = old_box.getLatticeVector(2);
+     //New Box
+			Scalar3 a_new = new_box.getLatticeVector(0);
+		  Scalar3 b_new = new_box.getLatticeVector(1);
+		  Scalar3 c_new = new_box.getLatticeVector(2);
+
+
+			//Calculate the inverse of old matrix
+      //Conventional Formula to get Inverse Matrix 
+
+			Scalar x11= a_old.x ; Scalar x12 = b_old.x ; Scalar x13 = c_old.x;
+			Scalar x21= a_old.y ; Scalar x22 = b_old.y ; Scalar x23 = c_old.y;
+			Scalar x31= a_old.z ; Scalar x32 = b_old.z ; Scalar x33 = c_old.z;
+
+			Scalar inv11 = x22 * x33 - x23 * x32;
+			Scalar inv12 = x13 * x32 - x12 * x33;
+			Scalar inv13 = x12 * x23 - x13 * x22;
+			Scalar inv21 = x23 * x31 - x21 * x33;
+			Scalar inv22 = x11 * x33 - x13 * x31;
+			Scalar inv23 = x13 * x21 - x11 * x23;
+			Scalar inv31 = x21 * x32 - x22 * x31;
+			Scalar inv32 = x12 * x31 - x11 * x32;
+			Scalar inv33 = x11 * x22 - x12 * x21;	
+
+			Scalar detinv = x11 * inv11 + x12 * inv21 + x13 * inv31;
+			inv11 /= detinv;
+			inv12 /= detinv;
+			inv13 /= detinv;
+			inv21 /= detinv;
+			inv22 /= detinv;
+			inv23 /= detinv;
+			inv31 /= detinv;
+			inv32 /= detinv;
+			inv33 /= detinv;
+			
+			//Create rows of inverse of Old Box Matrix 
+			
+			Scalar3 inv_old_Box_row1  = make_scalar3(inv11,inv12,inv13);
+			Scalar3 inv_old_Box_row2  = make_scalar3(inv21,inv22,inv23);
+			Scalar3 inv_old_Box_row3  = make_scalar3(inv31,inv32,inv33);
+
+			//Calculate transformation matrix elements
+			// TransMatrix = new_box_matrix * inverse(old_box_matrix)
+
+      
+			Scalar transMatrix[9];
+			//First Row of elements
+			transMatrix[0] = a_new.x*inv_old_Box_row1.x + b_new.x*inv_old_Box_row2.x + c_new.x*inv_old_Box_row3.x     ;
+			transMatrix[1] = a_new.x*inv_old_Box_row1.y + b_new.x*inv_old_Box_row2.y + c_new.x*inv_old_Box_row3.y     ;   
+			transMatrix[2] = a_new.x*inv_old_Box_row1.z + b_new.x*inv_old_Box_row2.z + c_new.x*inv_old_Box_row3.z     ;
+
+
+			//Second Row of elements
+			transMatrix[3] = a_new.y*inv_old_Box_row1.x + b_new.y*inv_old_Box_row2.x + c_new.y*inv_old_Box_row3.x     ;
+			transMatrix[4] = a_new.y*inv_old_Box_row1.y + b_new.y*inv_old_Box_row2.y + c_new.y*inv_old_Box_row3.y     ;   
+			transMatrix[5] = a_new.y*inv_old_Box_row1.z + b_new.y*inv_old_Box_row2.z + c_new.y*inv_old_Box_row3.z     ;
+		
+
+			//Third Row of elements
+			transMatrix[6] = a_new.z*inv_old_Box_row1.x + b_new.z*inv_old_Box_row2.x + c_new.z*inv_old_Box_row3.x     ;
+			transMatrix[7] = a_new.z*inv_old_Box_row1.y + b_new.z*inv_old_Box_row2.y + c_new.z*inv_old_Box_row3.y     ;   
+			transMatrix[8] = a_new.z*inv_old_Box_row1.z + b_new.z*inv_old_Box_row2.z + c_new.z*inv_old_Box_row3.z     ;
+
+
+			//Rescale Planar Wall 
+      // new_wall_origin = TransMatrix * old_wall_origin
+
+			wall.origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
+			wall.origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
+			wall.origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
+
+
+
     // figure out which we can do with the least information?
+		  
     };
 
 //! Method for rescaling the plane wall properties (would need to be called before wall distance evaluation for every wall)
-HOSTDEVICE inline PlaneWall rescaleWall(const PlaneWall& wall, const BoxDim &original_box, const BoxDim &new_box)
-    {
+//DEVICE inline PlaneWall rescaleWall(const PlaneWall& wall, const BoxDim &original_box, const BoxDim &new_box)
+  //  {
     // the other option would be best, but if we can't find a way this will work
-    };
+    //};
 
 #endif

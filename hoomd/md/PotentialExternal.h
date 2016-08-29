@@ -46,11 +46,15 @@ class PotentialExternal: public ForceCompute
         //! Calculates the requested log value and returns it
         virtual Scalar getLogValue(const std::string& quantity, unsigned int timestep);
 
+
+
     protected:
 
         GPUArray<param_type>    m_params;        //!< Array of per-type parameters
         std::string             m_log_name;               //!< Cached log name
         GPUArray<field_type>    m_field;
+				bool                    m_rescale;
+			  BoxDim                  m_box;
 
         //! Actually compute the forces
         virtual void computeForces(unsigned int timestep);
@@ -70,6 +74,12 @@ class PotentialExternal: public ForceCompute
             }
 
         // TODO: NPT_walls, add in a slotBoxChange() or something similar to above
+				
+				//!Box Change update
+				virtual void slotBoxChange()
+				{
+         m_rescale= true;
+        }
    };
 
 /*! Constructor
@@ -88,10 +98,15 @@ PotentialExternal<evaluator>::PotentialExternal(std::shared_ptr<SystemDefinition
 
     GPUArray<field_type> field(1, m_exec_conf);
     m_field.swap(field);
+		
+		//set no rescale
+		m_rescale =false;
+		m_box = m_pdata->getGlobalBox();
 
     // connect to the ParticleData to receive notifications when the maximum number of particles changes
     m_pdata->getNumTypesChangeSignal().template connect<PotentialExternal<evaluator>, &PotentialExternal<evaluator>::slotNumTypesChange>(this);
     // TODO: NPT_walls, combine the above (template is important) with the signal used in CellList to watch for the box changes, and the new slot we're adding
+    m_pdata->getBoxChangeSignal().template connect<PotentialExternal<evaluator>, &PotentialExternal<evaluator>::slotBoxChange>(this);
     }
 
 /*! Destructor
@@ -101,6 +116,7 @@ PotentialExternal<evaluator>::~PotentialExternal()
     {
     m_pdata->getNumTypesChangeSignal().template disconnect<PotentialExternal<evaluator>, &PotentialExternal<evaluator>::slotNumTypesChange>(this);
     // TODO: NPT_walls, disconnect our new signal during destruction
+    m_pdata->getBoxChangeSignal().template disconnect<PotentialExternal<evaluator>, &PotentialExternal<evaluator>::slotBoxChange>(this);
     }
 
 /*! PotentialExternal provides
@@ -152,7 +168,8 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
 
     ArrayHandle<param_type> h_params(m_params, access_location::host, access_mode::read);
     ArrayHandle<field_type> h_field(m_field, access_location::host, access_mode::read);
-    const field_type& field = *(h_field.data);
+    //const field_type& field = *(h_field.data);
+    field_type& field = *(h_field.data);
 
     const BoxDim& box = m_pdata->getGlobalBox();
     PDataFlags flags = this->m_pdata->getFlags();
@@ -160,7 +177,9 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
     // TODO: NPT_walls, see about the usage of this in the other external evaluators
     if (flags[pdata_flag::external_field_virial])
         {
-        bool virial_terms_defined=evaluator::requestFieldVirialTerm();
+       // bool virial_terms_defined=evaluator::requestFieldVirialTerm();
+        bool virial_terms_defined=true;
+
         if (!virial_terms_defined)
             {
             this->m_exec_conf->msg->error() << "The required virial terms are not defined for the current setup." << std::endl;
@@ -202,6 +221,11 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
             eval.setCharge(qi);
             }
         eval.evalForceEnergyAndVirial(F, energy, virial);
+
+				if(m_rescale and evaluator::needsRescale())
+				    {
+						 eval.rescaleEval(m_box); 
+						}
 
         // apply the constraint force
         h_force.data[idx].x = F.x;

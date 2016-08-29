@@ -73,6 +73,8 @@ class EvaluatorPairMorse
         */
         DEVICE void setCharge(Scalar qi, Scalar qj) { }
 
+				DEVICE static bool requestFieldVirialTerm(){return false;}
+
         //! Evaluate the force and energy
         /*! \param force_divr Output parameter to write the computed force divided by r.
             \param pair_eng Output parameter to write the computed pair energy

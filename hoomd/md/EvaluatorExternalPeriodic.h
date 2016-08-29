@@ -64,7 +64,7 @@ class EvaluatorExternalPeriodic
             \param box box dimensions
             \param params per-type parameters of external potential
         */
-        DEVICE EvaluatorExternalPeriodic(Scalar3 X, const BoxDim& box, const param_type& params, const field_type& field)
+        DEVICE EvaluatorExternalPeriodic(Scalar3 X, const BoxDim& box, const param_type& params,  field_type& field)
             : m_pos(X),
               m_box(box)
             {
@@ -87,6 +87,11 @@ class EvaluatorExternalPeriodic
         /*! \param qi Charge of particle i
         */
         DEVICE void setCharge(Scalar qi) { }
+
+				// External Periodic does not need rescale
+				DEVICE static bool needsRescale(){return false;}
+
+				DEVICE inline void rescaleEval(const BoxDim& old_box){}
 
         //! Declares additional virial cotribututions are needed for the external field
         /*! No contributions
