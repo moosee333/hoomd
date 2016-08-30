@@ -74,7 +74,6 @@ class EvaluatorPairDLVO
 
             deltap = (di+dj) / Scalar(2.0);
             deltam = (di-dj) / Scalar(2.0);
-
         }
 
         //! DLVO doesn't use charge
@@ -104,7 +103,7 @@ class EvaluatorPairDLVO
                 Scalar r2inv = Scalar(1.0) / rsq;
 
                 Scalar exp_val = fast::exp(-kappa * (r - deltap));
-                Scalar curv = (2.0 + kappa * di) * (2.0 + kappa * dj)) / ((1.0 + kappa * di) * (1.0 + kappa * dj));
+                Scalar curv = ((2.0 + kappa * di) * (2.0 + kappa * dj)) / ((1.0 + kappa * di) * (1.0 + kappa * dj));
 
                 force_divr = prefactorEL * curv * exp_val * di * dj * r2inv * (rinv + kappa);
                 force_divr += prefactorVDW * Scalar(512.0) * di * di * di * dj * dj * dj / ((di * di * di * di + (dj * dj - Scalar(4.0) * di * di) * (dj * dj - Scalar(4.0) * di * di) - Scalar(2.0) * di * di * (dj * dj + Scalar(4.0) * r * r)) * (di * di * di * di + (dj * dj - Scalar(4.0) * di * di) * (dj * dj - Scalar(4.0) * di * di) - Scalar(2.0) * di * di * (dj * dj + Scalar(4.0) * r * r)));
@@ -146,6 +145,8 @@ class EvaluatorPairDLVO
         Scalar deltap;  //!< Deltap parameter extracted from the call to setDiameter
         Scalar deltam; //!< Deltam parameter extracted from the call to setDiameter
         Scalar kappa;   //!< kappa parameter extracted from the params passed to the constructor
+        Scalar di;
+        Scalar dj;
     };
 
 
