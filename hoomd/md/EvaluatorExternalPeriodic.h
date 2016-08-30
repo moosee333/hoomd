@@ -88,10 +88,10 @@ class EvaluatorExternalPeriodic
         */
         DEVICE void setCharge(Scalar qi) { }
 
-				// External Periodic does not need rescale
-				DEVICE static bool needsRescale(){return false;}
+		// External Periodic does not need rescale
+		DEVICE static bool needsRescale(){return false;}
 
-				DEVICE inline void rescaleEval(const BoxDim& old_box){}
+		DEVICE inline void rescaleEval(const BoxDim& old_box){}
 
         //! Declares additional virial cotribututions are needed for the external field
         /*! No contributions

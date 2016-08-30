@@ -71,10 +71,10 @@ class EvaluatorExternalElectricField
         */
         DEVICE void setCharge(Scalar qi) { m_qi = qi; }
 
-				//!External Field doesn't need rescale
-				DEVICE static bool needsRescale(){return false;}
-				
-				DEVICE inline void rescaleEval(const BoxDim& old_box){}
+		//!External Field doesn't need rescale
+		DEVICE static bool needsRescale(){return false;}
+
+		DEVICE inline void rescaleEval(const BoxDim& old_box){}
 
 
         //! Declares additional virial cotribututions are needed for the external field

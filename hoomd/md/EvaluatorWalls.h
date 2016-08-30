@@ -82,20 +82,19 @@ class EvaluatorWalls
             {
             return evaluator::needsCharge();
             }
-				
-				DEVICE static bool needsRescale()
-				    {
-						return true;
-						}
 
-			  DEVICE inline void rescaleEval(const BoxDim& old_box)
-				    {
-						for(unsigned int k = 0; k < m_field.numPlanes; k++)
-						{
-						rescaleWall(m_field.Planes[k],old_box,m_box);
-						}
+        DEVICE static bool needsRescale()
+            {
+            return true;
+            }
 
-						}
+        DEVICE inline void rescaleEval(const BoxDim& old_box)
+            {
+            for(unsigned int k = 0; k < m_field.numPlanes; k++)
+                {
+                rescaleWall(m_field.Planes[k],old_box,m_box);
+                }
+            }
 
         // TODO: NPT_walls, remove all traces of the old warning flag etc if it's not used by other functions
         // //! Declares additional virial cotribututions are needed for the external field
@@ -329,12 +328,12 @@ class EvaluatorWalls
         #endif
 
     protected:
-        Scalar3     m_pos;                //!< particle position
-				const BoxDim  m_box;
-        field_type&  m_field;       //!< contains all information about the walls.
-        param_type  m_params;
-        Scalar      di;
-        Scalar      qi;
+        Scalar3         m_pos;      //!< particle position
+		const BoxDim    m_box;
+        field_type&     m_field;    //!< contains all information about the walls.
+        param_type      m_params;
+        Scalar          di;
+        Scalar          qi;
     };
 
 template < class evaluator >
