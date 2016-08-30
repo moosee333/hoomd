@@ -70,10 +70,14 @@ cudaError_t gpu_compute_force_shifted_lj_forces(const pair_args_t & args,
 
 //! Compute mie potential pair forces on the GPU with PairEvaluatorMie
 cudaError_t gpu_compute_mie_forces(const pair_args_t & args,
-                                                const Scalar4 *d_params);
+                                   const Scalar4 *d_params);
 
-//! Compute mie potential pair forces on the GPU with PairEvaluatorReactionField
+//! Compute potential pair forces on the GPU with PairEvaluatorReactionField
 cudaError_t gpu_compute_reaction_field_forces(const pair_args_t & args,
-                                                const Scalar2 *d_params);
+                                              const Scalar2 *d_params);
+
+//! Compute potential pair forces on the GPU with EvaluatorPairDLVO
+cudaError_t gpu_compute_dlvo_forces(const pair_args_t & args,
+                                    const Scalar4 *d_params);
 
 #endif

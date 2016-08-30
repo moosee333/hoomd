@@ -2393,3 +2393,90 @@ class reaction_field(pair):
         eps_rf = coeff['eps_rf'];
 
         return _hoomd.make_scalar2(epsilon, eps_rf);
+
+class DLVO(pair):
+    R""" DLVO pair potential.
+
+    Args:
+    r_cut (float): Default cutoff radius (in distance units).
+    nlist (:py:mod:`hoomd.md.nlist`): Neighbor list
+    name (str): Name of the force instance.
+
+    :py:class:`DLVO` specifies that a DLVO type pair potential should be applied between every
+    non-excluded particle pair in the simulation.
+
+    .. math::
+    :nowrap:
+
+    \begin{eqnarray*}
+    V_{\mathrm{DLVO}}(r) = & \left(\frac{4 \pi \varepsilon_r \varepsilon_0}{z^2 e^2}\right)(2 k_\mathrm{B} T)^2 \left(\frac{2 + \kappa d_i}{1 + \kappa d_i} \right)\left(\frac{2 + \kappa d_j}{1 + \kappa d_j} \right) \tanh{\left(\frac{z e \zeta_i}{4 k_\mathrm{B} T} \right)} \tanh{\left(\frac{z e \zeta_j}{4 k_\mathrm{B} T} \right)} \cdot \frac{d_i d_j}{r} \exp{(-\kappa (r - \Delta_+))} \\
+                           & -\frac{A_\mathrm{H}}{12} \left(\frac{d_i d_j}{r^2 - \Delta_-^2} + 2 \ln{\left(\frac{r^2 - \Delta_+^2}{r^2 - \Delta_-^2}\right)}\right) & r < r_{\mathrm{cut}} \\
+                         = & 0 & r > r_{\mathrm{cut}} \\
+    \end{eqnarray*}
+
+    where :math:`\Delta_+ = (d_i + d_j)/2`, \Delta_- = (d_i - d_j)/2`  and :math:`d_i` is the diameter of particle :math:`i`.
+
+    See :py:class:`pair` for details on how forces are calculated and the available energy shifting and smoothing modes.
+    Use :py:meth:`pair_coeff.set <coeff.set>` to set potential coefficients.
+
+    The following coefficients must be set per unique pair of particle types:
+
+    - :math:`e \zeta_i` - *eV_i* - Surface potential of species i (in energy units)
+    - :math:`e \zeta_j` - *eV_j* - Surface potential of species j (in energy units)
+    - :math:`e` - *elementary_charge* - The elementary charge (in charge units)
+    - :math:`A_{\mathrm{H}}` - *A_H* - The Hamaker constant (in energy units)
+    - :math:`\varepsilon_r` - *epsilon_r* (unitless)
+    - :math:`\kappa` - *kappa* (in units of 1/distance)
+    - :math:`k_{\mathrm{B}}T` - *kT* - The thermal enrgy factor (in energy units)
+    - :math: `z` - *z* - The electrolyte charge number
+    - :math:`r_{\mathrm{cut}}` - *r_cut* (in distance units)
+    - *optional*: defaults to the global r_cut specified in the pair command
+    - :math:`r_{\mathrm{on}}`- *r_on* (in distance units)
+    - *optional*: defaults to the global r_cut specified in the pair command
+
+    Example::
+
+    nl = nlist.cell()
+    DLVO = pair.DLVO(r_cut = 3.0, nlist=nl)
+    DLVO.pair_coeff.set('A', 'B', eV_i = 1.3, eV_j = 1.6, elementary_charge = 0.45, A_H = 3.6, epsilon_r = 88, kappa = 20, kT = 1);
+
+    """
+    def __init__(self, r_cut, nlist, name=None):
+        hoomd.util.print_status_line();
+
+        # tell the base class how we operate
+
+        # initialize the base class
+        pair.__init__(self, r_cut, nlist, name);
+
+        # create the c++ mirror class
+        if not hoomd.context.exec_conf.isCUDAEnabled():
+            self.cpp_force = _md.PotentialPairDLVO(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
+            self.cpp_class = _md.PotentialPairDLVO;
+        else:
+            self.nlist.cpp_nlist.setStorageMode(_md.NeighborList.storageMode.full);
+            self.cpp_force = _md.PotentialPairDLVOGPU(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
+            self.cpp_class = _md.PotentialPairDLVOGPU;
+
+            hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
+
+            # setup the coefficient options
+            self.required_coeffs = ['eV_i', 'eV_j', 'elementary_charge', 'A_H','epsilon_r','kappa','kT','z'];
+            self.pair_coeff.set_default_coeff('elementary_charge', 1.0);
+            self.pair_coeff.set_default_coeff('kT', 1.0);
+            self.pair_coeff.set_default_coeff('z', 1.0);
+
+            def process_coeff(self, coeff):
+                eV_i = coeff['eV_i'];
+                eV_j = coeff['eV_j'];
+                elementary_charge = coeff['elementary_charge'];
+                A_H = coeff['A_H'];
+                epsilon_r = coeff['epsilon_r'];
+                kappa = coeff['kappa'];
+                kT = coeff['kT'];
+                z = coeff['z'];
+
+                prefactorEL = (4.0 * kT * kT)/(z * z * elementary_charge * elementary_charge);
+                prefactorEL = prefactorEL * math.tanh((z * eV_i)/(4.0 * kT)) math.tanh((z * eV_j)/(4.0 * kT));
+                prefactorVDW = A_H/12.0;
+                return _hoomd.make_scalar4(prefactorEL, prefactorVDW, kappa, 0.0);

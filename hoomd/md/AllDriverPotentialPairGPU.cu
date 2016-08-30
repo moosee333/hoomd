@@ -23,6 +23,7 @@
 #include "EvaluatorPairForceShiftedLJ.h"
 #include "EvaluatorPairMie.h"
 #include "EvaluatorPairReactionField.h"
+#include "EvaluatorPairDLVO.h"
 
 cudaError_t gpu_compute_ljtemp_forces(const pair_args_t& pair_args,
                                       const Scalar2 *d_params)
@@ -120,15 +121,22 @@ cudaError_t gpu_compute_force_shifted_lj_forces(const pair_args_t & args,
     }
 
 cudaError_t gpu_compute_mie_forces(const pair_args_t & args,
-                                                const Scalar4 *d_params)
+                                   const Scalar4 *d_params)
     {
     return gpu_compute_pair_forces<EvaluatorPairMie>(args,
                                                      d_params);
     }
 
 cudaError_t gpu_compute_reaction_field_forces(const pair_args_t & args,
-                                                const Scalar2 *d_params)
+                                              const Scalar2 *d_params)
     {
     return gpu_compute_pair_forces<EvaluatorPairReactionField>(args,
+                                                     d_params);
+    }
+
+cudaError_t gpu_compute_dlvo_forces(const pair_args_t & args,
+                                    const Scalar4 *d_params)
+    {
+    return gpu_compute_pair_forces<EvaluatorPairDLVO>(args,
                                                      d_params);
     }
