@@ -58,7 +58,7 @@ class EvaluatorWalls
         typedef wall_type field_type;
 
         //! Constructs the external wall potential evaluator
-        DEVICE EvaluatorWalls(Scalar3 pos, const BoxDim& box, const param_type& p,  field_type& f) : m_pos(pos),m_box(box), m_field(f), m_params(p)
+        DEVICE EvaluatorWalls(Scalar3 pos, const BoxDim& box, const param_type& p, const field_type& f) : m_pos(pos), m_box(box), m_field(f), m_params(p)
             {
             // TODO: NPT_walls, could add the calls to change the size here if the slot has been activated?
             }
@@ -83,26 +83,6 @@ class EvaluatorWalls
             return evaluator::needsCharge();
             }
 
-        DEVICE static bool needsRescale()
-            {
-            return true;
-            }
-
-        DEVICE inline void rescaleEval(const BoxDim& old_box)
-            {
-            for(unsigned int k = 0; k < m_field.numPlanes; k++)
-                {
-                rescaleWall(m_field.Planes[k],old_box,m_box);
-                }
-            }
-
-        // TODO: NPT_walls, remove all traces of the old warning flag etc if it's not used by other functions
-        // //! Declares additional virial cotribututions are needed for the external field
-        // DEVICE static bool requestFieldVirialTerm()
-        //     {
-        //     return false; //volume change dependence is not currently defined
-        //     }
-
         //! Accept the optional charge value
         /*! \param qi Charge of particle i
         Walls charge currently assigns a charge of 0 to the walls. It is however unused by implemented potentials.
@@ -110,6 +90,19 @@ class EvaluatorWalls
         DEVICE void setCharge(Scalar charge)
             {
             qi = charge;
+            }
+
+        DEVICE static bool needsFieldRescale()
+            {
+            return true;
+            }
+
+        DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box)
+            {
+            for(unsigned int k = 0; k < field.numPlanes; k++)
+                {
+                rescaleWall(field.Planes[k],old_box,new_box);
+                }
             }
 
         DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const vec3<Scalar> drv)
@@ -328,12 +321,12 @@ class EvaluatorWalls
         #endif
 
     protected:
-        Scalar3         m_pos;      //!< particle position
-		const BoxDim    m_box;
-        field_type&     m_field;    //!< contains all information about the walls.
-        param_type      m_params;
-        Scalar          di;
-        Scalar          qi;
+        Scalar3               m_pos;      //!< particle position
+		const BoxDim          m_box;
+        const field_type&     m_field;    //!< contains all information about the walls.
+        param_type            m_params;
+        Scalar                di;
+        Scalar                qi;
     };
 
 template < class evaluator >

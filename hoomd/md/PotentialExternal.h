@@ -46,15 +46,13 @@ class PotentialExternal: public ForceCompute
         //! Calculates the requested log value and returns it
         virtual Scalar getLogValue(const std::string& quantity, unsigned int timestep);
 
-
-
     protected:
 
         GPUArray<param_type>    m_params;       //!< Array of per-type parameters
         std::string             m_log_name;     //!< Cached log name
         GPUArray<field_type>    m_field;        //!< Array of field parameters
 		bool                    m_rescale;      //!< Flag to rescale the system for box changes
-        BoxDim                  m_box;          //!< Stores previous BoxDim, used for rescaling
+        BoxDim                  m_old_box;      //!< Stores previous BoxDim, used for rescaling
 
         //! Actually compute the forces
         virtual void computeForces(unsigned int timestep);
@@ -99,7 +97,7 @@ PotentialExternal<evaluator>::PotentialExternal(std::shared_ptr<SystemDefinition
 
     //set no rescale
     m_rescale = false;
-    m_box = m_pdata->getGlobalBox();
+    m_old_box = m_pdata->getGlobalBox();
 
     // connect to the ParticleData to receive notifications when the maximum number of particles changes
     m_pdata->getNumTypesChangeSignal().template connect<PotentialExternal<evaluator>, &PotentialExternal<evaluator>::slotNumTypesChange>(this);
@@ -164,25 +162,19 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
     ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
 
     ArrayHandle<param_type> h_params(m_params, access_location::host, access_mode::read);
-    ArrayHandle<field_type> h_field(m_field, access_location::host, access_mode::read);
-    //const field_type& field = *(h_field.data);
-    field_type& field = *(h_field.data);
 
     const BoxDim& box = m_pdata->getGlobalBox();
-    PDataFlags flags = this->m_pdata->getFlags();
-
-    // TODO: NPT_walls, see about the usage of this in the other external evaluators
-    if (flags[pdata_flag::external_field_virial])
+    if(evaluator::needsFieldRescale() and m_rescale)
         {
-        // bool virial_terms_defined=evaluator::requestFieldVirialTerm();
-        bool virial_terms_defined=true;
-
-        if (!virial_terms_defined)
-            {
-            this->m_exec_conf->msg->error() << "The required virial terms are not defined for the current setup." << std::endl;
-            throw std::runtime_error("NPT is not supported for requested features");
-            }
+        ArrayHandle<field_type> h_field(m_field, access_location::host, access_mode::readwrite);
+        field_type& field = *(h_field.data);
+        evaluator::rescaleField(field, box, m_old_box);
+        m_old_box = box;
+        m_rescale = false;
         }
+
+    ArrayHandle<field_type> h_field(m_field, access_location::host, access_mode::read);
+    const field_type& field = *(h_field.data);
 
     unsigned int nparticles = m_pdata->getN();
 
@@ -219,11 +211,6 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
             }
         eval.evalForceEnergyAndVirial(F, energy, virial);
 
-		if(m_rescale and evaluator::needsRescale())
-		    {
-			eval.rescaleEval(m_box);
-			}
-
         // apply the constraint force
         h_force.data[idx].x = F.x;
         h_force.data[idx].y = F.y;
@@ -232,7 +219,6 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
         for (int k = 0; k < 6; k++)
             h_virial.data[k*m_virial_pitch+idx]  = virial[k];
         }
-
 
     if (m_prof)
         m_prof->pop();

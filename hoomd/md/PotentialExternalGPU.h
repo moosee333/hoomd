@@ -81,6 +81,16 @@ void PotentialExternalGPU<evaluator>::computeForces(unsigned int timestep)
 
     ArrayHandle<Scalar4> d_force(this->m_force, access_location::device, access_mode::overwrite);
     ArrayHandle<Scalar> d_virial(this->m_virial, access_location::device, access_mode::overwrite);
+
+    if(evaluator::needsFieldRescale() and this->m_rescale)
+        {
+        ArrayHandle<typename evaluator::field_type> h_field(this->m_field, access_location::device, access_mode::readwrite);
+        typename evaluator::field_type& field = *(h_field.data);
+        evaluator::rescaleField(field, box, this->m_old_box);
+        this->m_old_box = box;
+        this->m_rescale = false;
+        }
+
     ArrayHandle<typename evaluator::param_type> d_params(this->m_params, access_location::device, access_mode::read);
     ArrayHandle<typename evaluator::field_type> d_field(this->m_field, access_location::device, access_mode::read);
 
@@ -106,16 +116,6 @@ void PotentialExternalGPU<evaluator>::computeForces(unsigned int timestep)
     this->m_tuner->end();
 
     if (this->m_prof) this->m_prof->pop();
-
-    if (flags[pdata_flag::external_field_virial])
-        {
-        bool virial_terms_defined=evaluator::requestFieldVirialTerm();
-        if (!virial_terms_defined)
-            {
-            this->m_exec_conf->msg->error() << "The required virial terms are not defined for the current setup." << std::endl;
-            throw std::runtime_error("NPT is not supported for requested features");
-            }
-        }
 
     }
 

@@ -155,7 +155,6 @@ class TwoStepNPTMTK : public IntegrationMethodTwoStep
                 flags[pdata_flag::rotational_kinetic_energy] = 1;
 //                flags[pdata_flag::rotational_virial] = 1;
                 }
-            flags[pdata_flag::external_field_virial]=1;
             return flags;
             }
 

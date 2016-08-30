@@ -198,7 +198,7 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& positio
 //DEVICE inline void rescaleWall()
 //Andres:Rescale Plane Walls
 
-DEVICE inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
+DEVICE inline void rescaleWall(PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
     {
     //Get the Column Vectors of the old and new box
     //Old Box
