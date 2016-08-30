@@ -58,9 +58,12 @@ class EvaluatorWalls
         typedef wall_type field_type;
 
         //! Constructs the external wall potential evaluator
-        DEVICE EvaluatorWalls(Scalar3 pos, const BoxDim& box, const param_type& p, const field_type& f) : m_pos(pos), m_box(box), m_field(f), m_params(p)
+        DEVICE EvaluatorWalls(Scalar3 pos, const BoxDim& box, const param_type& p, const field_type& f)
+            : m_pos(pos),
+              m_box(box),
+              m_field(f),
+              m_params(p)
             {
-            // TODO: NPT_walls, could add the calls to change the size here if the slot has been activated?
             }
 
         //! Test if evaluator needs Diameter
@@ -103,6 +106,7 @@ class EvaluatorWalls
                 {
                 rescaleWall(field.Planes[k],old_box,new_box);
                 }
+            // TODO: NPT_walls add the rest of the geometries functions then complete the loops
             }
 
         DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const vec3<Scalar> drv)

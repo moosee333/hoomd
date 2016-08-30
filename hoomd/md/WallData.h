@@ -193,7 +193,6 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& positio
     return d;
     };
 
-// TODO: NPT_walls add the new box adjust functions here, one for each type of geometry, and figure out if we want to do it iteratively or based on an original... what's less/easier to store?
 //! Method for rescaling the plane wall properties iteratively
 //DEVICE inline void rescaleWall()
 //Andres:Rescale Plane Walls
@@ -275,14 +274,9 @@ inline void rescaleWall(PlaneWall& wall, const BoxDim& old_box,const BoxDim& new
     wall.origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
     wall.origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
 
-    // figure out which we can do with the least information?
-
+    // TODO: NPT_walls we need to also correct the normal for a skewed box
     };
 
-//! Method for rescaling the plane wall properties (would need to be called before wall distance evaluation for every wall)
-//DEVICE inline PlaneWall rescaleWall(const PlaneWall& wall, const BoxDim &original_box, const BoxDim &new_box)
-  //  {
-    // the other option would be best, but if we can't find a way this will work
-    //};
+    // TODO: NPT_walls add the new box adjust functions here, one for each type of geometry
 
 #endif
