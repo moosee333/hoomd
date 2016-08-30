@@ -84,7 +84,7 @@ void PotentialExternalGPU<evaluator>::computeForces(unsigned int timestep)
 
     if(evaluator::needsFieldRescale() and this->m_rescale)
         {
-        ArrayHandle<typename evaluator::field_type> h_field(this->m_field, access_location::device, access_mode::readwrite);
+        ArrayHandle<typename evaluator::field_type> h_field(this->m_field, access_location::host, access_mode::readwrite);
         typename evaluator::field_type& field = *(h_field.data);
         evaluator::rescaleField(field, box, this->m_old_box);
         this->m_old_box = box;
@@ -93,9 +93,6 @@ void PotentialExternalGPU<evaluator>::computeForces(unsigned int timestep)
 
     ArrayHandle<typename evaluator::param_type> d_params(this->m_params, access_location::device, access_mode::read);
     ArrayHandle<typename evaluator::field_type> d_field(this->m_field, access_location::device, access_mode::read);
-
-    // access flags
-    PDataFlags flags = this->m_pdata->getFlags();
 
     this->m_tuner->begin();
     gpu_cpef< evaluator >(external_potential_args_t(d_force.data,
