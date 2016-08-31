@@ -2477,6 +2477,6 @@ class DLVO(pair):
                 z = coeff['z'];
 
                 prefactorEL = (4.0 * kT * kT)/(z * z * elementary_charge * elementary_charge);
-                prefactorEL = prefactorEL * math.tanh((z * eV_i)/(4.0 * kT)) math.tanh((z * eV_j)/(4.0 * kT));
+                prefactorEL = prefactorEL * math.tanh((z * eV_i)/(4.0 * kT)) * math.tanh((z * eV_j)/(4.0 * kT));
                 prefactorVDW = A_H/12.0;
                 return _hoomd.make_scalar4(prefactorEL, prefactorVDW, kappa, 0.0);
