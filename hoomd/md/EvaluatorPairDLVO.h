@@ -34,12 +34,15 @@
 
     EvaluatorPairDLVO evaluates the function:
     \begin{eqnarray*}
-    V_{\mathrm{DLVO}}(r) = & \left(\frac{4 \pi \varepsilon_r \varepsilon_0}{z^2 e^2}\right)(2 k_\mathrm{B} T)^2 \left(\frac{2 + \kappa d_i}{1 + \kappa d_i} \right)\left(\frac{2 + \kappa d_j}{1 + \kappa d_j} \right) \tanh{\left(\frac{z e \zeta_i}{4 k_\mathrm{B} T} \right)} \tanh{\left(\frac{z e \zeta_j}{4 k_\mathrm{B} T} \right)} \cdot \frac{d_i d_j}{r} \exp{(-\kappa (r - \Delta_+))} \\
-                           & -\frac{A_\mathrm{H}}{12} \left(\frac{d_i d_j}{r^2 - \Delta_-^2} + 2 \ln{\left(\frac{r^2 - \Delta_+^2}{r^2 - \Delta_-^2}\right)}\right) & r < r_{\mathrm{cut}} \\
-                         = & 0 & r > r_{\mathrm{cut}} \\
+    V_{\mathrm{DLVO}}(r) = & \left(\frac{4 \pi \varepsilon_r \varepsilon_0}{z^2 e^2}\right)(2 k_\mathrm{B} T)^2
+                            \left(\frac{2 + \kappa d_i}{1 + \kappa d_i} \right)\left(\frac{2 + \kappa d_j}{1 + \kappa d_j} \right)
+                            \tanh{\left(\frac{z e \zeta_i}{4 k_\mathrm{B} T} \right)} \tanh{\left(\frac{z e \zeta_j}{4 k_\mathrm{B} T} \right)}
+                            \cdot \frac{d_i d_j}{r} \exp{(-\kappa (r - \Delta_+))} \\ & -\frac{A_\mathrm{H}}{12} \left(\frac{d_i d_j}{r^2 -
+                            \Delta_-^2} + 2 \ln{\left(\frac{r^2 - \Delta_+^2}{r^2 - \Delta_-^2}\right)}\right) & r < r_{\mathrm{cut}} \\
+                        = & 0 & r > r_{\mathrm{cut}} \\
     \end{eqnarray*}
 
-    The DLVO potential does not need charge, but it does need diameter. Three parameters are specified and stored in a Scalar4, for speed. \a prefactorEL is
+    The DLVO potential does not need charge, but it does need diameter. Three parameters are specified and stored in a Scalar3, for speed. \a prefactorEL is
     placed in \a params.x, \a prefactorVDW is in \a params.y and \a kappa is in \a params.z.
     \a params.w is always set to zero, and is ignored.
 
@@ -52,7 +55,7 @@ class EvaluatorPairDLVO
     {
     public:
         //! Define the parameter type used by this pair potential evaluator
-        typedef Scalar4 param_type;
+        typedef Scalar3 param_type;
 
         //! Constructs the pair potential evaluator
         /*! \param _rsq Squared distance beteen the particles

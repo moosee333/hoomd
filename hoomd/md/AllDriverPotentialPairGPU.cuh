@@ -78,6 +78,6 @@ cudaError_t gpu_compute_reaction_field_forces(const pair_args_t & args,
 
 //! Compute potential pair forces on the GPU with EvaluatorPairDLVO
 cudaError_t gpu_compute_dlvo_forces(const pair_args_t & args,
-                                    const Scalar4 *d_params);
+                                    const Scalar3 *d_params);
 
 #endif
