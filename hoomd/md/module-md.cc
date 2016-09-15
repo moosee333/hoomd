@@ -14,6 +14,7 @@
 #include "BondTablePotential.h"
 #include "ConstExternalFieldDipoleForceCompute.h"
 #include "ConstraintEllipsoid.h"
+#include "ConstraintEggCarton.h"
 #include "ConstraintSphere.h"
 #include "OneDConstraint.h"
 #include "Enforce2DUpdater.h"
@@ -312,6 +313,7 @@ PYBIND11_PLUGIN(_md)
     export_Berendsen(m);
     export_Enforce2DUpdater(m);
     export_ConstraintEllipsoid(m);
+    export_ConstraintEggCarton(m);
     export_FIREEnergyMinimizer(m);
     export_MuellerPlatheFlow(m);
 

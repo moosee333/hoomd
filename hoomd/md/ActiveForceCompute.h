@@ -12,6 +12,7 @@
 #include "hoomd/VectorMath.h"
 
 #include "EvaluatorConstraintEllipsoid.h"
+#include "EvaluatorConstraintEggCarton.h"
 
 
 /*! \file ActiveForceCompute.h
@@ -42,7 +43,12 @@ class ActiveForceCompute : public ForceCompute
                              Scalar3 P,
                              Scalar rx,
                              Scalar ry,
-                             Scalar rz);
+                             Scalar rz,
+                             int xFreq,
+                             int yFreq,
+                             Scalar xHeight,
+                             Scalar yHeight
+                             );
 
         //! Destructor
         ~ActiveForceCompute();
@@ -69,6 +75,10 @@ class ActiveForceCompute : public ForceCompute
         Scalar m_rx;          //!< Radius in X direction of the Ellipsoid
         Scalar m_ry;          //!< Radius in Y direction of the Ellipsoid
         Scalar m_rz;          //!< Radius in Z direction of the Ellipsoid
+        int m_xFreq;          //!< Number of cosine waves in the X direction.
+        int m_yFreq;          //!< Number of cosine waves in the Y direction.
+        Scalar m_xHeight;     //!< Amplitude of cosine wave pattern in X direction.
+        Scalar m_yHeight;     //!< Amplitude of cosine wave pattern in Y direction.
         int m_seed;           //!< Random number seed
         GPUArray<Scalar3> m_activeVec; //! active force unit vectors for each particle
         GPUArray<Scalar> m_activeMag; //! active force magnitude for each particle

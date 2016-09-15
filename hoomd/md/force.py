@@ -311,6 +311,19 @@ class active(_force):
                 rx = constraint.rx
                 ry = constraint.ry
                 rz = constraint.rz
+                xHeight = 0
+                yHeight = 0
+                xFreq = 0
+                yFreq = 0
+            if (constraint.__class__.__name__ is "constraint_egg_carton"):
+                xHeight = constraint.xHeight
+                yHeight = constraint.yHeight
+                xFreq = constraint.xFreq
+                yFreq = constraint.yFreq
+                P = _hoomd.make_scalar3(0, 0, 0)
+                rx = 0
+                ry = 0
+                rz = 0
             else:
                 raise RuntimeError("Active force constraint is not accepted (currently only accepts ellipsoids)")
         else:
@@ -318,14 +331,20 @@ class active(_force):
             rx = 0
             ry = 0
             rz = 0
+            xHeight = 0
+            yHeight = 0
+            xFreq = 0
+            yFreq = 0
 
         # create the c++ mirror class
         if not hoomd.context.exec_conf.isCUDAEnabled():
             self.cpp_force = _md.ActiveForceCompute(hoomd.context.current.system_definition, group.cpp_group, seed, f_lst,
-                                                      orientation_link, orientation_reverse_link, rotation_diff, P, rx, ry, rz);
+                             orientation_link, orientation_reverse_link, rotation_diff, P, rx, ry, rz, xFreq, yFreq,
+                             xHeight, yHeight);
         else:
             self.cpp_force = _md.ActiveForceComputeGPU(hoomd.context.current.system_definition, group.cpp_group, seed, f_lst,
-                                                         orientation_link, orientation_reverse_link, rotation_diff, P, rx, ry, rz);
+                             orientation_link, orientation_reverse_link, rotation_diff, P, rx, ry, rz, xFreq, yFreq,
+                             xHeight, yHeight);
 
         # store metadata
         self.metdata_fields = ['group', 'seed', 'orientation_link', 'rotation_diff', 'constraint']

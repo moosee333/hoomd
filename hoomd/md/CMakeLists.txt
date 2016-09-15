@@ -6,6 +6,7 @@ set(_md_sources module-md.cc
                    CommunicatorGrid.cc
                    ConstExternalFieldDipoleForceCompute.cc
                    ConstraintEllipsoid.cc
+                   ConstraintEggCarton
                    ConstraintSphere.cc
                    OneDConstraint.cc
                    Enforce2DUpdater.cc
@@ -62,6 +63,7 @@ set(_md_headers ActiveForceComputeGPU.h
                 EvaluatorBondFENE.h
                 EvaluatorBondHarmonic.h
                 EvaluatorConstraintEllipsoid.h
+                EvaluatorConstraintEggCarton.h
                 EvaluatorConstraint.h
                 EvaluatorConstraintSphere.h
                 EvaluatorExternalElectricField.h

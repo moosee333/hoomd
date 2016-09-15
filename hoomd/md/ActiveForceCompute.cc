@@ -36,9 +36,14 @@ ActiveForceCompute::ActiveForceCompute(std::shared_ptr<SystemDefinition> sysdef,
                                         Scalar3 P,
                                         Scalar rx,
                                         Scalar ry,
-                                        Scalar rz)
+                                        Scalar rz,
+                                        int xFreq,
+                                        int yFreq,
+                                        Scalar xHeight,
+                                        Scalar yHeight)
         : ForceCompute(sysdef), m_group(group), m_orientationLink(orientation_link), m_orientationReverseLink(orientation_reverse_link),
-            m_rotationDiff(rotation_diff), m_P(P), m_rx(rx), m_ry(ry), m_rz(rz)
+            m_rotationDiff(rotation_diff), m_P(P), m_rx(rx), m_ry(ry), m_rz(rz), m_xFreq(xFreq), m_yFreq(yFreq),
+            m_xHeight(xHeight), m_yHeight(yHeight)
     {
     m_exec_conf->msg->notice(5) << "Constructing ActiveForceCompute" << endl;
 
@@ -183,7 +188,58 @@ void ActiveForceCompute::rotationalDiffusion(unsigned int timestep)
             }
         else // 3D: Following Stenhammar, Soft Matter, 2014
             {
-            if (m_rx == 0) // if no constraint
+            if (m_rx !=0) // if ellipsoid constraint
+                {
+                EvaluatorConstraintEllipsoid Ellipsoid(m_P, m_rx, m_ry, m_rz);
+                Saru saru(idx, timestep, m_seed);
+
+                Scalar3 current_pos = make_scalar3(h_pos.data[idx].x, h_pos.data[idx].y, h_pos.data[idx].z);
+                Scalar3 norm_scalar3 = Ellipsoid.evalNormal(current_pos); // the normal vector to which the particles are confined.
+
+                vec3<Scalar> norm;
+                norm = vec3<Scalar> (norm_scalar3);
+
+                vec3<Scalar> current_vec;
+                current_vec.x = h_actVec.data[i].x;
+                current_vec.y = h_actVec.data[i].y;
+                current_vec.z = h_actVec.data[i].z;
+                vec3<Scalar> aux_vec = cross(current_vec, norm); // aux vec for defining direction that active force vector rotates towards.
+
+                Scalar delta_theta; // rotational diffusion angle
+                delta_theta = m_rotationConst * gaussian_rng(saru, 1.0);
+
+                h_actVec.data[i].x = slow::cos(delta_theta)*current_vec.x + slow::sin(delta_theta)*aux_vec.x;
+                h_actVec.data[i].y = slow::cos(delta_theta)*current_vec.y + slow::sin(delta_theta)*aux_vec.y;
+                h_actVec.data[i].z = slow::cos(delta_theta)*current_vec.z + slow::sin(delta_theta)*aux_vec.z;
+                }
+            if (m_xHeight!=0 || m_yHeight!=0) // if egg carton constraint
+                {
+                EvaluatorConstraintEggCarton EggCarton(m_xFreq, m_yFreq, m_xHeight, m_yHeight);
+                Saru saru(idx, timestep, m_seed);
+
+                Scalar3 current_pos = make_scalar3(h_pos.data[idx].x, h_pos.data[idx].y, h_pos.data[idx].z);
+                BoxDim boxD = m_pdata->getBox();
+                Scalar3 hi = boxD.getHi();
+                Scalar3 box = make_scalar3(hi.x,hi.y,hi.z);
+                Scalar3 norm_scalar3 = EggCarton.evalNormal(current_pos, box); // the normal vector to which the particles are confined.
+
+                vec3<Scalar> norm;
+                norm = vec3<Scalar> (norm_scalar3);
+
+                vec3<Scalar> current_vec;
+                current_vec.x = h_actVec.data[i].x;
+                current_vec.y = h_actVec.data[i].y;
+                current_vec.z = h_actVec.data[i].z;
+                vec3<Scalar> aux_vec = cross(current_vec, norm); // aux vec for defining direction that active force vector rotates towards.
+
+                Scalar delta_theta; // rotational diffusion angle
+                delta_theta = m_rotationConst * gaussian_rng(saru, 1.0);
+
+                h_actVec.data[i].x = slow::cos(delta_theta)*current_vec.x + slow::sin(delta_theta)*aux_vec.x;
+                h_actVec.data[i].y = slow::cos(delta_theta)*current_vec.y + slow::sin(delta_theta)*aux_vec.y;
+                h_actVec.data[i].z = slow::cos(delta_theta)*current_vec.z + slow::sin(delta_theta)*aux_vec.z;
+                }
+            else // if no constraint
                 {
                 Saru saru(idx, timestep, m_seed);
                 Scalar u = saru.s(Scalar(0), Scalar(1.0)); // generates an even distribution of random unit vectors in 3D
@@ -215,30 +271,6 @@ void ActiveForceCompute::rotationalDiffusion(unsigned int timestep)
                 h_actVec.data[i].y = slow::cos(delta_theta)*current_vec.y + slow::sin(delta_theta)*aux_vec.y;
                 h_actVec.data[i].z = slow::cos(delta_theta)*current_vec.z + slow::sin(delta_theta)*aux_vec.z;
                 }
-            else // if constraint exists
-                {
-                EvaluatorConstraintEllipsoid Ellipsoid(m_P, m_rx, m_ry, m_rz);
-                Saru saru(idx, timestep, m_seed);
-
-                Scalar3 current_pos = make_scalar3(h_pos.data[idx].x, h_pos.data[idx].y, h_pos.data[idx].z);
-                Scalar3 norm_scalar3 = Ellipsoid.evalNormal(current_pos); // the normal vector to which the particles are confined.
-
-                vec3<Scalar> norm;
-                norm = vec3<Scalar> (norm_scalar3);
-
-                vec3<Scalar> current_vec;
-                current_vec.x = h_actVec.data[i].x;
-                current_vec.y = h_actVec.data[i].y;
-                current_vec.z = h_actVec.data[i].z;
-                vec3<Scalar> aux_vec = cross(current_vec, norm); // aux vec for defining direction that active force vector rotates towards.
-
-                Scalar delta_theta; // rotational diffusion angle
-                delta_theta = m_rotationConst * gaussian_rng(saru, 1.0);
-
-                h_actVec.data[i].x = slow::cos(delta_theta)*current_vec.x + slow::sin(delta_theta)*aux_vec.x;
-                h_actVec.data[i].y = slow::cos(delta_theta)*current_vec.y + slow::sin(delta_theta)*aux_vec.y;
-                h_actVec.data[i].z = slow::cos(delta_theta)*current_vec.z + slow::sin(delta_theta)*aux_vec.z;
-                }
             }
         }
     }
@@ -247,37 +279,78 @@ void ActiveForceCompute::rotationalDiffusion(unsigned int timestep)
 */
 void ActiveForceCompute::setConstraint()
     {
-    EvaluatorConstraintEllipsoid Ellipsoid(m_P, m_rx, m_ry, m_rz);
-
-    //  array handles
-    ArrayHandle<Scalar3> h_actVec(m_activeVec, access_location::host, access_mode::readwrite);
-    ArrayHandle <Scalar4> h_pos(m_pdata -> getPositions(), access_location::host, access_mode::read);
-    ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-    assert(h_pos.data != NULL);
-
-    for (unsigned int i = 0; i < m_group->getNumMembers(); i++)
+    if (m_rx !=0) // if ellipsoid constraint
         {
-        unsigned int tag = m_group->getMemberTag(i);
-        unsigned int idx = h_rtag.data[tag];
+        EvaluatorConstraintEllipsoid Ellipsoid(m_P, m_rx, m_ry, m_rz);
 
-        Scalar3 current_pos = make_scalar3(h_pos.data[idx].x, h_pos.data[idx].y, h_pos.data[idx].z);
+        //  array handles
+        ArrayHandle<Scalar3> h_actVec(m_activeVec, access_location::host, access_mode::readwrite);
+        ArrayHandle <Scalar4> h_pos(m_pdata -> getPositions(), access_location::host, access_mode::read);
+        ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
+        assert(h_pos.data != NULL);
 
-        Scalar3 norm_scalar3 = Ellipsoid.evalNormal(current_pos); // the normal vector to which the particles are confined.
-        vec3<Scalar> norm;
-        norm = vec3<Scalar>(norm_scalar3);
-        Scalar dot_prod = h_actVec.data[i].x * norm.x + h_actVec.data[i].y * norm.y + h_actVec.data[i].z * norm.z;
+        for (unsigned int i = 0; i < m_group->getNumMembers(); i++)
+            {
+            unsigned int tag = m_group->getMemberTag(i);
+            unsigned int idx = h_rtag.data[tag];
 
-        h_actVec.data[i].x -= norm.x * dot_prod;
-        h_actVec.data[i].y -= norm.y * dot_prod;
-        h_actVec.data[i].z -= norm.z * dot_prod;
+            Scalar3 current_pos = make_scalar3(h_pos.data[idx].x, h_pos.data[idx].y, h_pos.data[idx].z);
 
-        Scalar new_norm = slow::sqrt(h_actVec.data[i].x*h_actVec.data[i].x
-                                     + h_actVec.data[i].y*h_actVec.data[i].y
-                                     + h_actVec.data[i].z*h_actVec.data[i].z);
+            Scalar3 norm_scalar3 = Ellipsoid.evalNormal(current_pos); // the normal vector to which the particles are confined.
+            vec3<Scalar> norm;
+            norm = vec3<Scalar>(norm_scalar3);
+            Scalar dot_prod = h_actVec.data[i].x * norm.x + h_actVec.data[i].y * norm.y + h_actVec.data[i].z * norm.z;
 
-        h_actVec.data[i].x /= new_norm;
-        h_actVec.data[i].y /= new_norm;
-        h_actVec.data[i].z /= new_norm;
+            h_actVec.data[i].x -= norm.x * dot_prod;
+            h_actVec.data[i].y -= norm.y * dot_prod;
+            h_actVec.data[i].z -= norm.z * dot_prod;
+
+            Scalar new_norm = slow::sqrt(h_actVec.data[i].x*h_actVec.data[i].x
+                                         + h_actVec.data[i].y*h_actVec.data[i].y
+                                         + h_actVec.data[i].z*h_actVec.data[i].z);
+
+            h_actVec.data[i].x /= new_norm;
+            h_actVec.data[i].y /= new_norm;
+            h_actVec.data[i].z /= new_norm;
+            }
+        }
+    if (m_xHeight!=0 || m_yHeight!=0) // if egg carton constraint
+        {
+        EvaluatorConstraintEggCarton EggCarton(m_xFreq, m_yFreq, m_xHeight, m_yHeight);
+
+        //  array handles
+        ArrayHandle<Scalar3> h_actVec(m_activeVec, access_location::host, access_mode::readwrite);
+        ArrayHandle <Scalar4> h_pos(m_pdata -> getPositions(), access_location::host, access_mode::read);
+        ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
+        assert(h_pos.data != NULL);
+
+        for (unsigned int i = 0; i < m_group->getNumMembers(); i++)
+            {
+            unsigned int tag = m_group->getMemberTag(i);
+            unsigned int idx = h_rtag.data[tag];
+
+            Scalar3 current_pos = make_scalar3(h_pos.data[idx].x, h_pos.data[idx].y, h_pos.data[idx].z);
+            BoxDim boxD = m_pdata->getBox();
+            Scalar3 hi = boxD.getHi();
+            Scalar3 box = make_scalar3(hi.x,hi.y,hi.z);
+            
+            Scalar3 norm_scalar3 = EggCarton.evalNormal(current_pos, box); // the normal vector to which the particles are confined.
+            vec3<Scalar> norm;
+            norm = vec3<Scalar>(norm_scalar3);
+            Scalar dot_prod = h_actVec.data[i].x * norm.x + h_actVec.data[i].y * norm.y + h_actVec.data[i].z * norm.z;
+
+            h_actVec.data[i].x -= norm.x * dot_prod;
+            h_actVec.data[i].y -= norm.y * dot_prod;
+            h_actVec.data[i].z -= norm.z * dot_prod;
+
+            Scalar new_norm = slow::sqrt(h_actVec.data[i].x*h_actVec.data[i].x
+                                         + h_actVec.data[i].y*h_actVec.data[i].y
+                                         + h_actVec.data[i].z*h_actVec.data[i].z);
+
+            h_actVec.data[i].x /= new_norm;
+            h_actVec.data[i].y /= new_norm;
+            h_actVec.data[i].z /= new_norm;
+            }
         }
     }
 
@@ -294,7 +367,7 @@ void ActiveForceCompute::computeForces(unsigned int timestep)
 
         last_computed = timestep;
 
-        if (m_rx != 0)
+        if (m_rx!=0 || m_xHeight!=0 || m_yHeight!=0)
             {
             setConstraint(); // apply surface constraints to active particles active force vectors
             }
@@ -319,6 +392,6 @@ void export_ActiveForceCompute(py::module& m)
     {
     py::class_< ActiveForceCompute, std::shared_ptr<ActiveForceCompute> >(m, "ActiveForceCompute", py::base<ForceCompute>())
     .def(py::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<ParticleGroup>, int, py::list, bool, bool, Scalar,
-                    Scalar3, Scalar, Scalar, Scalar >())
+                    Scalar3, Scalar, Scalar, Scalar, int, int, Scalar, Scalar >())
     ;
     }

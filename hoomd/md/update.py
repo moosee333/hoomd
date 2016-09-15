@@ -207,6 +207,71 @@ class constraint_ellipsoid(_updater):
         self.ry = ry
         self.rz = rz
         self.metadata_fields = ['group','P', 'rx', 'ry', 'rz']
+        
+class constraint_egg_carton(_updater):
+    R""" Constrain particles to the surface of a periodic egg carton surface. This is the superposition of 2 cosine waves
+    in both the X and Y directions. It is always centered at the origin, and the midplane of the pattern lies along the
+    x-y axis.
+
+    Args:
+        group (:py:mod:`hoomd.group`): Group for which the update will be set.
+        xFreq (int): Number of cosine waves in box in the X direction.
+        yFreq (int): Number of cosine waves in box in the Y direction.
+        xHeight (float): Amplitude of cosine wave pattern in X direction.
+        yHeight (float): Amplitude of cosine wave pattern in Y direction.
+
+    Note:
+        This method does not properly conserve virial coefficients.
+
+    Note:
+        random thermal forces from the integrator are applied in 3D not 2D, therefore they aren't fully accurate.
+        Suggested use is therefore only for T=0.
+
+    Examples::
+
+        update.constraint_egg_carton(xFreq=3, yFreq=2, xHeight=0.5, yHeight=-2.5)
+
+    """
+    def __init__(self, group, xFreq, yFreq, xHeight, yHeight):
+        hoomd.util.print_status_line();
+        period = 1;
+
+        # Error out in MPI simulations
+        if (_hoomd.is_MPI_available()):
+            if context.current.system_definition.getParticleData().getDomainDecomposition():
+                context.msg.error("constrain.ellipsoid is not supported in multi-processor simulations.\n\n")
+                raise RuntimeError("Error initializing updater.")
+
+        # Error out if no parameters are set
+        if (xHeight is None or yHeight is None or xFreq is None or yFreq is None):
+            context.msg.error("some parameters were not defined for update.constraint_egg_carton.\n\n")
+            raise RuntimeError("Error initializing updater.")
+            
+        # Error out if xFreq or yFreq are not integers
+        if (int(xFreq)!=xFreq or int(yFreq)!=yFreq):
+            context.msg.error("xFreq and yFreq must be integers.\n\n")
+            raise RuntimeError("Error initializing updater.")
+
+        # initialize the base class
+        _updater.__init__(self);
+
+        # create the c++ mirror class
+        if not hoomd.context.exec_conf.isCUDAEnabled():
+            self.cpp_updater = _md.ConstraintEggCarton(hoomd.context.current.system_definition,
+                               group.cpp_group, xFreq, yFreq, xHeight, yHeight);
+        else:
+            context.msg.error("GPU support currently not implemented.\n\n")
+            raise RuntimeError("Error initializing updater.")
+
+        self.setupUpdater(period);
+
+        # store metadata
+        self.group = group
+        self.xFreq = xFreq
+        self.yFreq = yFreq
+        self.xHeight = xHeight
+        self.yHeight = yHeight
+        self.metadata_fields = ['group','xPeriod', 'yPeriod', 'xHeight', 'yHeight']
 
 class mueller_plathe_flow(_updater):
     R""" Direction Enum X for this class"""
