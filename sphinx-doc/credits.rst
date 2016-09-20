@@ -87,6 +87,7 @@ Jens Glaser, University of Michigan
  * Rewrite of rigid body framework
  * Multi-GPU electrostatics (PPPM)
  * hpmc interaction_matrix
+ * special_pair framework
 
 Pavani Medapuram, University of Minnesota
  * Framework for external potentials
@@ -135,6 +136,7 @@ James Antonaglia, University of Michigan
 Carl Simon Adorf, University of Michigan
  * Analyzer callback
  * metadata output
+ * Frenkel-Ladd bug fixes
 
 Paull Dodd, University of Michigan
  * pair.compute_energy
@@ -149,6 +151,7 @@ Matthew Spellings, Univeristy of Michigan
  * anisotropic particle integrators
  * Gay-Berne, dipole pair potentials
  * GTAR file format
+ * External components in hoomd 2.x
 
 James Proctor, University of Michigan
  * Refactor external potential framework
@@ -178,6 +181,10 @@ Nathan Horst
 
 Bryan VanSaders, University of Michigan
  * constrain.oneD
+
+Ludwig Schneider, Georg-August Univeristy Goettingen
+  * Constant stress flow: hoomd.md.update.mueller_plathe_flow
+
 
 HPMC developers
 ---------------
@@ -253,6 +260,9 @@ The following people contributed to the :py:mod:`hpmc` package.
     * External potential framework
     * Wall overlap checks
     * Lattice external potential
+
+Vyas Ramasubramani, University of Michigan
+ * hpmc.util.tune fixes for tuning by type
 
 DEM developers
 --------------

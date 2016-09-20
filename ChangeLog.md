@@ -2,13 +2,23 @@
 
 [TOC]
 
-## v2.1.0
+# v2.1.0
+
+Not yet released
+
+*Bug fixes*
+* Correctly handle particle type names in lattice.unitcell
+* Validate group.tag_list is consistent across MPI ranks
 
 *New features*
 
 * enable/disable overlap checks between pairs of constituent particles for hpmc.integrate.sphere_union()
 * Support for non-additive mixtures in HPMC, overlap checks can now be enabled/disabled per type-pair
 * Add constrain.oned to constrain particles to move in one dimension
+* hpmc.integrate.sphere_union() now takes max_members as an optional argument, allowing to use GPU memory more efficiently
+* add special_pair.lj() to support scaled 1-4 (or other) exclusions in all-atom force fields
+* md.update.mueller_plathe_flow(): Method to create shear flows in MD simulations.
+* `use_charge` option for pair.reaction_field
 
 *Deprecated*
 
@@ -16,12 +26,41 @@
 
 *Other changes*
 
+* Optimized MPI simulations of mixed systems with rigid and non-rigid bodies
 * Removed dependency on all boost libraries.
 * No longer supporting Intel compiler builds.
+* Shorter compile time for HPMC GPU kernels
+* Include symlinked external components in the build process.
+* Add template for external components.
+
+*Bug fixes*
+
+* Fix invalid forces in simulations with many bond types (on GPU)
+* fix rare cases where analyze.log() would report a wrong pressure
+* fix possible illegal memory access when using constrain.rigid() in GPU MPI simulations
+
+## v2.0.4
+
+Not yet released
+
+* Fix a bug where the potential energy is misreported in MPI simulations with constrain.rigid()
+* Fix a bug where the potential energy is misreported on the first step with constrain.rigid()
+#
+## v2.0.3
+
+Released 2016/08/30
+
+* hpmc.util.tune now works with particle types as documented
+* Fix pressure computation with pair.dpd() on the GPU
+* Fix a bug where dump.dcd corrupted files on job restart
+* Fix a bug where HPMC walls did not work correctly with MPI
+* Fix a bug where stdout/stderr did not appear in MPI execution
+* HOOMD will now report an human readable error when users forget context.initialize()
+* Fix syntax errors in frenkel ladd field
 
 ## v2.0.2
 
-*Not yet released*
+Released 2016/08/09
 
 * Support CUDA Toolkit 8.0
 * group.rigid()/nonrigid() did not work in MPI simulations
