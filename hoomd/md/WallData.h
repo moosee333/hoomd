@@ -194,10 +194,10 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& positio
     };
 
 //! Method for rescaling the plane wall properties iteratively
-//DEVICE inline void rescaleWall()
+// inline void rescaleWall()
 //Andres:Rescale Plane Walls
 
-DEVICE inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
+inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
 {
     //Get the Column Vectors of the old and new box
     //Old Box
@@ -208,25 +208,20 @@ DEVICE inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const Box
     Scalar3 a_new = new_box.getLatticeVector(0);
     Scalar3 b_new = new_box.getLatticeVector(1);
     Scalar3 c_new = new_box.getLatticeVector(2);
-    
+
     //Calculate the inverse of old matrix
     //Conventional Formula to get Inverse Matrix
-    
-    Scalar x11= a_old.x ; Scalar x12 = b_old.x ; Scalar x13 = c_old.x;
-    Scalar x21= a_old.y ; Scalar x22 = b_old.y ; Scalar x23 = c_old.y;
-    Scalar x31= a_old.z ; Scalar x32 = b_old.z ; Scalar x33 = c_old.z;
-    
-    Scalar inv11 = x22 * x33 - x23 * x32;
-    Scalar inv12 = x13 * x32 - x12 * x33;
-    Scalar inv13 = x12 * x23 - x13 * x22;
-    Scalar inv21 = x23 * x31 - x21 * x33;
-    Scalar inv22 = x11 * x33 - x13 * x31;
-    Scalar inv23 = x13 * x21 - x11 * x23;
-    Scalar inv31 = x21 * x32 - x22 * x31;
-    Scalar inv32 = x12 * x31 - x11 * x32;
-    Scalar inv33 = x11 * x22 - x12 * x21;
-    
-    Scalar detinv = x11 * inv11 + x12 * inv21 + x13 * inv31;
+    Scalar inv11 = b_old.y * c_old.z - c_old.y * b_old.z;
+    Scalar inv12 = c_old.x * b_old.z - b_old.x * c_old.z;
+    Scalar inv13 = b_old.x * c_old.y - c_old.x * b_old.y;
+    Scalar inv21 = c_old.y * a_old.z - a_old.y * c_old.z;
+    Scalar inv22 = a_old.x * c_old.z - c_old.x * a_old.z;
+    Scalar inv23 = c_old.x * a_old.y - a_old.x * c_old.y;
+    Scalar inv31 = a_old.y * b_old.z - b_old.y * a_old.z;
+    Scalar inv32 = b_old.x * a_old.z - a_old.x * b_old.z;
+    Scalar inv33 = a_old.x * b_old.y - b_old.x * a_old.y;
+
+    Scalar detinv = a_old.x * inv11 + b_old.x * inv21 + c_old.x * inv31;
     inv11 /= detinv;
     inv12 /= detinv;
     inv13 /= detinv;
@@ -236,115 +231,107 @@ DEVICE inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const Box
     inv31 /= detinv;
     inv32 /= detinv;
     inv33 /= detinv;
-    
-    //Create rows of inverse of Old Box Matrix
-    
-    Scalar3 inv_old_Box_row1  = make_scalar3(inv11,inv12,inv13);
-    Scalar3 inv_old_Box_row2  = make_scalar3(inv21,inv22,inv23);
-    Scalar3 inv_old_Box_row3  = make_scalar3(inv31,inv32,inv33);
-    
+
     //Calculate transformation matrix elements
     // TransMatrix = new_box_matrix * inverse(old_box_matrix)
-    
-    
     Scalar transMatrix[9];
     //First Row of elements
-    transMatrix[0] = a_new.x*inv_old_Box_row1.x + b_new.x*inv_old_Box_row2.x + c_new.x*inv_old_Box_row3.x     ;
-    transMatrix[1] = a_new.x*inv_old_Box_row1.y + b_new.x*inv_old_Box_row2.y + c_new.x*inv_old_Box_row3.y     ;
-    transMatrix[2] = a_new.x*inv_old_Box_row1.z + b_new.x*inv_old_Box_row2.z + c_new.x*inv_old_Box_row3.z     ;
-    
-    
+    transMatrix[0] = a_new.x*inv11 + b_new.x*inv21 + c_new.x*inv31;
+    transMatrix[1] = a_new.x*inv12 + b_new.x*inv22 + c_new.x*inv32;
+    transMatrix[2] = a_new.x*inv13 + b_new.x*inv23 + c_new.x*inv33;
+
+
     //Second Row of elements
-    transMatrix[3] = a_new.y*inv_old_Box_row1.x + b_new.y*inv_old_Box_row2.x + c_new.y*inv_old_Box_row3.x     ;
-    transMatrix[4] = a_new.y*inv_old_Box_row1.y + b_new.y*inv_old_Box_row2.y + c_new.y*inv_old_Box_row3.y     ;
-    transMatrix[5] = a_new.y*inv_old_Box_row1.z + b_new.y*inv_old_Box_row2.z + c_new.y*inv_old_Box_row3.z     ;
-    
-    
+    transMatrix[3] = a_new.y*inv11 + b_new.y*inv21 + c_new.y*inv31;
+    transMatrix[4] = a_new.y*inv12 + b_new.y*inv22 + c_new.y*inv32;
+    transMatrix[5] = a_new.y*inv13 + b_new.y*inv23 + c_new.y*inv33;
+
+
     //Third Row of elements
-    transMatrix[6] = a_new.z*inv_old_Box_row1.x + b_new.z*inv_old_Box_row2.x + c_new.z*inv_old_Box_row3.x     ;
-    transMatrix[7] = a_new.z*inv_old_Box_row1.y + b_new.z*inv_old_Box_row2.y + c_new.z*inv_old_Box_row3.y     ;
-    transMatrix[8] = a_new.z*inv_old_Box_row1.z + b_new.z*inv_old_Box_row2.z + c_new.z*inv_old_Box_row3.z     ;
-    
-    
+    transMatrix[6] = a_new.z*inv11 + b_new.z*inv21 + c_new.z*inv31;
+    transMatrix[7] = a_new.z*inv12 + b_new.z*inv22 + c_new.z*inv32;
+    transMatrix[8] = a_new.z*inv13 + b_new.z*inv23 + c_new.z*inv33;
+
+
     //Rescale Planar Wall
     // new_wall_origin = TransMatrix * old_wall_origin
     wall.origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
     wall.origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
     wall.origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
-    
+
     // rotate normal vector
-    
+
     Scalar  min_prod=1.0;
-    
+
     unsigned int idx=0 ;
-    
+
     //Try to Create a orthogonal systems from normal to plane and two other vectors Vec1, Vec2 laying on plane
     // use the lattice box lattice vectors
     // we got the normal already so use and project box lattice vector closest to plane
-    
+
     //loop through all box lattice vectors
     for (int i = 0 ; i < 3 ;i++)
     {
-        
+
         //select vector and normalize it
         Scalar3 vv = old_box.getLatticeVector(i);
         Scalar invNormLength=fast::rsqrt(vv.x*vv.x + vv.y*vv.y + vv.z*vv.z);
         vv = vv * invNormLength;
-        
+
         //dot product between box lattice vector and normal
-        Scalar dot_prod = vv.x * wall.normal.x  + vv.y * wall.normal.y + vv.z * wall.normal.z ;
-        
+        Scalar dot_prod = vv.x * wall.normal.x  + vv.y * wall.normal.y + vv.z * wall.normal.z;
+
         // get id of vector
         if (dot_prod < min_prod)
         {
             min_prod = dot_prod;
             idx=i;
         }
-        
+
     }
-    
+
     //select candidate box lattice vector
     Scalar3  vbox = old_box.getLatticeVector(idx);
-    Scalar3  Vec1 = make_scalar3(0.,0.,0.);
-    Vec1.x  =  vbox.y * wall.normal.z  - vbox.z * wall.normal.y ;
-    Vec1.y  = -vbox.x * wall.normal.z  + vbox.z * wall.normal.x ;
-    Vec1.z  =  vbox.x * wall.normal.y  - vbox.y * wall.normal.x ;
+    Scalar3  Vec1;
+    Vec1.x  =  vbox.y * wall.normal.z  - vbox.z * wall.normal.y;
+    Vec1.y  = -vbox.x * wall.normal.z  + vbox.z * wall.normal.x;
+    Vec1.z  =  vbox.x * wall.normal.y  - vbox.y * wall.normal.x;
     Scalar invNormLength=fast::rsqrt(Vec1.x * Vec1.x + Vec1.y * Vec1.y + Vec1.z * Vec1.z);
     Vec1 *= invNormLength;
-    
-    
+
+
     //create last vector from Vec1 and normal1
-    
-    Scalar3 Vec2 = make_scalar3(0.0,0.0,0.0);
+
+    Scalar3 Vec2;
     //cross product Vec1 x normal
-    
-    Vec2.x  =  Vec1.y * wall.normal.z  - Vec1.z * wall.normal.y ;
-    Vec2.y  = -Vec1.x * wall.normal.z  + Vec1.z * wall.normal.x ;
-    Vec2.z  =  Vec1.x * wall.normal.y  - Vec1.y * wall.normal.x ;
+
+    Vec2.x  =  Vec1.y * wall.normal.z  - Vec1.z * wall.normal.y;
+    Vec2.y  = -Vec1.x * wall.normal.z  + Vec1.z * wall.normal.x;
+    Vec2.z  =  Vec1.x * wall.normal.y  - Vec1.y * wall.normal.x;
     invNormLength=fast::rsqrt(Vec2.x * Vec2.x + Vec2.y * Vec2.y + Vec2.z * Vec2.z);
     Vec2 *= invNormLength;
-    
-    
+
+
     //Rescale Vec1 and Vec2 with A
     Vec1.x = Vec1.x * transMatrix[0] + Vec1.y * transMatrix[1] + Vec1.z * transMatrix[2];
     Vec1.y = Vec1.x * transMatrix[3] + Vec1.y * transMatrix[4] + Vec1.z * transMatrix[5];
     Vec1.z = Vec1.x * transMatrix[6] + Vec1.y * transMatrix[7] + Vec1.z * transMatrix[8];
-    
+
     Vec2.x = Vec2.x * transMatrix[0] + Vec2.y * transMatrix[1] + Vec2.z * transMatrix[2];
     Vec2.y = Vec2.x * transMatrix[3] + Vec2.y * transMatrix[4] + Vec2.z * transMatrix[5];
     Vec2.z = Vec2.x * transMatrix[6] + Vec2.y * transMatrix[7] + Vec2.z * transMatrix[8];
-    
-    
+
+
     //get new normal vector
     //cross product Vec2 x Vec1
-    
-    wall.normal.x  =  Vec2.y * Vec1.z  - Vec2.z * Vec1.y ;
-    wall.normal.y  = -Vec2.x * Vec1.z  + Vec2.z * Vec1.x ;
-    wall.normal.z  =  Vec2.x * Vec1.y  - Vec2.y * Vec1.x ;
+
+    wall.normal.x  =  Vec2.y * Vec1.z  - Vec2.z * Vec1.y;
+    wall.normal.y  = -Vec2.x * Vec1.z  + Vec2.z * Vec1.x;
+    wall.normal.z  =  Vec2.x * Vec1.y  - Vec2.y * Vec1.x;
     invNormLength=fast::rsqrt(wall.normal.x * wall.normal.x + wall.normal.y * wall.normal.y + wall.normal.z * wall.normal.z);
     wall.normal *= invNormLength;
-    
-		  
+
+
 };
 
 
