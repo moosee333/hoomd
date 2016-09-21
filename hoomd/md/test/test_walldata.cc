@@ -255,8 +255,11 @@ UP_TEST( plane_wall_math )
     PlaneWall defPlane = PlaneWall(make_scalar3(4.6,-1.3,5.3),make_scalar3(1.0,0.0,0.0),true);
     BoxDim  old_box = BoxDim(1.);
     BoxDim  new_box = BoxDim(2.0,0.31,0.28,0.17);
+		Scalar A[9];
+		getTransMatrix(old_box,new_box,A);
 
-    rescaleWall(defPlane, old_box,new_box);
+
+    rescaleWall(defPlane, old_box,A);
     MY_CHECK_CLOSE(defPlane.origin.x, 11.362, tol);
     MY_CHECK_CLOSE(defPlane.origin.y, -0.798, tol);
     MY_CHECK_CLOSE(defPlane.origin.z, 10.6, tol);

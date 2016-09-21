@@ -197,7 +197,9 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& positio
 // inline void rescaleWall()
 //Andres:Rescale Plane Walls
 
-inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
+
+
+inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar *A)
 {
     //Get the Column Vectors of the old and new box
     //Old Box
@@ -233,28 +235,32 @@ inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& ne
     inv33 /= detinv;
 
     //Calculate transformation matrix elements
-    // TransMatrix = new_box_matrix * inverse(old_box_matrix)
-    Scalar transMatrix[9];
+    // A = new_box_matrix * inverse(old_box_matrix)
     //First Row of elements
-    transMatrix[0] = a_new.x*inv11 + b_new.x*inv21 + c_new.x*inv31;
-    transMatrix[1] = a_new.x*inv12 + b_new.x*inv22 + c_new.x*inv32;
-    transMatrix[2] = a_new.x*inv13 + b_new.x*inv23 + c_new.x*inv33;
+    A[0] = a_new.x*inv11 + b_new.x*inv21 + c_new.x*inv31;
+    A[1] = a_new.x*inv12 + b_new.x*inv22 + c_new.x*inv32;
+    A[2] = a_new.x*inv13 + b_new.x*inv23 + c_new.x*inv33;
 
 
     //Second Row of elements
-    transMatrix[3] = a_new.y*inv11 + b_new.y*inv21 + c_new.y*inv31;
-    transMatrix[4] = a_new.y*inv12 + b_new.y*inv22 + c_new.y*inv32;
-    transMatrix[5] = a_new.y*inv13 + b_new.y*inv23 + c_new.y*inv33;
+    A[3] = a_new.y*inv11 + b_new.y*inv21 + c_new.y*inv31;
+    A[4] = a_new.y*inv12 + b_new.y*inv22 + c_new.y*inv32;
+    A[5] = a_new.y*inv13 + b_new.y*inv23 + c_new.y*inv33;
 
 
     //Third Row of elements
-    transMatrix[6] = a_new.z*inv11 + b_new.z*inv21 + c_new.z*inv31;
-    transMatrix[7] = a_new.z*inv12 + b_new.z*inv22 + c_new.z*inv32;
-    transMatrix[8] = a_new.z*inv13 + b_new.z*inv23 + c_new.z*inv33;
+    A[6] = a_new.z*inv11 + b_new.z*inv21 + c_new.z*inv31;
+    A[7] = a_new.z*inv12 + b_new.z*inv22 + c_new.z*inv32;
+    A[8] = a_new.z*inv13 + b_new.z*inv23 + c_new.z*inv33;
 
+}
 
-    //Rescale Planar Wall
-    // new_wall_origin = TransMatrix * old_wall_origin
+//inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
+inline void rescaleWall( PlaneWall& wall,const BoxDim& old_box   ,const Scalar *transMatrix)
+{
+    //!Rescale Wall origin and center using transformation matrix
+
+		//rescale origin
     wall.origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
     wall.origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
     wall.origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];

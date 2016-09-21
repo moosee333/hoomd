@@ -102,9 +102,17 @@ class EvaluatorWalls
 
         DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box)
             {
+						
+						//!Rescale and rotate geometries
+						//Transformation Matrix
+            Scalar trans_matrix[9];
+            //Calculate Transformation Matrix            
+            getTransMatrix(old_box, new_box, trans_matrix);
+
+            //Rescale through wall planes 
             for(unsigned int k = 0; k < field.numPlanes; k++)
                 {
-                rescaleWall(field.Planes[k],old_box,new_box);
+                rescaleWall(field.Planes[k],old_box, trans_matrix);
                 }
             // TODO: NPT_walls add the rest of the geometries functions then complete the loops
             }
@@ -326,11 +334,13 @@ class EvaluatorWalls
 
     protected:
         Scalar3               m_pos;      //!< particle position
-		const BoxDim          m_box;
+        const BoxDim          m_box;      //!<contain box information
         const field_type&     m_field;    //!< contains all information about the walls.
         param_type            m_params;
         Scalar                di;
         Scalar                qi;
+
+
     };
 
 template < class evaluator >

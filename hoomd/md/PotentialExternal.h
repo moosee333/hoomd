@@ -78,6 +78,7 @@ class PotentialExternal: public ForceCompute
             }
    };
 
+
 /*! Constructor
     \param sysdef system definition
     \param log_suffix Name given to this instance of the force
@@ -146,6 +147,10 @@ Scalar PotentialExternal<evaluator>::getLogValue(const std::string& quantity, un
 /*! Computes the specified constraint forces
     \param timestep Current timestep
 */
+
+
+
+
 template<class evaluator>
 void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
     {
@@ -163,6 +168,7 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
 
     ArrayHandle<param_type> h_params(m_params, access_location::host, access_mode::read);
 
+    //rescale Wall Geometries if needed
     const BoxDim& box = m_pdata->getGlobalBox();
     if(evaluator::needsFieldRescale() and m_rescale)
         {
