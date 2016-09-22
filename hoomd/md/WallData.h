@@ -196,11 +196,8 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& positio
 //! Method for rescaling the plane wall properties iteratively
 // inline void rescaleWall()
 //Andres:Rescale Plane Walls
-
-
-
 inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar *A)
-{
+    {
     //Get the Column Vectors of the old and new box
     //Old Box
     Scalar3 a_old = old_box.getLatticeVector(0);
@@ -252,12 +249,11 @@ inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar 
     A[6] = a_new.z*inv11 + b_new.z*inv21 + c_new.z*inv31;
     A[7] = a_new.z*inv12 + b_new.z*inv22 + c_new.z*inv32;
     A[8] = a_new.z*inv13 + b_new.z*inv23 + c_new.z*inv33;
-
-}
+    }
 
 //inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
 inline void rescaleWall( PlaneWall& wall,const BoxDim& old_box   ,const Scalar *transMatrix)
-{
+    {
     //!Rescale Wall origin and center using transformation matrix
 
 		//rescale origin
@@ -293,7 +289,6 @@ inline void rescaleWall( PlaneWall& wall,const BoxDim& old_box   ,const Scalar *
             min_prod = dot_prod;
             idx=i;
         }
-
     }
 
     //select candidate box lattice vector
@@ -336,9 +331,7 @@ inline void rescaleWall( PlaneWall& wall,const BoxDim& old_box   ,const Scalar *
     wall.normal.z  =  Vec2.x * Vec1.y  - Vec2.y * Vec1.x;
     invNormLength=fast::rsqrt(wall.normal.x * wall.normal.x + wall.normal.y * wall.normal.y + wall.normal.z * wall.normal.z);
     wall.normal *= invNormLength;
-
-
-};
+    };
 
 
 #endif
