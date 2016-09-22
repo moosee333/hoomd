@@ -294,9 +294,15 @@ inline void rescaleWall( PlaneWall& wall,const BoxDim& old_box   ,const Scalar *
     //select candidate box lattice vector
     Scalar3  vbox = old_box.getLatticeVector(idx);
     Scalar3  Vec1;
-    Vec1.x  =  vbox.y * wall.normal.z  - vbox.z * wall.normal.y;
-    Vec1.y  = -vbox.x * wall.normal.z  + vbox.z * wall.normal.x;
-    Vec1.z  =  vbox.x * wall.normal.y  - vbox.y * wall.normal.x;
+    
+    
+    Scalar vbox_proj_norm = vbox.x * wall.normal.x + vbox.y * wall.normal.y + vbox.z * wall.normal.z ; 
+
+
+    Vec1.x  =  vbox.x  - vbox_proj_norm * wall.normal.x;
+    Vec1.y  =  vbox.y  - vbox_proj_norm * wall.normal.y;
+    Vec1.z  =  vbox.z  - vbox_proj_norm * wall.normal.z;
+
     Scalar invNormLength=fast::rsqrt(Vec1.x * Vec1.x + Vec1.y * Vec1.y + Vec1.z * Vec1.z);
     Vec1 *= invNormLength;
 
