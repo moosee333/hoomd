@@ -252,90 +252,23 @@ inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar 
     }
 
 //inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
-inline void rescaleWall( PlaneWall& wall,const BoxDim& old_box   ,const Scalar *transMatrix)
+inline void rescaleWall(PlaneWall& wall, const BoxDim& old_box, const Scalar *transMatrix)
     {
     //!Rescale Wall origin and center using transformation matrix
+
+    vec3<Scalar> endN = wall.origin + wall.normal;
 
 		//rescale origin
     wall.origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
     wall.origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
     wall.origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
 
-    // rotate normal vector
+    endN.x = endN.x * transMatrix[0] + endN.y * transMatrix[1] +endN.z * transMatrix[2];
+    endN.y = endN.x * transMatrix[3] + endN.y * transMatrix[4] +endN.z * transMatrix[5];
+    endN.z = endN.x * transMatrix[6] + endN.y * transMatrix[7] +endN.z * transMatrix[8];
 
-    Scalar  min_prod=1.0;
-
-    unsigned int idx=0 ;
-
-    //Try to Create a orthogonal systems from normal to plane and two other vectors Vec1, Vec2 laying on plane
-    // use the lattice box lattice vectors
-    // we got the normal already so use and project box lattice vector closest to plane
-
-    //loop through all box lattice vectors
-    for (int i = 0 ; i < 3 ;i++)
-    {
-
-        //select vector and normalize it
-        Scalar3 vv = old_box.getLatticeVector(i);
-        Scalar invNormLength=fast::rsqrt(vv.x*vv.x + vv.y*vv.y + vv.z*vv.z);
-        vv = vv * invNormLength;
-
-        //dot product between box lattice vector and normal
-        Scalar dot_prod = vv.x * wall.normal.x  + vv.y * wall.normal.y + vv.z * wall.normal.z;
-
-        // get id of vector
-        if (dot_prod < min_prod)
-        {
-            min_prod = dot_prod;
-            idx=i;
-        }
-    }
-
-    //select candidate box lattice vector
-    Scalar3  vbox = old_box.getLatticeVector(idx);
-    Scalar3  Vec1;
-    
-    
-    Scalar vbox_proj_norm = vbox.x * wall.normal.x + vbox.y * wall.normal.y + vbox.z * wall.normal.z ; 
-
-
-    Vec1.x  =  vbox.x  - vbox_proj_norm * wall.normal.x;
-    Vec1.y  =  vbox.y  - vbox_proj_norm * wall.normal.y;
-    Vec1.z  =  vbox.z  - vbox_proj_norm * wall.normal.z;
-
-    Scalar invNormLength=fast::rsqrt(Vec1.x * Vec1.x + Vec1.y * Vec1.y + Vec1.z * Vec1.z);
-    Vec1 *= invNormLength;
-
-
-    //create last vector from Vec1 and normal1
-
-    Scalar3 Vec2;
-    //cross product Vec1 x normal
-
-    Vec2.x  =  Vec1.y * wall.normal.z  - Vec1.z * wall.normal.y;
-    Vec2.y  = -Vec1.x * wall.normal.z  + Vec1.z * wall.normal.x;
-    Vec2.z  =  Vec1.x * wall.normal.y  - Vec1.y * wall.normal.x;
-    invNormLength=fast::rsqrt(Vec2.x * Vec2.x + Vec2.y * Vec2.y + Vec2.z * Vec2.z);
-    Vec2 *= invNormLength;
-
-
-    //Rescale Vec1 and Vec2 with A
-    Vec1.x = Vec1.x * transMatrix[0] + Vec1.y * transMatrix[1] + Vec1.z * transMatrix[2];
-    Vec1.y = Vec1.x * transMatrix[3] + Vec1.y * transMatrix[4] + Vec1.z * transMatrix[5];
-    Vec1.z = Vec1.x * transMatrix[6] + Vec1.y * transMatrix[7] + Vec1.z * transMatrix[8];
-
-    Vec2.x = Vec2.x * transMatrix[0] + Vec2.y * transMatrix[1] + Vec2.z * transMatrix[2];
-    Vec2.y = Vec2.x * transMatrix[3] + Vec2.y * transMatrix[4] + Vec2.z * transMatrix[5];
-    Vec2.z = Vec2.x * transMatrix[6] + Vec2.y * transMatrix[7] + Vec2.z * transMatrix[8];
-
-
-    //get new normal vector
-    //cross product Vec2 x Vec1
-
-    wall.normal.x  =  Vec2.y * Vec1.z  - Vec2.z * Vec1.y;
-    wall.normal.y  = -Vec2.x * Vec1.z  + Vec2.z * Vec1.x;
-    wall.normal.z  =  Vec2.x * Vec1.y  - Vec2.y * Vec1.x;
-    invNormLength=fast::rsqrt(wall.normal.x * wall.normal.x + wall.normal.y * wall.normal.y + wall.normal.z * wall.normal.z);
+    wall.normal = endN - wall.origin;
+    Scalar invNormLength=fast::rsqrt(wall.normal.x * wall.normal.x + wall.normal.y * wall.normal.y + wall.normal.z * wall.normal.z);
     wall.normal *= invNormLength;
     };
 
