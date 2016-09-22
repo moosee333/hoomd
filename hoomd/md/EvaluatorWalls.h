@@ -102,19 +102,32 @@ class EvaluatorWalls
 
         DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box)
             {
-						
-						//!Rescale and rotate geometries
-						//Transformation Matrix
+			//!Rescale and rotate geometries
+			//Transformation Matrix
             Scalar trans_matrix[9];
-            //Calculate Transformation Matrix            
+            //Calculate Transformation Matrix
             getTransMatrix(old_box, new_box, trans_matrix);
 
-            //Rescale through wall planes 
+            //Rescale through wall planes
             for(unsigned int k = 0; k < field.numPlanes; k++)
                 {
                 rescaleWall(field.Planes[k],old_box, trans_matrix);
                 }
             // TODO: NPT_walls add the rest of the geometries functions then complete the loops
+            }
+
+        DEVICE static std::string printField(field_type& field)
+            {
+            std::string output;
+            //Rescale through wall planes
+            for(unsigned int k = 0; k < field.numPlanes; k++)
+                {
+                output=output+
+                std::string("Plane:")+std::to_string(k)+std::string("\n")+
+                std::string("Origin:")+std::to_string(field.Planes[k].origin.x)+std::string(",")+std::to_string(field.Planes[k].origin.y)+std::string(",")+std::to_string(field.Planes[k].origin.z)+std::string("\n")+
+                std::string("Normal:")+std::to_string(field.Planes[k].normal.x)+std::string(",")+std::to_string(field.Planes[k].normal.y)+std::string(",")+std::to_string(field.Planes[k].normal.z)+std::string("\n");
+                }
+            return output;
             }
 
         DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const vec3<Scalar> drv)
