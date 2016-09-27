@@ -315,7 +315,7 @@ class active(_force):
                 yHeight = 0
                 xFreq = 0
                 yFreq = 0
-            if (constraint.__class__.__name__ is "constraint_egg_carton"):
+            elif (constraint.__class__.__name__ is "constraint_egg_carton"):
                 xHeight = constraint.xHeight
                 yHeight = constraint.yHeight
                 xFreq = constraint.xFreq
