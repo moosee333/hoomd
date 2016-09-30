@@ -880,16 +880,21 @@ class ewald(pair):
         :nowrap:
 
         \begin{eqnarray*}
-         V_{\mathrm{ewald}}(r)  = & q_i q_j \mathrm{erfc}(\kappa r)/r & r < r_{\mathrm{cut}} \\
+         V_{\mathrm{ewald}}(r)  = & q_i q_j \left[\mathrm{erfc}\left(\kappa r + \frac{\alpha}{2\kappa}\right) \exp(\alpha r)+
+                                    \mathrm{erfc}\left(\kappa r - \frac{\alpha}{2 \kappa}\right) \exp(-\alpha r) & r < r_{\mathrm{cut}} \\
                             = & 0 & r \ge r_{\mathrm{cut}} \\
         \end{eqnarray*}
+
+    The Ewald potential is designed to be used in conjunction with :py:class:`charge.pppm`.
 
     See :py:class:`pair` for details on how forces are calculated and the available energy shifting and smoothing modes.
     Use :py:meth:`pair_coeff.set <coeff.set>` to set potential coefficients.
 
     The following coefficients must be set per unique pair of particle types:
 
-    - :math:`\kappa` - *kappa* (in 1/distance units)
+    - :math:`\kappa` - *kappa* (Splitting parameter, in 1/distance units)
+    - :math:`\alpha` - *alpha* (Debye screening length, in 1/distance units)
+        .. versionadded:: 2.1
     - :math:`r_{\mathrm{cut}}` - *r_cut* (in distance units)
       - *optional*: defaults to the global r_cut specified in the pair command
     - :math:`r_{\mathrm{on}}`- *r_on* (in distance units)
@@ -901,6 +906,7 @@ class ewald(pair):
         nl = nlist.cell()
         ewald = pair.ewald(r_cut=3.0, nlist=nl)
         ewald.pair_coeff.set('A', 'A', kappa=1.0)
+        ewald.pair_coeff.set('A', 'A', kappa=1.0, alpha=1.5)
         ewald.pair_coeff.set('A', 'B', kappa=1.0, r_cut=3.0, r_on=2.0);
 
     Warning:
@@ -928,12 +934,20 @@ class ewald(pair):
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
         # setup the coefficent options
-        self.required_coeffs = ['kappa'];
+        self.required_coeffs = ['kappa','alpha'];
+        self.pair_coeff.set_default_coeff('alpha', 0.0);
 
     def process_coeff(self, coeff):
         kappa = coeff['kappa'];
+        alpha = coeff['alpha'];
 
-        return kappa;
+        return _hoomd.make_scalar2(kappa, alpha)
+
+    def set_params(self, coeff):
+        """ :py:class:`ewald` has no energy shift modes """
+
+        raise RuntimeError('Not implemented for DPD Conservative');
+        return;
 
 def _table_eval(r, rmin, rmax, V, F, width):
     dr = (rmax - rmin) / float(width-1);
@@ -1339,7 +1353,7 @@ class dpd(pair):
     Example::
 
         nl = nlist.cell()
-        dpd = pair.dpd(r_cut=1.0, nlist=nl, kT=1.0)
+        dpd = pair.dpd(r_cut=1.0, nlist=nl, kT=1.0, seed=0)
         dpd.pair_coeff.set('A', 'A', A=25.0, gamma = 4.5)
         dpd.pair_coeff.set('A', 'B', A=40.0, gamma = 4.5)
         dpd.pair_coeff.set('B', 'B', A=25.0, gamma = 4.5)
@@ -1409,7 +1423,7 @@ class dpd(pair):
         # change the parameters
         if kT is not None:
             # setup the variant inputs
-            kT = variant._setup_variant_input(kT);
+            kT = hoomd.variant._setup_variant_input(kT);
             self.cpp_force.setT(kT.cpp_variant);
 
     def process_coeff(self, coeff):
@@ -1501,9 +1515,9 @@ class dpd_conservative(pair):
         gamma = 0;
         return _hoomd.make_scalar2(a, gamma);
 
-    ## Not implemented for dpd_conservative
-    #
     def set_params(self, coeff):
+        """ :py:class:`dpd_conservative` has no energy shift modes """
+
         raise RuntimeError('Not implemented for DPD Conservative');
         return;
 
@@ -1578,7 +1592,7 @@ class dpdlj(pair):
     Example::
 
         nl = nlist.cell()
-        dpdlj = pair.dpdlj(r_cut=2.5, nlist=nl, kT=1.0)
+        dpdlj = pair.dpdlj(r_cut=2.5, nlist=nl, kT=1.0, seed=0)
         dpdlj.pair_coeff.set('A', 'A', epsilon=1.0, sigma = 1.0, gamma = 4.5)
         dpdlj.pair_coeff.set('A', 'B', epsilon=0.0, sigma = 1.0 gamma = 4.5)
         dpdlj.pair_coeff.set('B', 'B', epsilon=1.0, sigma = 1.0 gamma = 4.5, r_cut = 2.0**(1.0/6.0))
@@ -1632,7 +1646,7 @@ class dpdlj(pair):
 
         # set the temperature
         # setup the variant inputs
-        kT = variant._setup_variant_input(kT);
+        kT = hoomd.variant._setup_variant_input(kT);
         self.cpp_force.setT(kT.cpp_variant);
 
     def set_params(self, kT=None, mode=None):
@@ -1909,6 +1923,12 @@ class zbl(pair):
         else:
             aF = 1.0;
         return _hoomd.make_scalar2(Zsq, aF);
+
+    def set_params(self, coeff):
+        """ :py:class:`ZBL` has no energy shift modes """
+
+        raise RuntimeError('Not implemented for DPD Conservative');
+        return;
 
 class tersoff(pair):
     R""" Tersoff Potential.
@@ -2341,9 +2361,17 @@ class reaction_field(pair):
        V_{\mathrm{RF}}(r) = \varepsilon \left[ \frac{1}{r} +
            \frac{(\epsilon_{RF}-1) r^2}{(2 \epsilon_{RF} + 1) r_c^3} \right]
 
-    The reaction field potential does not require charge or diameter to be set. Two parameters,
+    By default, the reaction field potential does not require charge or diameter to be set. Two parameters,
     :math:`\varepsilon` and :math:`\epsilon_{RF}` are needed. If :math:`epsilon_{RF}` is specified as zero,
     it will represent infinity.
+
+    If *use_charge* is set to True, the following formula is evaluated instead:
+    .. math::
+
+       V_{\mathrm{RF}}(r) = q_i q_j \varepsilon \left[ \frac{1}{r} +
+           \frac{(\epsilon_{RF}-1) r^2}{(2 \epsilon_{RF} + 1) r_c^3} \right]
+
+    where :math:`q_i` and :math:`q_j` are the charges of the particle pair.
 
     See :py:class:`pair` for details on how forces are calculated and the available energy shifting and smoothing modes.
     Use :py:meth:`pair_coeff.set <coeff.set>` to set potential coefficients.
@@ -2356,6 +2384,11 @@ class reaction_field(pair):
       - *optional*: defaults to the global r_cut specified in the pair command
     - :math:`r_{\mathrm{on}}` - *r_on* (in units of distance)
       - *optional*: defaults to the global r_cut specified in the pair command
+    - *use_charge* (boolean), evaluate potential using particle charges
+      - *optional*: defaults to False
+
+    .. versionadded:: 2.1
+
 
     Example::
 
@@ -2364,6 +2397,7 @@ class reaction_field(pair):
         reaction_field.pair_coeff.set('A', 'A', epsilon=1.0, eps_rf=1.0)
         reaction_field.pair_coeff.set('A', 'B', epsilon=-1.0, eps_rf=0.0)
         reaction_field.pair_coeff.set('B', 'B', epsilon=1.0, eps_rf=0.0)
+        reaction_field.pair_coeff.set(system.particles.types, system.particles.types, epsilon=1.0, eps_rf=0.0, use_charge=True)
 
     """
     def __init__(self, r_cut, nlist, name=None):
@@ -2386,10 +2420,12 @@ class reaction_field(pair):
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
         # setup the coefficent options
-        self.required_coeffs = ['epsilon', 'eps_rf'];
+        self.required_coeffs = ['epsilon', 'eps_rf', 'use_charge'];
+        self.pair_coeff.set_default_coeff('use_charge', False)
 
     def process_coeff(self, coeff):
         epsilon = coeff['epsilon'];
         eps_rf = coeff['eps_rf'];
+        use_charge = coeff['use_charge']
 
-        return _hoomd.make_scalar2(epsilon, eps_rf);
+        return _hoomd.make_scalar3(epsilon, eps_rf, _hoomd.int_as_scalar(int(use_charge)));
