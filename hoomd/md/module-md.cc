@@ -137,31 +137,48 @@ wall_type make_wall_field_params(py::object walls, std::shared_ptr<const Executi
         }
     else
         {
-
         for(unsigned int i = 0; i < w.numSpheres; i++)
             {
-            Scalar     r = py::cast<Scalar>(py::object(walls_spheres[i]).attr("r"));
-            Scalar3 origin =py::cast<Scalar3>(py::object(walls_spheres[i]).attr("_origin"));
-            bool     inside =py::cast<bool>(py::object(walls_spheres[i]).attr("inside"));
-            w.Spheres[i] = SphereWall(r, origin, inside);
+            w.Spheres[i] = py::cast<SphereWall>(py::object(walls_spheres[i]).attr("_cpp"));
             }
         for(unsigned int i = 0; i < w.numCylinders; i++)
             {
-            Scalar     r = py::cast<Scalar>(py::object(walls_cylinders[i]).attr("r"));
-            Scalar3 origin =py::cast<Scalar3>(py::object(walls_cylinders[i]).attr("_origin"));
-            Scalar3 axis =py::cast<Scalar3>(py::object(walls_cylinders[i]).attr("_axis"));
-            bool     inside =py::cast<bool>(py::object(walls_cylinders[i]).attr("inside"));
-            w.Cylinders[i] = CylinderWall(r, origin, axis, inside);
+            w.Cylinders[i] = py::cast<CylinderWall>(py::object(walls_cylinders[i]).attr("_cpp"));
             }
         for(unsigned int i = 0; i < w.numPlanes; i++)
             {
-            Scalar3 origin =py::cast<Scalar3>(py::object(walls_planes[i]).attr("_origin"));
-            Scalar3 normal =py::cast<Scalar3>(py::object(walls_planes[i]).attr("_normal"));
-            bool    inside =py::cast<bool>(py::object(walls_planes[i]).attr("inside"));
-            w.Planes[i] = PlaneWall(origin, normal, inside);
+            w.Planes[i] = py::cast<PlaneWall>(py::object(walls_planes[i]).attr("_cpp"));
             }
         return w;
         }
+    }
+
+void export_WallTypes(py::module& m)
+    {
+    py::class_< wall_type, std::shared_ptr<wall_type> >(m, "wall_type")
+        .def(py::init<>());
+    m.def("make_wall_field_params", &make_wall_field_params);
+    py::module m_wall = m.def_submodule("walls");
+    py::class_< SphereWall, std::shared_ptr<SphereWall> >(m_wall, "Sphere")
+        .def(py::init< Scalar, Scalar3, bool >())
+        .def_readwrite("origin", &SphereWall::origin)
+        .def_readwrite("r", &SphereWall::r)
+        .def_readwrite("inside", &SphereWall::inside)
+        ;
+    py::class_< CylinderWall, std::shared_ptr<CylinderWall> >(m_wall, "Cylinder")
+        .def(py::init< Scalar, Scalar3, Scalar3, bool >())
+        .def_readonly("quatAxisToZRot", &CylinderWall::quatAxisToZRot)
+        .def_readwrite("origin", &CylinderWall::origin)
+        .def_readwrite("axis", &CylinderWall::axis)
+        .def_readwrite("r", &CylinderWall::r)
+        .def_readwrite("inside", &CylinderWall::inside)
+        ;
+    py::class_< PlaneWall, std::shared_ptr<PlaneWall> >(m_wall, "Plane")
+        .def(py::init< Scalar3, Scalar3, bool >())
+        .def_readwrite("normal", &PlaneWall::normal)
+        .def_readwrite("origin", &PlaneWall::origin)
+        .def_readwrite("inside", &PlaneWall::inside)
+        ;
     }
 
 //! Exports helper function for parameters based on standard evaluators
@@ -236,9 +253,7 @@ PYBIND11_PLUGIN(_md)
     export_ForceDistanceConstraint(m);
     export_ForceComposite(m);
     export_PPPMForceCompute(m);
-    py::class_< wall_type, std::shared_ptr<wall_type> >(m, "wall_type")
-        .def(py::init<>());
-    m.def("make_wall_field_params", &make_wall_field_params);
+    export_WallTypes(m);
     export_PotentialExternal<PotentialExternalPeriodic>(m, "PotentialExternalPeriodic");
     export_PotentialExternal<PotentialExternalElectricField>(m, "PotentialExternalElectricField");
     export_PotentialExternalWall<EvaluatorPairLJ>(m, "WallsPotentialLJ");

@@ -21,18 +21,17 @@
 #define DEVICE
 #endif
 
-//! SphereWall Constructor
-/*! \param r Radius of the sphere
-    \param origin The x,y,z coordinates of the center of the sphere
-    \param inside Determines which half space is evaluated.
-*/
-
 #ifdef SINGLE_PRECISION
 #define ALIGN_SCALAR 4
 #else
 #define ALIGN_SCALAR 8
 #endif
 
+//! SphereWall Constructor
+/*! \param r Radius of the sphere
+    \param origin The x,y,z coordinates of the center of the sphere
+    \param inside Determines which half space is evaluated.
+*/
 struct SphereWall
     {
     SphereWall(Scalar rad = 0.0, Scalar3 orig = make_scalar3(0.0,0.0,0.0), bool ins = true) : origin(vec3<Scalar>(orig)), r(rad), inside(ins) {}
@@ -60,7 +59,6 @@ struct CylinderWall
         Scalar normVec=sqrt(dot(zVec,zVec));
         Scalar realPart=normVec + dot(zNorm,zVec);
         vec3<Scalar> w;
-
         if (realPart < Scalar(1.0e-6) * normVec)
             {
                 realPart=Scalar(0.0);
@@ -271,6 +269,5 @@ inline void rescaleWall(PlaneWall& wall, const BoxDim& old_box, const Scalar *tr
     Scalar invNormLength=fast::rsqrt(wall.normal.x * wall.normal.x + wall.normal.y * wall.normal.y + wall.normal.z * wall.normal.z);
     wall.normal *= invNormLength;
     };
-
 
 #endif

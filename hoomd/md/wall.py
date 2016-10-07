@@ -27,6 +27,7 @@ By themselves, wall groups do nothing. Only when you specify a wall force
 from hoomd import _hoomd
 from hoomd.md import _md
 from hoomd.md import external
+from hoomd.md._md import walls
 import hoomd;
 import math;
 
@@ -342,16 +343,30 @@ class sphere(object):
 
     """
     def __init__(self, r=0.0, origin=(0.0, 0.0, 0.0), inside=True):
-        self.r = r;
-        self._origin = _hoomd.make_scalar3(*origin);
-        self.inside = inside;
+        self._cpp=walls.Sphere(r, _hoomd.make_scalar3(*origin), inside);
+
+    @property
+    def r(self):
+        return self._cpp.r;
+    @r.setter
+    def r(self, r):
+        self._cpp.r = r;
 
     @property
     def origin(self):
-        return (self._origin.x, self._origin.y, self._origin.z);
+        return (self._cpp.origin.x, self._cpp.origin.y, self._cpp.origin.z);
     @origin.setter
     def origin(self, origin):
-        self._origin = _hoomd.make_scalar3(*origin);
+        self._cpp.origin.x = origin[0]
+        self._cpp.origin.y = origin[1]
+        self._cpp.origin.z = origin[2]
+
+    @property
+    def inside(self):
+        return self._cpp.inside;
+    @inside.setter
+    def inside(self, inside):
+        self._cpp.inside = inside;
 
     def __str__(self):
         return "Radius=%s\tOrigin=%s\tInside=%s" % (str(self.r), str(self.origin), str(self.inside));
@@ -378,24 +393,40 @@ class cylinder(object):
     For an example see :py:class:`sphere`.
     """
     def __init__(self, r=0.0, origin=(0.0, 0.0, 0.0), axis=(0.0, 0.0, 1.0), inside=True):
-        self.r = r;
-        self._origin = _hoomd.make_scalar3(*origin);
-        self._axis = _hoomd.make_scalar3(*axis);
-        self.inside = inside;
+        self._cpp = walls.Cylinder(r, _hoomd.make_scalar3(*origin), _hoomd.make_scalar3(*axis), inside);
+
+    @property
+    def r(self):
+        return self._cpp.r;
+    @r.setter
+    def r(self, r):
+        self._cpp.r = r;
 
     @property
     def origin(self):
-        return (self._origin.x, self._origin.y, self._origin.z);
+        return (self._cpp.origin.x, self._cpp.origin.y, self._cpp.origin.z);
     @origin.setter
     def origin(self, origin):
-        self._origin = _hoomd.make_scalar3(*origin);
+        self._cpp.origin.x = origin[0]
+        self._cpp.origin.y = origin[1]
+        self._cpp.origin.z = origin[2]
 
     @property
     def axis(self):
-        return (self._axis.x, self._axis.y, self._axis.z);
+        return (self._cpp.axis.x, self._cpp.axis.y, self._cpp.axis.z);
     @axis.setter
     def axis(self, axis):
-        self._axis = _hoomd.make_scalar3(*axis);
+        r = self._cpp.r
+        origin = _hoomd.make_scalar3(self._cpp.origin.x, self._cpp.origin.y, self._cpp.origin.z)
+        inside = self._cpp.inside
+        self._cpp = walls.Cylinder(r, origin, _hoomd.make_scalar3(*axis), inside);
+
+    @property
+    def inside(self):
+        return self._cpp.inside;
+    @inside.setter
+    def inside(self, inside):
+        self._cpp.inside = inside;
 
     def __str__(self):
         return "Radius=%s\tOrigin=%s\tAxis=%s\tInside=%s" % (str(self.r), str(self.origin), str(self.axis), str(self.inside));
@@ -421,23 +452,31 @@ class plane(object):
     For an example see :py:class:`sphere`.
     """
     def __init__(self, origin=(0.0, 0.0, 0.0), normal=(0.0, 0.0, 1.0), inside=True):
-        self._origin = _hoomd.make_scalar3(*origin);
-        self._normal = _hoomd.make_scalar3(*normal);
-        self.inside = inside;
+        self._cpp = walls.Plane(_hoomd.make_scalar3(*origin), _hoomd.make_scalar3(*normal), inside)
 
     @property
     def origin(self):
-        return (self._origin.x, self._origin.y, self._origin.z);
+        return (self._cpp.origin.x, self._cpp.origin.y, self._cpp.origin.z);
     @origin.setter
     def origin(self, origin):
-        self._origin = _hoomd.make_scalar3(*origin);
+        self._cpp.origin = _hoomd.make_scalar3(*origin);
 
     @property
     def normal(self):
-        return (self._normal.x, self._normal.y, self._normal.z);
+        return (self._cpp.normal.x, self._cpp.normal.y, self._cpp.normal.z);
     @normal.setter
     def normal(self, normal):
-        self._normal = _hoomd.make_scalar3(*normal);
+        normal = [float(n) for n in normal]
+        norm_length = sum(n * n for n in normal)**0.5
+        normal = [n/norm_length for n in normal]
+        self._cpp.normal = _hoomd.make_scalar3(*normal);
+
+    @property
+    def inside(self):
+        return self._cpp.inside;
+    @inside.setter
+    def inside(self, inside):
+        self._cpp.inside = inside;
 
     def __str__(self):
         return "Origin=%s\tNormal=%s\tInside=%s" % (str(self.origin), str(self.normal), str(self.inside));
