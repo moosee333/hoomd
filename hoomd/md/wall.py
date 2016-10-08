@@ -357,9 +357,7 @@ class sphere(object):
         return (self._cpp.origin.x, self._cpp.origin.y, self._cpp.origin.z);
     @origin.setter
     def origin(self, origin):
-        self._cpp.origin.x = origin[0]
-        self._cpp.origin.y = origin[1]
-        self._cpp.origin.z = origin[2]
+        self._cpp.origin = _hoomd.make_scalar3(*origin)
 
     @property
     def inside(self):
@@ -407,9 +405,7 @@ class cylinder(object):
         return (self._cpp.origin.x, self._cpp.origin.y, self._cpp.origin.z);
     @origin.setter
     def origin(self, origin):
-        self._cpp.origin.x = origin[0]
-        self._cpp.origin.y = origin[1]
-        self._cpp.origin.z = origin[2]
+        self._cpp.origin = _hoomd.make_scalar3(*origin)
 
     @property
     def axis(self):

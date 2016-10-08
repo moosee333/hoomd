@@ -159,6 +159,7 @@ void export_WallTypes(py::module& m)
         .def(py::init<>());
     m.def("make_wall_field_params", &make_wall_field_params);
     py::module m_wall = m.def_submodule("walls");
+    py::implicitly_convertible<vec3<Scalar>, Scalar3>();
     py::class_< SphereWall, std::shared_ptr<SphereWall> >(m_wall, "Sphere")
         .def(py::init< Scalar, Scalar3, bool >())
         .def_readwrite("origin", &SphereWall::origin)
@@ -167,7 +168,6 @@ void export_WallTypes(py::module& m)
         ;
     py::class_< CylinderWall, std::shared_ptr<CylinderWall> >(m_wall, "Cylinder")
         .def(py::init< Scalar, Scalar3, Scalar3, bool >())
-        .def_readonly("quatAxisToZRot", &CylinderWall::quatAxisToZRot)
         .def_readwrite("origin", &CylinderWall::origin)
         .def_readwrite("axis", &CylinderWall::axis)
         .def_readwrite("r", &CylinderWall::r)

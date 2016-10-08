@@ -16,8 +16,6 @@
 #endif
 
 #include "hoomd/BoxDim.h"
-#include "hoomd/HOOMDMath.h"
-#include "hoomd/VectorMath.h"
 #include "WallData.h"
 
 #undef DEVICE
@@ -118,6 +116,8 @@ class EvaluatorWalls
             // TODO: NPT_walls add the rest of the geometries functions then complete the loops
             }
 
+
+        // TODO: NPT_walls, remove this functionality after the python communication is fixed
         DEVICE static std::string printField(field_type& field)
             {
             std::string output;
@@ -132,9 +132,8 @@ class EvaluatorWalls
             return output;
             }
 
-        DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const vec3<Scalar> drv)
+        DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const Scalar3 dr)
             {
-            Scalar3 dr = -vec_to_scalar3(drv);
             Scalar rsq = dot(dr, dr);
 
             // compute the force and potential energy
@@ -161,14 +160,13 @@ class EvaluatorWalls
                         pair_eng = Scalar(0.0);
                     }
                 // add the force and potential energy to the particle i
-                F += dr*force_divr;
+                F += -dr*force_divr;
                 energy += pair_eng; // removing half since the other "particle" won't be represented * Scalar(0.5);
                 }
             }
 
-        DEVICE inline void extrapEvaluator(Scalar3& F, Scalar& energy, const vec3<Scalar> drv, const Scalar rextrapsq, const Scalar r)
+        DEVICE inline void extrapEvaluator(Scalar3& F, Scalar& energy, const Scalar3 dr, const Scalar rextrapsq, const Scalar r)
             {
-            Scalar3 dr = -vec_to_scalar3(drv);
             // compute the force and potential energy
             Scalar force_divr = Scalar(0.0);
             Scalar pair_eng = Scalar(0.0);
@@ -197,7 +195,7 @@ class EvaluatorWalls
                         pair_eng = Scalar(0.0);
                     }
                 // add the force and potential energy to the particle i
-                F += dr*force_divr;
+                F += -dr*force_divr;
                 energy += pair_eng; // removing half since the other "particle" won't be represented * Scalar(0.5);
                 }
             }
@@ -213,9 +211,7 @@ class EvaluatorWalls
             for (unsigned int i = 0; i < 6; i++)
                 virial[i] = Scalar(0.0);
 
-            // convert type as little as possible
-            vec3<Scalar> position = vec3<Scalar>(m_pos);
-            vec3<Scalar> drv;
+            Scalar3 dr;
             bool inside = false; //keeps compiler from complaining
             if (m_params.rextrap>0.0) //extrapolated mode
                 {
@@ -223,11 +219,11 @@ class EvaluatorWalls
                 Scalar rsq;
                 for (unsigned int k = 0; k < m_field.numSpheres; k++)
                     {
-                    drv = vecPtToWall(m_field.Spheres[k], position, inside);
-                    rsq = dot(drv, drv);
+                    dr = vecPtToWall(m_field.Spheres[k], m_pos, inside);
+                    rsq = dot(dr, dr);
                     if (inside && rsq>=rextrapsq)
                         {
-                        callEvaluator(F, energy, drv);
+                        callEvaluator(F, energy, dr);
                         }
                     else
                         {
@@ -235,24 +231,24 @@ class EvaluatorWalls
                         if (rsq == 0.0)
                             {
                             inside = true; //just in case
-                            drv = (position - m_field.Spheres[k].origin) / m_field.Spheres[k].r;
+                            dr = (m_pos - m_field.Spheres[k].origin) / m_field.Spheres[k].r;
                             }
                         else
                             {
-                            drv *= 1/r;
+                            dr *= 1/r;
                             }
                         r = (inside) ? m_params.rextrap - r : m_params.rextrap + r;
-                        drv *= (inside) ? r : -r;
-                        extrapEvaluator(F, energy, drv, rextrapsq, r);
+                        dr *= (inside) ? r : -r;
+                        extrapEvaluator(F, energy, dr, rextrapsq, r);
                         }
                     }
                 for (unsigned int k = 0; k < m_field.numCylinders; k++)
                     {
-                    drv = vecPtToWall(m_field.Cylinders[k], position, inside);
-                    rsq = dot(drv, drv);
+                    dr = vecPtToWall(m_field.Cylinders[k], m_pos, inside);
+                    rsq = dot(dr, dr);
                     if (inside && rsq>=rextrapsq)
                         {
-                        callEvaluator(F, energy, drv);
+                        callEvaluator(F, energy, dr);
                         }
                     else
                         {
@@ -260,26 +256,28 @@ class EvaluatorWalls
                         if (rsq == 0.0)
                             {
                             inside = true; //just in case
-                            drv = rotate(m_field.Cylinders[k].quatAxisToZRot,position - m_field.Cylinders[k].origin);
+                            vec3<Scalar> drv;
+                            drv = rotate(m_field.Cylinders[k].quatAxisToZRot,vec3<Scalar>(m_pos - m_field.Cylinders[k].origin));
                             drv.z = 0.0;
                             drv = rotate(conj(m_field.Cylinders[k].quatAxisToZRot),drv) / m_field.Cylinders[k].r;
+                            dr = vec_to_scalar3(drv);
                             }
                         else
                             {
-                            drv *= 1/r;
+                            dr *= 1/r;
                             }
                         r = (inside) ? m_params.rextrap - r : m_params.rextrap + r;
-                        drv *= (inside) ? r : -r;
-                        extrapEvaluator(F, energy, drv, rextrapsq, r);
+                        dr *= (inside) ? r : -r;
+                        extrapEvaluator(F, energy, dr, rextrapsq, r);
                         }
                     }
                 for (unsigned int k = 0; k < m_field.numPlanes; k++)
                     {
-                    drv = vecPtToWall(m_field.Planes[k], position, inside);
-                    rsq = dot(drv, drv);
+                    dr = vecPtToWall(m_field.Planes[k], m_pos, inside);
+                    rsq = dot(dr, dr);
                     if (inside && rsq>=rextrapsq)
                         {
-                        callEvaluator(F, energy, drv);
+                        callEvaluator(F, energy, dr);
                         }
                     else
                         {
@@ -287,15 +285,15 @@ class EvaluatorWalls
                         if (rsq == 0.0)
                             {
                             inside = true; //just in case
-                            drv = m_field.Planes[k].normal;
+                            dr = m_field.Planes[k].normal;
                             }
                         else
                             {
-                            drv *= 1/r;
+                            dr *= 1/r;
                             }
                         r = (inside) ? m_params.rextrap - r : m_params.rextrap + r;
-                        drv *= (inside) ? r : -r;
-                        extrapEvaluator(F, energy, drv, rextrapsq, r);
+                        dr *= (inside) ? r : -r;
+                        extrapEvaluator(F, energy, dr, rextrapsq, r);
                         }
                     }
                 }
@@ -303,26 +301,26 @@ class EvaluatorWalls
                 {
                 for (unsigned int k = 0; k < m_field.numSpheres; k++)
                     {
-                    drv = vecPtToWall(m_field.Spheres[k], position, inside);
+                    dr = vecPtToWall(m_field.Spheres[k], m_pos, inside);
                     if (inside)
                         {
-                        callEvaluator(F, energy, drv);
+                        callEvaluator(F, energy, dr);
                         }
                     }
                 for (unsigned int k = 0; k < m_field.numCylinders; k++)
                     {
-                    drv = vecPtToWall(m_field.Cylinders[k], position, inside);
+                    dr = vecPtToWall(m_field.Cylinders[k], m_pos, inside);
                     if (inside)
                         {
-                        callEvaluator(F, energy, drv);
+                        callEvaluator(F, energy, dr);
                         }
                     }
                 for (unsigned int k = 0; k < m_field.numPlanes; k++)
                     {
-                    drv = vecPtToWall(m_field.Planes[k], position, inside);
+                    dr = vecPtToWall(m_field.Planes[k], m_pos, inside);
                     if (inside)
                         {
-                        callEvaluator(F, energy, drv);
+                        callEvaluator(F, energy, dr);
                         }
                     }
                 }
