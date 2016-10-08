@@ -159,7 +159,6 @@ void export_WallTypes(py::module& m)
         .def(py::init<>());
     m.def("make_wall_field_params", &make_wall_field_params);
     py::module m_wall = m.def_submodule("walls");
-    py::implicitly_convertible<vec3<Scalar>, Scalar3>();
     py::class_< SphereWall, std::shared_ptr<SphereWall> >(m_wall, "Sphere")
         .def(py::init< Scalar, Scalar3, bool >())
         .def_readwrite("origin", &SphereWall::origin)
