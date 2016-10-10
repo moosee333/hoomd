@@ -329,7 +329,7 @@ class mode_hpmc(_integrator):
 
     def initialize_shape_params(self):
         shape_param_type = None;
-        # have to have a few extra checks becuase the sized class don't actually exist yet.
+        # have to have a few extra checks because the sized class don't actually exist yet.
         if isinstance(self, convex_polyhedron):
             shape_param_type = data.convex_polyhedron_params.get_sized_class(self.max_verts);
         elif isinstance(self, convex_spheropolyhedron):
