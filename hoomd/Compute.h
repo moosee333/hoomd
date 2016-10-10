@@ -69,12 +69,6 @@ class Compute
         */
         virtual void compute(unsigned int timestep){}
 
-        //! Abstract method for performing any GPU specific computation
-        /*! \param timestep Current time step
-            Derived classes will implement this method to calculate their results
-        */
-        virtual void computeGPU(unsigned int timestep){}
-
         //! Abstract method that performs a benchmark
         virtual double benchmark(unsigned int num_iters);
 
