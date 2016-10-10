@@ -92,7 +92,7 @@ static __device__ int warp_reduce(int val, int width)
 */
 struct ShapePolyhedron
     {
-    typedef detail::GPUTree<detail::MAX_POLY3D_NODES,detail::MAX_POLY3D_CAPACITY> gpu_tree_type;
+    typedef detail::GPUTree<detail::MAX_POLY3D_CAPACITY> gpu_tree_type;
 
     //! Define the parameter type
     typedef struct : public param_base {
@@ -548,19 +548,20 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> r_ab,
     const OverlapReal abs_tol(1e-7);
 
     // loop through faces of cur_node_a
-    for (unsigned int i= 0; i< ShapePolyhedron::gpu_tree_type::capacity; i++)
+    unsigned int na = a.tree.getNumParticles(cur_node_a);
+    unsigned int nb = b.tree.getNumParticles(cur_node_b);
+
+    for (unsigned int i= 0; i< na; i++)
         {
-        int iface = a.tree.getParticle(cur_node_a, i);
-        if (iface == -1) break;
+        unsigned int iface = a.tree.getParticle(cur_node_a, i);
 
         // loop through faces of cur_node_b
-        for (unsigned int j= 0; j< ShapePolyhedron::gpu_tree_type::capacity; j++)
+        for (unsigned int j= 0; j< nb; j++)
             {
             unsigned int nverts_b, offs_b;
             bool intersect = false;
 
-            int jface = b.tree.getParticle(cur_node_b, j);
-            if (jface == -1) break;
+            unsigned int jface = b.tree.getParticle(cur_node_b, j);
 
             // Load number of face vertices
             unsigned int nverts_a = a.data.face_offs[iface + 1] - a.data.face_offs[iface];
