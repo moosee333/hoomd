@@ -59,6 +59,11 @@ template< class Shape > class GibbsSampler : public ExternalFieldMono<Shape>
                 }
 
             // Have to ensure that the vector of configurations and the aabb trees are identically indexed
+            //m_type_samples = std::vector<unsigned int, managed_allocator<unsigned int>>();
+            //m_type_counts = std::vector<unsigned int, managed_allocator<unsigned int>>();
+            //NOTE: Do these need to have managed allocators too?
+            m_type_samples = std::vector<unsigned int>();
+            m_type_counts = std::vector<unsigned int>();
             m_positions = std::vector<std::vector<vec3<Scalar>>, managed_allocator<std::vector<vec3<Scalar>>>>();
             m_orientations = std::vector<std::vector<quat<Scalar>>, managed_allocator<std::vector<quat<Scalar>>>>();
             m_aabb_trees = std::vector<detail::AABBTree, managed_allocator<detail::AABBTree>>();
@@ -70,11 +75,12 @@ template< class Shape > class GibbsSampler : public ExternalFieldMono<Shape>
             detail::AABB* temp_aabb;
 
             const BoxDim& box = this->m_pdata->getBox();
-            Scalar vol = box->getVolume();
+            Scalar vol = box.getVolume();
 
-            for(unsigned int i = 0; i < m_num_species.size(); i++)
+            for(unsigned int i = 0; i < m_num_species; i++)
                 {
-                m_type_samples[i] = std::round(vol*m_type_densities[i]);
+                m_type_samples.push_back(std::round(vol*m_type_densities[i]));
+                m_type_counts.push_back(0);
                 m_positions.push_back(std::vector<vec3<Scalar>>());
                 m_orientations.push_back(std::vector<quat<Scalar>>());
                 m_aabb_trees.push_back(detail::AABBTree());
@@ -90,6 +96,7 @@ template< class Shape > class GibbsSampler : public ExternalFieldMono<Shape>
                     {
                     m_aabbs.push_back(temp_aabb);
                     }
+
                 }
             }
 
@@ -192,7 +199,7 @@ Simplest solution might just be to provide an array of types corresponding to th
                 for(unsigned int j = 0; j < m_positions[i].size(); j++)
                     {
                         //NOTE: I think the second argument is pulling the parameters for the jth type, which works out here
-                        Shape shape_j(m_orientations[i][j], params[m_type_indices[j]]);
+                        Shape shape_j(m_orientations[i][j], params[m_type_indices[i]]);
                         m_aabbs[i][j] = shape_j.getAABB(vec3<Scalar>(0,0,0)); //NOTE: I'm not sure what the argument is. It seems like where we want to center the box?
                     } // End loop over particles
 
@@ -200,25 +207,6 @@ Simplest solution might just be to provide an array of types corresponding to th
                 m_aabb_trees[i].buildTree(m_aabbs[i], m_type_counts[i]);
                 } // End loop over types
             }
-
-
-            template <class Shape>
-            void IntegratorHPMCMono<Shape>::growAABBList(unsigned int N)
-                {
-                if (N > m_aabbs_capacity)
-                    {
-                    m_aabbs_capacity = N;
-                    if (m_aabbs != NULL)
-                        free(m_aabbs);
-
-                    int retval = posix_memalign((void**)&m_aabbs, 32, N*sizeof(detail::AABB));
-                    if (retval != 0)
-                        {
-                        m_exec_conf->msg->error() << "Error allocating aligned memory" << std::endl;
-                        throw std::runtime_error("Error allocating AABB memory");
-                        }
-                    }
-                }
 
         /**
          * Change the densities of the particle types specified in type_indices to the new densities
@@ -236,8 +224,8 @@ Simplest solution might just be to provide an array of types corresponding to th
                         {
                         m_type_densities[j] = type_densities[i];
                         const BoxDim& box = this->m_pdata->getBox();
-                        Scalar vol = box->getVolume();
-                        new_sample_size = std::round(vol*m_type_densities[j]);
+                        Scalar vol = box.getVolume();
+                        unsigned int new_sample_size = std::round(vol*m_type_densities[j]);
 
                         if (new_sample_size > m_type_samples[j])
                             {
@@ -245,31 +233,15 @@ Simplest solution might just be to provide an array of types corresponding to th
                                 if (m_aabbs[j] != NULL)
                                     free(m_aabbs[j]);
 
-                                int retval = posix_memalign((void**)&m_aabbs, 32, N*sizeof(detail::AABB));
+                                int retval = posix_memalign((void**)&m_aabbs, 32, new_sample_size*sizeof(detail::AABB));
                                 if (retval != 0)
                                     {
-                                    m_exec_conf->msg->error() << "Error allocating aligned memory" << std::endl;
+                                    this->m_exec_conf->msg->error() << "Error allocating aligned memory" << std::endl;
                                     throw std::runtime_error("Error allocating AABB memory");
                                     }
                             }
+                        m_type_samples[j] = new_sample_size;
                         }
-                    }
-                }
-            }
-
-        void IntegratorHPMCMono<Shape>::growAABBList(unsigned int N)
-            {
-            if (N > m_aabbs_capacity)
-                {
-                m_aabbs_capacity = N;
-                if (m_aabbs != NULL)
-                    free(m_aabbs);
-
-                int retval = posix_memalign((void**)&m_aabbs, 32, N*sizeof(detail::AABB));
-                if (retval != 0)
-                    {
-                    m_exec_conf->msg->error() << "Error allocating aligned memory" << std::endl;
-                    throw std::runtime_error("Error allocating AABB memory");
                     }
                 }
             }
@@ -283,7 +255,7 @@ Simplest solution might just be to provide an array of types corresponding to th
           * @param  image_list [description]
           * @return            [description]
           */
-        bool checkOverlaps(unsigned int typ_i, const vec3<Scalar>& position_i, const Shape& shape_i, detail::AABBTree aabb_tree, int typ_index = -1)
+        bool checkOverlaps(unsigned int typ_i, const vec3<Scalar>& position_i, const Shape& shape_i, const detail::AABBTree& aabb_tree, int typ_index_j = -1)
         //NOTE: Currently my solution for the type issue is pretty hackish. I can try and come up with a better interface in a bit, but let's get this working first
             {
             //NOTE:It may be more efficient to pass the image list as an arg. I'm not sure how intelligent updateImageList is
@@ -293,10 +265,13 @@ Simplest solution might just be to provide an array of types corresponding to th
             //NOTE: I would like to declare typ_j here and initialize it just once if we are only working with one type of particle, but since that's in an if statement it causes g++ to throw a warning because in principle I could be using it uninitialized. So for now I'm doing it in multiple places. This entire methodology to avoid duplicating countOverlaps code is a hack anyway... so for now I'll let this stand
 
             // This is the aabb tree of the current particle
+            //NOTE:IS THIS THE RIGHT ARG?
             detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
 
             const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type>> & params = m_mc->getParams();
             ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
             const Index2D& indexer = m_mc->getOverlapIndexer();
             bool overlap = false;
             unsigned int err_count = 0;
@@ -326,10 +301,8 @@ Simplest solution might just be to provide an array of types corresponding to th
                                 quat<Scalar> orientation_j;
                                 unsigned int typ_j;
                                 // load the position and orientation of the j particle
-                                if(typ_index == -1)
+                                if(typ_index_j == -1)
                                     {
-                                    ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::readwrite);
-                                    ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
                                     Scalar4 postype_j = h_postype.data[j];
                                     //NOTE: Are these typecasts OK? In particular, does casting a Scalar4 to a vec3<Scalar> work as expected? I assume so since I've seen it elsewhere, but we'll have to see...
                                     position_j = vec3<Scalar>(postype_j);
@@ -338,9 +311,9 @@ Simplest solution might just be to provide an array of types corresponding to th
                                     }
                                 else
                                     {
-                                    position_j = m_positions[typ_index][j];
-                                    orientation_j = m_orientations[typ_index][j];
-                                    typ_j = m_type_indices[typ_index];
+                                    position_j = m_positions[typ_index_j][j];
+                                    orientation_j = m_orientations[typ_index_j][j];
+                                    typ_j = m_type_indices[typ_index_j];
                                     }
                                 Shape shape_j(quat<Scalar>(orientation_j), params[typ_j]);
 
@@ -359,6 +332,7 @@ Simplest solution might just be to provide an array of types corresponding to th
                         }
                     else
                         {
+
                         // skip ahead
                         cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
                         }
@@ -368,14 +342,7 @@ Simplest solution might just be to provide an array of types corresponding to th
 
                 if (overlap){break;}
                 } // end loop over images
-            if (overlap)
-                {
-                    return true;
-                }
-            else
-                {
-                    return false;
-                }
+            return overlap;
             }
 
          /**
@@ -395,7 +362,6 @@ Simplest solution might just be to provide an array of types corresponding to th
             const BoxDim& box = this->m_pdata->getBox();
 
             // Interaction matrix
-            ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
             const Index2D& indexer = m_mc->getOverlapIndexer();
             unsigned int type_j, overlap_index;
             unsigned int type_i = m_type_indices[type_index_i];
@@ -435,8 +401,6 @@ Simplest solution might just be to provide an array of types corresponding to th
                     }
 
                 // access particle data and system box
-                ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::readwrite);
-                ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
                 overlap = checkOverlaps(type_i, pos_i, shape_i, aabb_tree);
 
                 // If the main particles overlapped then no need to continue
@@ -446,8 +410,14 @@ Simplest solution might just be to provide an array of types corresponding to th
                 for (unsigned int j = 0; j < m_num_species; j++)
                     {
                     type_j = m_type_indices[j];
+                    bool check_overlaps = false;
                     overlap_index = indexer(type_i, type_j);
-                    if (h_overlaps.data[overlap_index]) // Can skip this for pairs that can overlap
+                    // Scope this so ArrayHandle doesn't cause problems
+                        {
+                        ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
+                        check_overlaps = h_overlaps.data[overlap_index];
+                        }
+                    if (check_overlaps) // Can skip this for pairs that can overlap
                         {
                         overlap = checkOverlaps(type_i, pos_i, shape_i, m_aabb_trees[j], j);
                         if (overlap) { break;}
@@ -464,6 +434,9 @@ Simplest solution might just be to provide an array of types corresponding to th
                     orientations_new.push_back(shape_i.orientation);
                     }
                 } // end loop through all particles
+
+            // Update the actual counts now
+            m_type_counts[type_index_i] = positions_new.size();
 
             // If there were overlaps at any point, return an empty configuration. Otherwise return the new configuration
             //NOTE: This is a pretty hackish way to do this, but not sure what the preferred method would be
@@ -490,8 +463,8 @@ Simplest solution might just be to provide an array of types corresponding to th
     void export_GibbsSampler(pybind11::module& m, std::string name)
         {
        pybind11::class_<GibbsSampler<Shape>, std::shared_ptr< GibbsSampler<Shape> > >(m, name.c_str(), pybind11::base< ExternalFieldMono<Shape> >())
-        .def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<IntegratorHPMCMono<Shape>>, std::vector<unsigned int>, std::vector<unsigned int>>())
-        .def("setParams", &ExternalFieldLattice<Shape>::setParams
+        .def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<IntegratorHPMCMono<Shape>>, std::vector<unsigned int>, std::vector<Scalar>>())
+        .def("setParams", &ExternalFieldLattice<Shape>::setParams)
         ;
         }
 

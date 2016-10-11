@@ -69,7 +69,7 @@ class lattice_field(_external):
     Example::
 
         mc = hpmc.integrate.sphere(seed=415236);
-        hpmc.field.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
+        hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
         log = analyze.log(quantities=['lattice_energy'], period=100, filename='log.dat', overwrite=True);
 
     """
@@ -125,7 +125,7 @@ class lattice_field(_external):
         Example::
 
             mc = hpmc.integrate.sphere(seed=415236);
-            lattice = hpmc.field.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
+            lattice = hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
             lattice.set_references(position=bcc_lattice)
 
         """
@@ -144,7 +144,7 @@ class lattice_field(_external):
         Example::
 
             mc = hpmc.integrate.sphere(seed=415236);
-            lattice = hpmc.field.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
+            lattice = hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
             ks = np.linspace(1000, 0.01, 100);
             for k in ks:
               lattice.set_params(k=k, q=0.0);
@@ -163,7 +163,7 @@ class lattice_field(_external):
         Example::
 
             mc = hpmc.integrate.sphere(seed=415236);
-            lattice = hpmc.field.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
+            lattice = hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
             ks = np.linspace(1000, 0.01, 100);
             for k in ks:
               lattice.set_params(k=k, q=0.0);
@@ -181,7 +181,7 @@ class lattice_field(_external):
                 This is a collective call and must be called on all ranks.
         Example::
             mc = hpmc.integrate.sphere(seed=415236);
-            lattice = hpmc.field.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
+            lattice = hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
             run(20000)
             eng = lattice.get_energy()
         """
@@ -195,7 +195,7 @@ class lattice_field(_external):
 
         Example::
             mc = hpmc.integrate.sphere(seed=415236);
-            lattice = hpmc.field.lattice_field(mc=mc, position=fcc_lattice, k=exp(15));
+            lattice = hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=exp(15));
             run(20000)
             avg_eng = lattice.get_average_energy() //  should be about 1.5kT
 
@@ -210,7 +210,7 @@ class lattice_field(_external):
 
         Example::
             mc = hpmc.integrate.sphere(seed=415236);
-            lattice = hpmc.field.lattice_field(mc=mc, position=fcc_lattice, k=exp(15));
+            lattice = hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=exp(15));
             run(20000)
             sig_eng = lattice.get_sigma_energy()
 
@@ -921,6 +921,7 @@ class gibbs_sampler(_external):
     Args:
         mc (:py:mod:`hoomd.hpmc.integrate`): MC integrator
         densities (dict): Mapping between particle types (specified as strings) to include in the sampler and the desired number densities (floats) of each species
+        composite (bool): Set this to True when this field is part of a :py:class:`external_field_composite`.
 
     :py:class:`gibbs_sampler` adds an arbitrary number of implicit species and samples the joint distribution of their configurations
 
@@ -936,7 +937,7 @@ class gibbs_sampler(_external):
         composite_field = hpmc.compute.external_field_composite(mc, fields=[walls, lattice])
 
     """
-    def __init__(self, mc, fugacities):
+    def __init__(self, mc, fugacities, composite = False):
         _external.__init__(self);
         cls = None;
         if not hoomd.context.exec_conf.isCUDAEnabled():
@@ -954,11 +955,11 @@ class gibbs_sampler(_external):
         indices = []
         densities = []
         for item in fugacities.items():
-            indices.append(hoomd.context.current.system_definition.getParticleData().getTypebyName(item[0]))
+            indices.append(hoomd.context.current.system_definition.getParticleData().getTypeByName(item[0]))
             densities.append(item[1])
 
         self.compute_name = "gibbs_sampler"
-        self.cpp_compute = cls(hoomd.context.current.system_definition, mc, indices, densities);
+        self.cpp_compute = cls(hoomd.context.current.system_definition, mc.cpp_integrator, indices, densities);
         hoomd.context.current.system.addCompute(self.cpp_compute, self.compute_name)
         if not composite:
             mc.set_external(self);
