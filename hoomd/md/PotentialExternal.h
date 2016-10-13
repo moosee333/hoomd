@@ -174,8 +174,9 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
         {
         ArrayHandle<field_type> h_field(m_field, access_location::host, access_mode::readwrite);
         field_type& field = *(h_field.data);
+
         evaluator::rescaleField(field, box, m_old_box);
-        std::string output = evaluator::printField(field);
+        std::string output = evaluator::printField(field );
         this->m_exec_conf->msg->notice(1) << output;
         m_old_box = box;
         m_rescale = false;

@@ -13,7 +13,6 @@
 
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/VectorMath.h"
-#include "hoomd/md/QuaternionMath.h"
 #include "hoomd/BoxDim.h"
 
 #ifdef NVCC
@@ -22,24 +21,25 @@
 #define DEVICE
 #endif
 
+//! SphereWall Constructor
+/*! \param r Radius of the sphere
+    \param origin The x,y,z coordinates of the center of the sphere
+    \param inside Determines which half space is evaluated.
+*/
+
 #ifdef SINGLE_PRECISION
 #define ALIGN_SCALAR 4
 #else
 #define ALIGN_SCALAR 8
 #endif
 
-//! SphereWall Constructor
-/*! \param r Radius of the sphere
-    \param origin The x,y,z coordinates of the center of the sphere
-    \param inside Determines which half space is evaluated.
-*/
 struct SphereWall
     {
-    SphereWall(Scalar rad = 0.0, Scalar3 orig = make_scalar3(0.0,0.0,0.0), bool ins = true) : origin(orig), r(rad), inside(ins) {}
-    Scalar3    origin; // need to order datatype in descending order of type size for Fermi
-    Scalar     r;
-    bool       inside;
-    } __attribute__((aligned(ALIGN_SCALAR))); // align according to first member of Scalar3
+    SphereWall(Scalar rad = 0.0, Scalar3 orig = make_scalar3(0.0,0.0,0.0), bool ins = true) : origin(vec3<Scalar>(orig)), r(rad), inside(ins) {}
+    vec3<Scalar>    origin; // need to order datatype in descending order of type size for Fermi
+    Scalar          r;
+    bool            inside;
+    } __attribute__((aligned(ALIGN_SCALAR))); // align according to first member of vec3<Scalar>
 
 //! CylinderWall Constructor
 /*! \param r Radius of the sphere
@@ -50,39 +50,37 @@ struct SphereWall
 */
 struct CylinderWall
     {
-    CylinderWall(Scalar rad = 0.0, Scalar3 orig = make_scalar3(0.0,0.0,0.0), Scalar3 zorient = make_scalar3(0.0,0.0,1.0), bool ins=true) : origin(orig), axis(zorient), r(rad), inside(ins)
+    CylinderWall(Scalar rad = 0.0, Scalar3 orig = make_scalar3(0.0,0.0,0.0), Scalar3 zorient = make_scalar3(0.0,0.0,1.0), bool ins=true) : origin(vec3<Scalar>(orig)), axis(vec3<Scalar>(zorient)), r(rad), inside(ins)
         {
-        Scalar3 zVec(axis);
-        Scalar3 zNorm = make_scalar3(0.0,0.0,1.0);
+        vec3<Scalar> zVec=axis;
+        vec3<Scalar> zNorm(0.0,0.0,1.0);
 
         // method source: http://lolengine.net/blog/2014/02/24/quaternion-from-two-vectors-final
         // easily simplified due to zNorm being a normalized vector
-        Scalar normVec=fast::sqrt(dot(zVec,zVec));
+        Scalar normVec=sqrt(dot(zVec,zVec));
         Scalar realPart=normVec + dot(zNorm,zVec);
-        Scalar3 w;
+        vec3<Scalar> w;
+
         if (realPart < Scalar(1.0e-6) * normVec)
             {
                 realPart=Scalar(0.0);
-                w=make_scalar3(0.0, -1.0, 0.0);
+                w=vec3<Scalar>(0.0, -1.0, 0.0);
             }
         else
             {
-                // cross product
-                w=make_scalar3(zNorm.y * zVec.z - zNorm.z * zVec.y,
-                               zNorm.z * zVec.x - zNorm.x * zVec.z,
-                               zNorm.x * zVec.y - zNorm.y * zVec.x);
+                w=cross(zNorm,zVec);
                 realPart=Scalar(realPart);
             }
-            quatAxisToZRot=quat<Scalar>(realPart,vec3<Scalar>(w));
+            quatAxisToZRot=quat<Scalar>(realPart,w);
             Scalar norm=fast::rsqrt(norm2(quatAxisToZRot));
             quatAxisToZRot=norm*quatAxisToZRot;
         }
     quat<Scalar>    quatAxisToZRot; // need to order datatype in descending order of type size for Fermi
-    Scalar3         origin;
-    Scalar3         axis;
+    vec3<Scalar>    origin;
+    vec3<Scalar>    axis;
     Scalar          r;
     bool            inside;
-    } __attribute__((aligned(ALIGN_SCALAR))); // align according to first member of quaternion
+    } __attribute__((aligned(ALIGN_SCALAR))); // align according to first member of quat<Scalar>
 
 //! PlaneWall Constructor
 /*! \param origin The x,y,z coordinates of a point on the cylinder axis
@@ -91,48 +89,49 @@ struct CylinderWall
 */
 struct PlaneWall
     {
-    PlaneWall(Scalar3 orig = make_scalar3(0.0,0.0,0.0), Scalar3 norm = make_scalar3(0.0,0.0,1.0), bool ins = true) : normal(norm), origin(orig), inside(ins)
+    PlaneWall(Scalar3 orig = make_scalar3(0.0,0.0,0.0), Scalar3 norm = make_scalar3(0.0,0.0,1.0), bool ins = true) : normal(vec3<Scalar>(norm)), origin(vec3<Scalar>(orig)), inside(ins)
         {
-        Scalar3 nVec;
+        vec3<Scalar> nVec;
         nVec = normal;
         Scalar invNormLength;
-        invNormLength=fast::rsqrt(dot(nVec,nVec));
+        invNormLength=fast::rsqrt(nVec.x*nVec.x + nVec.y*nVec.y + nVec.z*nVec.z);
         normal=nVec*invNormLength;
         }
-    Scalar3         normal;
-    Scalar3         origin;
+    vec3<Scalar>    normal;
+    vec3<Scalar>    origin;
     bool            inside;
-    } __attribute__((aligned(ALIGN_SCALAR))); // align according to first member of Scalar3
+    } __attribute__((aligned(ALIGN_SCALAR))); // align according to first member of vec3<Scalar>
 
 //! Point to wall vector for a sphere wall geometry
 /* Returns 0 vector when all normal directions are equal
 */
-DEVICE inline Scalar3 vecPtToWall(const SphereWall& wall, const Scalar3& position, bool& inside)
+DEVICE inline vec3<Scalar> vecPtToWall(const SphereWall& wall, const vec3<Scalar>& position, bool& inside)
     {
-    Scalar3 t = position;
+    vec3<Scalar> t = position;
     t-=wall.origin;
-    Scalar3 shiftedPos(t);
-    Scalar rxyz = fast::sqrt(dot(shiftedPos,shiftedPos));
+    vec3<Scalar> shiftedPos(t);
+    Scalar rxyz = sqrt(dot(shiftedPos,shiftedPos));
     if (rxyz > 0.0)
         {
         inside = (((rxyz <= wall.r) && wall.inside) || ((rxyz > wall.r) && !(wall.inside))) ? true : false;
         t *= wall.r/rxyz;
-        Scalar3 dx = t - shiftedPos;
+        vec3<Scalar> dx = t - shiftedPos;
         return dx;
         }
     else
         {
         inside = (wall.inside) ? true : false;
-        return make_scalar3(0.0,0.0,0.0);
+        return vec3<Scalar>(0.0,0.0,0.0);
         }
     };
 
 //! Point to wall vector for a cylinder wall geometry
 /* Returns 0 vector when all normal directions are equal
 */
-DEVICE inline Scalar3 vecPtToWall(const CylinderWall& wall, const Scalar3& position, bool& inside)
+DEVICE inline vec3<Scalar> vecPtToWall(const CylinderWall& wall, const vec3<Scalar>& position, bool& inside)
     {
-    vec3<Scalar> t = vec3<Scalar>(position - wall.origin);
+    vec3<Scalar> t = position;
+    t-=wall.origin;
     vec3<Scalar> shiftedPos = rotate(wall.quatAxisToZRot,t);
     shiftedPos.z = 0.0;
     Scalar rxy = sqrt(dot(shiftedPos,shiftedPos));
@@ -142,49 +141,54 @@ DEVICE inline Scalar3 vecPtToWall(const CylinderWall& wall, const Scalar3& posit
         t = (wall.r / rxy) * shiftedPos;
         vec3<Scalar> dx = t - shiftedPos;
         dx = rotate(conj(wall.quatAxisToZRot),dx);
-        return vec_to_scalar3(dx);
+        return dx;
         }
     else
         {
         inside = (wall.inside) ? true : false;
-        return make_scalar3(0.0,0.0,0.0);
+        return vec3<Scalar>(0.0,0.0,0.0);
         }
     };
 
 //! Point to wall vector for a plane wall geometry
-DEVICE inline Scalar3 vecPtToWall(const PlaneWall& wall, const Scalar3& position, bool& inside)
+DEVICE inline vec3<Scalar> vecPtToWall(const PlaneWall& wall, const vec3<Scalar>& position, bool& inside)
     {
-    Scalar d = dot(wall.normal, position) - dot(wall.normal,wall.origin);
+    vec3<Scalar> t = position;
+    Scalar d = dot(wall.normal,t) - dot(wall.normal,wall.origin);
     inside = (((d >= 0.0) && wall.inside) || ((d < 0.0) && !(wall.inside))) ? true : false;
-    Scalar3 dx = -d * wall.normal;
+    vec3<Scalar> dx = -d * wall.normal;
     return dx;
     };
 
 //! Distance of point to inside sphere wall geometry, not really distance, +- based on if it's inside or not
-DEVICE inline Scalar distWall(const SphereWall& wall, const Scalar3& position)
+DEVICE inline Scalar distWall(const SphereWall& wall, const vec3<Scalar>& position)
     {
-    Scalar3 shiftedPos = position - wall.origin;
+    vec3<Scalar> t = position;
+    t-=wall.origin;
+    vec3<Scalar> shiftedPos(t);
     Scalar rxyz2 = shiftedPos.x*shiftedPos.x + shiftedPos.y*shiftedPos.y + shiftedPos.z*shiftedPos.z;
-    Scalar d = wall.r - fast::sqrt(rxyz2);
+    Scalar d = wall.r - sqrt(rxyz2);
     d = (wall.inside) ? d : -d;
     return d;
     };
 
 //! Distance of point to inside cylinder wall geometry, not really distance, +- based on if it's inside or not
-DEVICE inline Scalar distWall(const CylinderWall& wall, const Scalar3& position)
+DEVICE inline Scalar distWall(const CylinderWall& wall, const vec3<Scalar>& position)
     {
-    vec3<Scalar> shiftedPos = vec3<Scalar>(position - wall.origin);
-    shiftedPos=rotate(wall.quatAxisToZRot,shiftedPos);
+    vec3<Scalar> t = position;
+    t-=wall.origin;
+    vec3<Scalar> shiftedPos=rotate(wall.quatAxisToZRot,t);
     Scalar rxy2= shiftedPos.x*shiftedPos.x + shiftedPos.y*shiftedPos.y;
-    Scalar d = wall.r - fast::sqrt(rxy2);
+    Scalar d = wall.r - sqrt(rxy2);
     d = (wall.inside) ? d : -d;
     return d;
     };
 
 //! Distance of point to inside plane wall geometry, not really distance, +- based on if it's inside or not
-DEVICE inline Scalar distWall(const PlaneWall& wall, const Scalar3& position)
+DEVICE inline Scalar distWall(const PlaneWall& wall, const vec3<Scalar>& position)
     {
-    Scalar d = dot(wall.normal,position) - dot(wall.normal,wall.origin);
+    vec3<Scalar> t = position;
+    Scalar d = dot(wall.normal,t) - dot(wall.normal,wall.origin);
     d = (wall.inside) ? d : -d;
     return d;
     };
@@ -192,7 +196,7 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const Scalar3& position)
 //! Method for rescaling the plane wall properties iteratively
 // inline void rescaleWall()
 //Andres:Rescale Plane Walls
-inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar *A)
+inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar *A )
     {
     //Get the Column Vectors of the old and new box
     //Old Box
@@ -248,91 +252,57 @@ inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar 
     }
 
 //inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
-inline void rescaleWall( PlaneWall& wall,const BoxDim& old_box   ,const Scalar *transMatrix)
+inline void rescaleWall(PlaneWall& wall, const BoxDim& old_box, const Scalar *transMatrix )
     {
     //!Rescale Wall origin and center using transformation matrix
 
+
 		//rescale origin
+
+    
+
     wall.origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
     wall.origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
     wall.origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
 
-    // rotate normal vector
-
-    Scalar  min_prod=1.0;
-
-    unsigned int idx=0 ;
-
-    //Try to Create a orthogonal systems from normal to plane and two other vectors Vec1, Vec2 laying on plane
-    // use the lattice box lattice vectors
-    // we got the normal already so use and project box lattice vector closest to plane
-
-    //loop through all box lattice vectors
-    for (int i = 0 ; i < 3 ;i++)
-    {
-
-        //select vector and normalize it
-        Scalar3 vv = old_box.getLatticeVector(i);
-        Scalar invNormLength=fast::rsqrt(vv.x*vv.x + vv.y*vv.y + vv.z*vv.z);
-        vv = vv * invNormLength;
-
-        //dot product between box lattice vector and normal
-        Scalar dot_prod = vv.x * wall.normal.x  + vv.y * wall.normal.y + vv.z * wall.normal.z;
-
-        // get id of vector
-        if (dot_prod < min_prod)
-        {
-            min_prod = dot_prod;
-            idx=i;
-        }
-    }
-
-    //select candidate box lattice vector
-    Scalar3  vbox = old_box.getLatticeVector(idx);
-    Scalar3  Vec1;
 
 
-    Scalar vbox_proj_norm = vbox.x * wall.normal.x + vbox.y * wall.normal.y + vbox.z * wall.normal.z ;
+    //rescale normal 
+    // find transpose inverse of transMatrix
+
+    Scalar inv11 = transMatrix[4] * transMatrix[8] - transMatrix[5] * transMatrix[7];
+    Scalar inv12 = transMatrix[2] * transMatrix[7] - transMatrix[1] * transMatrix[8];
+    Scalar inv13 = transMatrix[1] * transMatrix[5] - transMatrix[2] * transMatrix[4];
+    Scalar inv21 = transMatrix[5] * transMatrix[6] - transMatrix[3] * transMatrix[8];
+    Scalar inv22 = transMatrix[0] * transMatrix[8] - transMatrix[2] * transMatrix[6];
+    Scalar inv23 = transMatrix[2] * transMatrix[3] - transMatrix[0] * transMatrix[5];
+    Scalar inv31 = transMatrix[3] * transMatrix[7] - transMatrix[4] * transMatrix[6];
+    Scalar inv32 = transMatrix[1] * transMatrix[6] - transMatrix[0] * transMatrix[7];
+    Scalar inv33 = transMatrix[0] * transMatrix[4] - transMatrix[1] * transMatrix[3];
+
+    Scalar detinv = transMatrix[0] * inv11 + transMatrix[1] * inv21 + transMatrix[2] * inv31;
+    inv11 /= detinv;
+    inv12 /= detinv;
+    inv13 /= detinv;
+    inv21 /= detinv;
+    inv22 /= detinv;
+    inv23 /= detinv;
+    inv31 /= detinv;
+    inv32 /= detinv;
+    inv33 /= detinv;
 
 
-    Vec1.x  =  vbox.x  - vbox_proj_norm * wall.normal.x;
-    Vec1.y  =  vbox.y  - vbox_proj_norm * wall.normal.y;
-    Vec1.z  =  vbox.z  - vbox_proj_norm * wall.normal.z;
-
-    Scalar invNormLength=fast::rsqrt(Vec1.x * Vec1.x + Vec1.y * Vec1.y + Vec1.z * Vec1.z);
-    Vec1 *= invNormLength;
+    wall.normal.x = wall.normal.x * inv11 + wall.normal.y * inv21 +wall.normal.z * inv31;
+    wall.normal.y = wall.normal.x * inv12 + wall.normal.y * inv22 +wall.normal.z * inv32;
+    wall.normal.z = wall.normal.x * inv13 + wall.normal.y * inv23 +wall.normal.z * inv33;
 
 
-    //create last vector from Vec1 and normal1
+    Scalar invNormLength=fast::rsqrt(wall.normal.x*wall.normal.x + wall.normal.y*wall.normal.y + wall.normal.z*wall.normal.z);
 
-    Scalar3 Vec2;
-    //cross product Vec1 x normal
-
-    Vec2.x  =  Vec1.y * wall.normal.z  - Vec1.z * wall.normal.y;
-    Vec2.y  = -Vec1.x * wall.normal.z  + Vec1.z * wall.normal.x;
-    Vec2.z  =  Vec1.x * wall.normal.y  - Vec1.y * wall.normal.x;
-    invNormLength=fast::rsqrt(Vec2.x * Vec2.x + Vec2.y * Vec2.y + Vec2.z * Vec2.z);
-    Vec2 *= invNormLength;
+    wall.normal=wall.normal*invNormLength;
 
 
-    //Rescale Vec1 and Vec2 with A
-    Vec1.x = Vec1.x * transMatrix[0] + Vec1.y * transMatrix[1] + Vec1.z * transMatrix[2];
-    Vec1.y = Vec1.x * transMatrix[3] + Vec1.y * transMatrix[4] + Vec1.z * transMatrix[5];
-    Vec1.z = Vec1.x * transMatrix[6] + Vec1.y * transMatrix[7] + Vec1.z * transMatrix[8];
-
-    Vec2.x = Vec2.x * transMatrix[0] + Vec2.y * transMatrix[1] + Vec2.z * transMatrix[2];
-    Vec2.y = Vec2.x * transMatrix[3] + Vec2.y * transMatrix[4] + Vec2.z * transMatrix[5];
-    Vec2.z = Vec2.x * transMatrix[6] + Vec2.y * transMatrix[7] + Vec2.z * transMatrix[8];
-
-
-    //get new normal vector
-    //cross product Vec2 x Vec1
-
-    wall.normal.x  =  Vec2.y * Vec1.z  - Vec2.z * Vec1.y;
-    wall.normal.y  = -Vec2.x * Vec1.z  + Vec2.z * Vec1.x;
-    wall.normal.z  =  Vec2.x * Vec1.y  - Vec2.y * Vec1.x;
-    invNormLength=fast::rsqrt(wall.normal.x * wall.normal.x + wall.normal.y * wall.normal.y + wall.normal.z * wall.normal.z);
-    wall.normal *= invNormLength;
     };
+
 
 #endif
