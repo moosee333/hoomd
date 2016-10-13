@@ -252,21 +252,25 @@ UP_TEST( plane_wall_math )
     MY_CHECK_CLOSE(vx.y, -0.02429658, tol);
     MY_CHECK_CLOSE(vx.z, -0.40494297, tol);
     MY_CHECK_CLOSE(dx, -0.4153380592, tol);
-    PlaneWall defPlane = PlaneWall(make_scalar3(4.6,-1.3,5.3),make_scalar3(1.0,0.0,0.0),true);
-    BoxDim  old_box = BoxDim(1.);
-    BoxDim  new_box = BoxDim(2.0,0.31,0.28,0.17);
-		Scalar A[9];
-		getTransMatrix(old_box,new_box,A);
-
-
+    
+    PlaneWall defPlane = PlaneWall(make_scalar3(0.0,0.0,0.0),make_scalar3(1.0,0.0,0.0),true);
+    BoxDim  old_box = BoxDim(1.0);
+    BoxDim  new_box = BoxDim(1.0,0.1,0.0,0.0);
+    Scalar A[9];
+    getTransMatrix(old_box,new_box,A);
     rescaleWall(defPlane, old_box,A);
-    MY_CHECK_CLOSE(defPlane.origin.x, 11.362, tol);
-    MY_CHECK_CLOSE(defPlane.origin.y, -0.798, tol);
-    MY_CHECK_CLOSE(defPlane.origin.z, 10.6, tol);
+    MY_CHECK_CLOSE(defPlane.origin.x, 0.0, tol);
+    MY_CHECK_CLOSE(defPlane.origin.y, 0.0, tol);
+    MY_CHECK_CLOSE(defPlane.origin.z, 0.0, tol);
     //test rotation of normal
-    MY_CHECK_CLOSE(defPlane.normal.x, 0.93341216, tol);
-    MY_CHECK_CLOSE(defPlane.normal.y, -0.28935777, tol);
-    MY_CHECK_CLOSE(defPlane.normal.z, -0.21216459, tol);
+   
+        
+    MY_CHECK_CLOSE(defPlane.normal.x, 0.9950371, tol);
+    MY_CHECK_CLOSE(defPlane.normal.y, -0.0995037, tol);
+    MY_CHECK_CLOSE(defPlane.normal.z, 0.0, tol);
+    
+
+    
     UP_ASSERT(inside==false);
 
     // test on surface
