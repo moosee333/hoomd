@@ -100,7 +100,7 @@ class EvaluatorWalls
             return true;
             }
 
-        DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box)
+        DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box  )
             {
 			//!Rescale and rotate geometries
 			//Transformation Matrix
@@ -111,7 +111,7 @@ class EvaluatorWalls
             //Rescale through wall planes
             for(unsigned int k = 0; k < field.numPlanes; k++)
                 {
-                rescaleWall(field.Planes[k],old_box, trans_matrix);
+                rescaleWall(field.Planes[k],old_box, trans_matrix );
                 }
             // TODO: NPT_walls add the rest of the geometries functions then complete the loops
             }

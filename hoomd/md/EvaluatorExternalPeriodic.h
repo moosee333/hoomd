@@ -92,6 +92,7 @@ class EvaluatorExternalPeriodic
 		DEVICE static bool needsFieldRescale(){return false;}
 
 		DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box){}
+    
 
         DEVICE static std::string printField(field_type& field)
             {
