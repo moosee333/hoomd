@@ -2,6 +2,37 @@
 
 [TOC]
 
+## v2.2.0
+
+*New features*
+* hpmc.integrate.sphere_union() takes new capacity parameter to optimize performance for different shape sizes
+
+Deprecated*
+
+* HPMC: hpmc.integrate.sphere_union() no longer needs the max_members parameter
+
+
+*Bug fixes*
+
+* hpmc.integrate.sphere_union() and hpmc.integrate.polyhedron() missed overlaps
+* fix alignment error when running implicit depletants on GPU with ntrial > 0
+
+*Other changes*
+* Optimized performance of HPMC sphere union overlap check
+
+## v2.1.1
+
+Released 2016/10/23
+
+*Bug fixes*
+
+* Fix `force.active` memory allocation bug
+* Quiet Python.h warnigns when building (python 2.7)
+* Allow multi-character particle types in HPMC (python 2.7)
+* Enable `dump.getar.writeJSON` in MPI
+* Allow the flow to change directions in `md.update.mueller_plathe_flow`
+* Fix critical bug in MPI communication when using HPMC integrators
+
 ## v2.1.0
 
 Released 2016/10/04

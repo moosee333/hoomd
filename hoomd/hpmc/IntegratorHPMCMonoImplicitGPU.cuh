@@ -96,6 +96,7 @@ struct hpmc_implicit_args_t
                 float *_d_depletant_lnb,
                 const Scalar *_d_d_min,
                 const Scalar *_d_d_max,
+                unsigned int _extra_bytes,
                 mgpu::ContextPtr _mgpu_context
                 )
                 : d_postype(_d_postype),
@@ -152,6 +153,7 @@ struct hpmc_implicit_args_t
                   d_depletant_lnb(_d_depletant_lnb),
                   d_d_min(_d_d_min),
                   d_d_max(_d_d_max),
+                  extra_bytes(_extra_bytes),
                   mgpu_context(_mgpu_context)
         {
         };
@@ -210,6 +212,7 @@ struct hpmc_implicit_args_t
     float *d_depletant_lnb;            //!< logarithm of configurational bias weight, per depletant
     const Scalar *d_d_min;             //!< Minimum insertion diameter for depletants (per type)
     const Scalar *d_d_max;             //!< Maximum insertion diameter for depletants (per type)
+    unsigned int extra_bytes;          //!< Extra shared memory bytes for all shape parameters
     mgpu::ContextPtr mgpu_context;    //!< ModernGPU context
     };
 
@@ -371,6 +374,14 @@ __global__ void gpu_hpmc_implicit_count_overlaps_kernel(Scalar4 *d_postype,
                 }
             }
         }
+
+    __syncthreads();
+
+    // initialize extra shared mem
+    char *s_extra = (char *)(s_check_overlaps + overlap_idx.getNumElements());
+
+    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+        s_params[cur_type].load_shared(s_extra, true);
 
     __syncthreads();
 
@@ -735,19 +746,19 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
     // load the per type pair parameters into shared memory
     extern __shared__ char s_data[];
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
-    unsigned int *s_check_overlaps = (unsigned int *)(s_params + num_types);
+
+    Scalar4 *s_orientation_group = (Scalar4*)(s_params + num_types);
+    Scalar3 *s_pos_group = (Scalar3*)(s_orientation_group + n_groups);
+    unsigned int *s_check_overlaps = (unsigned int *)(s_pos_group + n_groups);
+    unsigned int *s_queue_j =   (unsigned int*)(s_check_overlaps + overlap_idx.getNumElements());
+    unsigned int *s_overlap =   (unsigned int*)(s_queue_j + max_queue_size);
+    unsigned int *s_queue_gid = (unsigned int*)(s_overlap + n_groups);
 
     __shared__ unsigned int s_queue_size;
     __shared__ unsigned int s_still_searching;
 
     __shared__ unsigned int s_n_overlap_checks;
     __shared__ unsigned int s_n_overlap_errors;
-
-    Scalar4 *s_orientation_group = (Scalar4*)(s_check_overlaps + overlap_idx.getNumElements());
-    Scalar3 *s_pos_group = (Scalar3*)(s_orientation_group + n_groups);
-    unsigned int *s_queue_j =   (unsigned int*)(s_pos_group + n_groups);
-    unsigned int *s_overlap =   (unsigned int*)(s_queue_j + max_queue_size);
-    unsigned int *s_queue_gid = (unsigned int*)(s_overlap + n_groups);
 
     // copy over parameters one int per thread for fast loads
         {
@@ -779,6 +790,14 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
         s_n_overlap_checks = 0;
         s_n_overlap_errors = 0;
         }
+
+    __syncthreads();
+
+    // initialize extra shared mem
+    char *s_extra = (char *)(s_queue_gid + max_queue_size);
+
+    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+        s_params[cur_type].load_shared(s_extra, true);
 
     __syncthreads();
 
@@ -1133,7 +1152,7 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
         if (master && group == 0)
             s_still_searching = 0;
 
-        unsigned int tidx_1d = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
+        unsigned int tidx_1d = offset + group*group_size;
 
         // max_queue_size is always <= block size, so we just need an if here
         if (tidx_1d < min(s_queue_size, max_queue_size))
@@ -1396,7 +1415,15 @@ void gpu_hpmc_implicit_count_overlaps(const hpmc_implicit_args_t& args, const ty
 
     // setup the grid to run the kernel
     unsigned int block_size = min(args.block_size, (unsigned int)max_block_size);
-    unsigned int n_groups = block_size/ args.group_size / args.stride;
+    unsigned int stride = min(block_size, args.stride);
+    unsigned int group_size = args.group_size;
+
+    while (stride*group_size > block_size)
+         {
+         group_size /= 2; // use power-of-two block size because of warp shuffle
+         }
+
+    unsigned int n_groups = block_size/ (group_size * stride);
 
     static unsigned int n_active_cells = UINT_MAX;
 
@@ -1449,27 +1476,19 @@ void gpu_hpmc_implicit_count_overlaps(const hpmc_implicit_args_t& args, const ty
     unsigned int shared_bytes = args.num_types * (sizeof(typename Shape::param_type))
         + args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
-    // the new block size might not be a multiple of group size, decrease group size until it is
-    unsigned int group_size = args.group_size;
-
-    while ((block_size%(args.stride*group_size)) != 0)
-        {
-        // decrease block_size further until it is a multiple of group_size
-        // (because the kernel uses warp-shuffle instructions we cannot use non-power-of-two group sizes)
-        block_size--;
-        }
+    shared_bytes += args.extra_bytes;
 
     dim3 threads;
     if (Shape::isParallel())
         {
         // use three-dimensional thread-layout with blockDim.z < 64
-        threads = dim3(args.stride, group_size, n_groups);
+        threads = dim3(stride, group_size, n_groups);
         }
     else
         {
         threads = dim3(group_size, n_groups, 1);
         }
-    dim3 grid(args.n_active_cells*args.groups_per_cell/n_groups+1, 1, 1);
+    dim3 grid((args.n_active_cells*args.groups_per_cell)/n_groups+1, 1, 1);
 
     // hack to enable grids of more than 65k blocks
     if (sm < 30 && grid.x > 65535)
@@ -1570,23 +1589,25 @@ cudaError_t gpu_hpmc_implicit_accept_reject(const hpmc_implicit_args_t& args, co
             }
 
         unsigned int block_size = min(args.block_size, (unsigned int)max_block_size);
+        unsigned int stride = min(block_size, args.stride);
+
 
         // the new block size might not be a multiple of group size, decrease group size until it is
         unsigned int group_size = args.group_size;
 
-        while ((block_size%(args.stride*group_size)) != 0)
+        while ((block_size%(stride*group_size)) != 0)
             {
             // decrease block_size further until it is a multiple of group_size
             // (because the kernel uses warp-shuffle instructions we cannot use non-power-of-two group sizes)
             block_size--;
             }
         // setup the grid to run the kernel
-        unsigned int n_groups = block_size / group_size / args.stride;
+        unsigned int n_groups = block_size / group_size / stride;
 
         unsigned int shared_bytes = n_groups * (sizeof(unsigned int) + sizeof(Scalar4) + sizeof(Scalar3)) +
                                     block_size*sizeof(unsigned int)*2 +
                                     args.num_types * (sizeof(typename Shape::param_type)) +
-                                    args.overlap_idx.getNumElements() * sizeof(unsigned int);
+                                    args.overlap_idx.getNumElements() * sizeof(unsigned int) + args.extra_bytes;
 
         while (shared_bytes + attr.sharedSizeBytes >= args.devprop.sharedMemPerBlock)
             {
@@ -1595,16 +1616,16 @@ cudaError_t gpu_hpmc_implicit_accept_reject(const hpmc_implicit_args_t& args, co
             // the new block size might not be a multiple of group size, decrease group size until it is
             group_size = args.group_size;
 
-            while ((block_size%(args.stride*group_size)) != 0)
+            while ((block_size%(stride*group_size)) != 0)
                 {
                 block_size--;
                 }
 
-            n_groups = block_size / group_size / args.stride;
+            n_groups = block_size / group_size / stride;
             shared_bytes = n_groups * (sizeof(unsigned int) + sizeof(Scalar4) + sizeof(Scalar3)) +
                            block_size*sizeof(unsigned int)*2 +
                            args.num_types * (sizeof(typename Shape::param_type)) +
-                           args.overlap_idx.getNumElements() * sizeof(unsigned int);
+                           args.overlap_idx.getNumElements() * sizeof(unsigned int) + args.extra_bytes;
             }
 
         // reset counters
@@ -1617,7 +1638,7 @@ cudaError_t gpu_hpmc_implicit_accept_reject(const hpmc_implicit_args_t& args, co
         if (Shape::isParallel())
             {
             // use three-dimensional thread-layout with blockDim.z < 64
-            threads = dim3(args.stride, group_size, n_groups);
+            threads = dim3(stride, group_size, n_groups);
             }
         else
             {

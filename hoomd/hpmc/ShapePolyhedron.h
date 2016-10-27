@@ -141,7 +141,7 @@ struct ShapePolyhedron
         }
 
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
-    HOSTDEVICE static bool isParallel() { return false; }
+    HOSTDEVICE static bool isParallel() { return true; }
 
     quat<Scalar> orientation;    //!< Orientation of the polyhedron
 
@@ -1013,100 +1013,55 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
      * b) the center of mass of one polyhedron is contained in the other
      */
 
-    unsigned int cur_node_a = 0;
-    unsigned int cur_node_b = 0;
+    #ifdef NVCC
+    // Parallel tree traversal
+    unsigned int offset = threadIdx.x;
+    unsigned int stride = blockDim.x;
+    #else
+    unsigned int offset = 0;
+    unsigned int stride = 1;
+    #endif
 
-    unsigned int old_cur_node_a = UINT_MAX;
-    unsigned int old_cur_node_b = UINT_MAX;
-    hpmc::detail::OBB obb_a;
-    hpmc::detail::OBB obb_b;
+    const detail::GPUTree<detail::MAX_POLY3D_CAPACITY>& tree_a = a.tree;
+    const detail::GPUTree<detail::MAX_POLY3D_CAPACITY>& tree_b = b.tree;
 
-    unsigned int level_a = 0;
-    unsigned int level_b = 0;
-
-    while (cur_node_a < a.tree.getNumNodes() && cur_node_b < b.tree.getNumNodes())
+    if (tree_a.getNumLeaves() <= tree_b.getNumLeaves())
         {
-        if (old_cur_node_a != cur_node_a)
+        for (unsigned int cur_leaf_a = offset; cur_leaf_a < tree_a.getNumLeaves(); cur_leaf_a += stride)
             {
-            obb_a = a.tree.getOBB(cur_node_a);
-            level_a = a.tree.getLevel(cur_node_a);
-
+            unsigned int cur_node_a = tree_a.getLeafNode(cur_leaf_a);
+            hpmc::detail::OBB obb_a = tree_a.getOBB(cur_node_a);
             // rotate and translate a's obb into b's body frame
-            obb_a.affineTransform(conj(quat<OverlapReal>(b.orientation))*quat<OverlapReal>(a.orientation),
-                rotate(conj(quat<OverlapReal>(b.orientation)),-dr));
-            old_cur_node_a = cur_node_a;
-            }
-        if (old_cur_node_b != cur_node_b)
-            {
-            obb_b = b.tree.getOBB(cur_node_b);
-            level_b = b.tree.getLevel(cur_node_b);
-            old_cur_node_b = cur_node_b;
-            }
+            obb_a.affineTransform(conj(b.orientation)*a.orientation,
+                rotate(conj(b.orientation),-r_ab));
 
-        #ifdef DEBUG_OUTPUT
-        output_polys(a,b,conj(quat<OverlapReal>(b.orientation))*quat<OverlapReal>(a.orientation),
-            rotate(conj(quat<OverlapReal>(b.orientation)),-dr));
-        #endif
-
-        if (detail::overlap(obb_a, obb_b))
-            {
-            #ifdef DEBUG_OUTPUT
-            output_obb(obb_a, "ff0000ff");
-            output_obb(obb_b, "ff0000ff");
-
-            std::cout << "eof" << std::endl;
-            #endif
-
-            if (a.tree.isLeaf(cur_node_a) && b.tree.isLeaf(cur_node_b))
+            unsigned cur_node_b = 0;
+            while (cur_node_b < tree_b.getNumNodes())
                 {
-                if (test_narrow_phase_overlap(dr, a, b, cur_node_a, cur_node_b)) return true;
+                unsigned int query_node = cur_node_b;
+                if (tree_b.queryNode(obb_a, cur_node_b) && test_narrow_phase_overlap(r_ab, a, b, cur_node_a, query_node)) return true;
                 }
-            else
-                {
-                if (level_a < level_b)
-                    {
-                    if (a.tree.isLeaf(cur_node_a))
-                        {
-                        unsigned int end_node = cur_node_b;
-                        b.tree.advanceNode(end_node, true);
-                        if (test_subtree(dr, a, b, a.tree, b.tree, cur_node_a, cur_node_b, end_node)) return true;
-                        }
-                    else
-                        {
-                        // descend into a's tree
-                        cur_node_a = a.tree.getLeftChild(cur_node_a);
-                        continue;
-                        }
-                    }
-                else
-                    {
-                    if (b.tree.isLeaf(cur_node_b))
-                        {
-                        unsigned int end_node = cur_node_a;
-                        a.tree.advanceNode(end_node, true);
-                        if (test_subtree(-dr, b, a, b.tree, a.tree, cur_node_b, cur_node_a, end_node)) return true;
-                        }
-                    else
-                        {
-                        // descend into b's tree
-                        cur_node_b = b.tree.getLeftChild(cur_node_b);
-                        continue;
-                        }
-                    }
-                }
-            } // end if overlap
-        #ifdef DEBUG_OUTPUT
-        else
-            {
-            output_obb(obb_a, "ffff0000");
-            output_obb(obb_b, "ff00ff00");
-            std::cout << "eof" << std::endl;
             }
-        #endif
+        }
+    else
+        {
+        for (unsigned int cur_leaf_b = offset; cur_leaf_b < tree_b.getNumLeaves(); cur_leaf_b += stride)
+            {
+            unsigned int cur_node_b = tree_b.getLeafNode(cur_leaf_b);
+            hpmc::detail::OBB obb_b = tree_b.getOBB(cur_node_b);
 
-        // move up in tandem
-        detail::moveUp(a.tree, cur_node_a, b.tree, cur_node_b);
-        } // end while
+            // rotate and translate b's obb into a's body frame
+            obb_b.affineTransform(conj(a.orientation)*b.orientation,
+                rotate(conj(a.orientation),r_ab));
+
+            unsigned cur_node_a = 0;
+            while (cur_node_a < tree_a.getNumNodes())
+                {
+                unsigned int query_node = cur_node_a;
+                if (tree_a.queryNode(obb_b, cur_node_a) && test_narrow_phase_overlap(-r_ab, b, a, cur_node_b, query_node)) return true;
+                }
+            }
+        }
 
     // no intersecting edge, check if one polyhedron is contained in the other
 
@@ -1206,6 +1161,8 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
                 // fetch next face
                 nverts = s1.data.face_offs[jface + 1] - s1.data.face_offs[jface];
                 offs_b = s1.data.face_offs[jface];
+
+                if (nverts < 3) continue;
 
                 // Load vertex 0
                 vec3<OverlapReal> v_next_b;

@@ -61,7 +61,8 @@ struct hpmc_free_volume_args_t
                 unsigned int *_d_n_overlap_all,
                 const Scalar3 _ghost_width,
                 const unsigned int *_d_check_overlaps,
-                Index2D _overlap_idx
+                Index2D _overlap_idx,
+                unsigned int _extra_bytes
                 )
                 : n_sample(_n_sample),
                   type(_type),
@@ -89,7 +90,8 @@ struct hpmc_free_volume_args_t
                   d_n_overlap_all(_d_n_overlap_all),
                   ghost_width(_ghost_width),
                   d_check_overlaps(_d_check_overlaps),
-                  overlap_idx(_overlap_idx)
+                  overlap_idx(_overlap_idx),
+                  extra_bytes(_extra_bytes)
         {
         };
 
@@ -120,6 +122,7 @@ struct hpmc_free_volume_args_t
     const Scalar3 ghost_width;       //!< Width of ghost layer
     const unsigned int *d_check_overlaps;   //!< Interaction matrix
     Index2D overlap_idx;              //!< Interaction matrix indexer
+    unsigned int extra_bytes;          //!< Dynamically allocated shared memory for all shape types
     };
 
 template< class Shape >
@@ -229,8 +232,9 @@ __global__ void gpu_hpmc_free_volume_kernel(unsigned int n_sample,
     extern __shared__ char s_data[];
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     unsigned int *s_check_overlaps = (unsigned int *) (s_params + num_types);
-
     unsigned int ntyppairs = overlap_idx.getNumElements();
+    unsigned int *s_overlap = (unsigned int *)(&s_check_overlaps[ntyppairs]);
+
     // copy over parameters one int per thread for fast loads
         {
         unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
@@ -254,7 +258,14 @@ __global__ void gpu_hpmc_free_volume_kernel(unsigned int n_sample,
             }
         }
 
-    unsigned int *s_overlap = (unsigned int *)(&s_check_overlaps[ntyppairs]);
+    __syncthreads();
+
+    // initialize extra shared mem
+    char *s_extra = (char *)(s_overlap + n_groups);
+
+    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+        s_params[cur_type].load_shared(s_extra, true);
+
     __shared__ unsigned int s_n_overlap;
 
     if (master)
@@ -436,7 +447,7 @@ cudaError_t gpu_hpmc_free_volume(const hpmc_free_volume_args_t& args, const type
         }
 
     unsigned int shared_bytes = args.num_types * sizeof(typename Shape::param_type) + n_groups*sizeof(unsigned int)
-        + args.overlap_idx.getNumElements()*sizeof(unsigned int);
+        + args.overlap_idx.getNumElements()*sizeof(unsigned int) + args.extra_bytes;
 
     gpu_hpmc_free_volume_kernel<Shape><<<grid, threads, shared_bytes>>>(
                                                      args.n_sample,

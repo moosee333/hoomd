@@ -114,18 +114,20 @@ IntegratorHPMCMonoGPU< Shape >::IntegratorHPMCMonoGPU(std::shared_ptr<SystemDefi
         {
         for (unsigned int block_size =dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size +=dev_prop.warpSize)
             {
-            for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+            unsigned int s=1;
+            while (s <= (unsigned int)dev_prop.warpSize)
                 {
                 unsigned int stride = 1;
-                while (stride <= (unsigned int) dev_prop.maxThreadsDim[2] && (block_size % stride) == 0)
+                while (stride <= block_size)
                     {
                     // for parallel overlap checks, use 3d-layout where blockDim.z is limited
-                    if ((block_size % group_size) == 0)
-                        valid_params.push_back(block_size*1000000 + stride*100 + group_size);
+                    if (block_size % (s*stride) == 0 && block_size/(s*stride) <= (unsigned int) dev_prop.maxThreadsDim[2])
+                        valid_params.push_back(block_size*1000000 + stride*100 + s);
 
                     // increment stride in powers of two
-                    stride*=2;
+                    stride *= 2;
                     }
+                s++;
                 }
             }
         }
@@ -226,9 +228,22 @@ void IntegratorHPMCMonoGPU< Shape >::update(unsigned int timestep)
 
     ArrayHandle<hpmc_counters_t> d_counters(this->m_count_total, access_location::device, access_mode::readwrite);
 
-    // access the parameters and interaction matrix
-    const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = this->getParams();
+    unsigned int extra_bytes = 0;
+        {
+        ArrayHandle<typename Shape::param_type> h_params(this->m_params, access_location::host, access_mode::read);
 
+        // determine dynamically requested shared memory
+        char *ptr_begin = nullptr;
+        char *ptr =  ptr_begin;
+        for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
+            {
+            h_params.data[i].load_shared(ptr,false);
+            }
+        extra_bytes = ptr - ptr_begin;
+        }
+
+    // access the parameters and interaction matrix
+    ArrayHandle<typename Shape::param_type> d_params(this->m_params, access_location::device, access_mode::read);
     ArrayHandle<unsigned int> d_overlaps(this->m_overlaps, access_location::device, access_mode::read);
 
     // access the move sizes by type
@@ -259,9 +274,6 @@ void IntegratorHPMCMonoGPU< Shape >::update(unsigned int timestep)
         CHECK_CUDA_ERROR();
 
     this->m_tuner_excell_block_size->end();
-
-    // on the first iteration, shape parameters are updated
-    bool first = true;
 
     // loop over cell sets in a shuffled order
     this->m_cell_set_order.shuffle(timestep);
@@ -311,15 +323,13 @@ void IntegratorHPMCMonoGPU< Shape >::update(unsigned int timestep)
                                                                 this->m_hasOrientation,
                                                                 this->m_pdata->getMaxN(),
                                                                 this->m_exec_conf->dev_prop,
-                                                                first),
-                                            params.data());
+                                                                extra_bytes),
+                                            d_params.data);
 
             if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                 CHECK_CUDA_ERROR();
 
             this->m_tuner_update->end();
-
-            first = false;
             }
         }
 

@@ -391,8 +391,22 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
         ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::readwrite);
         ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::readwrite);
 
+        unsigned int extra_bytes = 0;
+            {
+            ArrayHandle<typename Shape::param_type> h_params(this->m_params, access_location::host, access_mode::read);
+
+            // determine dynamically requested shared memory
+            char *ptr_begin = nullptr;
+            char *ptr =  ptr_begin;
+            for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
+                {
+                h_params.data[i].load_shared(ptr,false);
+                }
+            extra_bytes = ptr - ptr_begin;
+            }
+
         // access the parameters and interaction matrix
-        const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = this->getParams();
+        ArrayHandle<typename Shape::param_type> d_params(this->m_params, access_location::device, access_mode::read);
         ArrayHandle<unsigned int> d_overlaps(this->m_overlaps, access_location::device, access_mode::read);
 
         // access the move sizes by type
@@ -454,9 +468,6 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
         unsigned int groups_per_cell = ((unsigned int) lambda_max)+1;
 
         unsigned int n_reinsert = 0;
-
-        // on first iteration, synchronize GPU execution stream and update shape parameters
-        bool first = true;
 
         for (unsigned int i = 0; i < this->m_nselect*particles_per_cell; i++)
             {
@@ -523,18 +534,16 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                         this->m_hasOrientation,
                         this->m_pdata->getMaxN(),
                         this->m_exec_conf->dev_prop,
-                        first,
+                        extra_bytes,
                         (lambda_max > 0.0) ? d_active_cell_ptl_idx.data : 0,
                         (lambda_max > 0.0) ? d_active_cell_accept.data : 0,
                         (lambda_max > 0.0) ? d_active_cell_move_type_translate.data : 0),
-                    params.data());
+                    d_params.data);
 
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
 
                 this->m_tuner_update->end();
-
-                first = false;
 
                 if (lambda_max > Scalar(0.0))
                     {
@@ -625,8 +634,9 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                                 0, 0, 0, 0, 0,
                                 d_d_min.data,
                                 d_d_max.data,
+                                extra_bytes,
                                 m_mgpu_context),
-                            params.data());
+                            d_params.data);
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                             CHECK_CUDA_ERROR();
@@ -720,8 +730,9 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                                 d_depletant_lnb.data,
                                 d_d_min.data,
                                 d_d_max.data,
+                                extra_bytes,
                                 m_mgpu_context),
-                            params.data());
+                            d_params.data);
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                             CHECK_CUDA_ERROR();
