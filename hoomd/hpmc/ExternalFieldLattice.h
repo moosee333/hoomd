@@ -285,7 +285,7 @@ class ExternalFieldLattice : public ExternalFieldMono<Shape>
             m_num_samples++;
             }
 
-        bool accept(const unsigned int& index, const vec3<Scalar>& position_old, const Shape& shape_old, const vec3<Scalar>& position_new, const Shape& shape_new, Saru& rng)
+        bool accept(const unsigned int& index, const unsigned int type_i, const vec3<Scalar>& position_old, const Shape& shape_old, const vec3<Scalar>& position_new, const Shape& shape_new, Saru& rng)
             {
             // calc boltzmann factor from springs
             Scalar boltz = boltzmann(index, position_old, shape_old, position_new, shape_new);

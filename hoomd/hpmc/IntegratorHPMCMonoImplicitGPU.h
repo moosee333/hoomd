@@ -13,6 +13,8 @@
 
 #include "hoomd/GPUVector.h"
 
+#include <cuda_runtime.h>
+
 /*! \file IntegratorHPMCMonoImplicitGPU.h
     \brief Defines the template class for HPMC with implicit generated depletant solvent on the GPU
     \note This header cannot be compiled by nvcc
@@ -117,6 +119,8 @@ class IntegratorHPMCMonoImplicitGPU : public IntegratorHPMCMonoImplicit<Shape>
         GPUVector<unsigned int> m_n_success_reverse;                //!< Successful reverse-insertions
         GPUVector<unsigned int> m_n_overlap_shape_reverse;          //!< Forward-insertions
         GPUVector<float> m_depletant_lnb;                           //!< Configurational bias weights
+
+        cudaStream_t m_stream;                                  //! GPU kernel stream
 
         //! Take one timestep forward
         virtual void update(unsigned int timestep);
@@ -254,8 +258,12 @@ IntegratorHPMCMonoImplicitGPU< Shape >::IntegratorHPMCMonoImplicitGPU(std::share
 
     m_poisson_dist_created.resize(this->m_pdata->getNTypes(), false);
 
+    // create a CUDA stream for kernel execution
+    cudaStreamCreate(&m_stream);
+    CHECK_CUDA_ERROR();
+
     // create at ModernGPU context
-    m_mgpu_context = mgpu::CreateCudaDeviceAttachStream(0);
+    m_mgpu_context = mgpu::CreateCudaDeviceAttachStream(m_stream);
     }
 
 //! Destructor
@@ -271,6 +279,9 @@ IntegratorHPMCMonoImplicitGPU< Shape >::~IntegratorHPMCMonoImplicitGPU()
             curandDestroyDistribution(h_poisson_dist.data[type]);
             }
         }
+
+    cudaStreamDestroy(m_stream);
+    CHECK_CUDA_ERROR();
     }
 
 template< class Shape >
@@ -391,22 +402,8 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
         ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::readwrite);
         ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::readwrite);
 
-        unsigned int extra_bytes = 0;
-            {
-            ArrayHandle<typename Shape::param_type> h_params(this->m_params, access_location::host, access_mode::read);
-
-            // determine dynamically requested shared memory
-            char *ptr_begin = nullptr;
-            char *ptr =  ptr_begin;
-            for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
-                {
-                h_params.data[i].load_shared(ptr,false);
-                }
-            extra_bytes = ptr - ptr_begin;
-            }
-
         // access the parameters and interaction matrix
-        ArrayHandle<typename Shape::param_type> d_params(this->m_params, access_location::device, access_mode::read);
+        const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = this->getParams();
         ArrayHandle<unsigned int> d_overlaps(this->m_overlaps, access_location::device, access_mode::read);
 
         // access the move sizes by type
@@ -468,6 +465,9 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
         unsigned int groups_per_cell = ((unsigned int) lambda_max)+1;
 
         unsigned int n_reinsert = 0;
+
+        // on first iteration, synchronize GPU execution stream and update shape parameters
+        bool first = true;
 
         for (unsigned int i = 0; i < this->m_nselect*particles_per_cell; i++)
             {
@@ -534,11 +534,12 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                         this->m_hasOrientation,
                         this->m_pdata->getMaxN(),
                         this->m_exec_conf->dev_prop,
-                        extra_bytes,
+                        first,
+                        m_stream,
                         (lambda_max > 0.0) ? d_active_cell_ptl_idx.data : 0,
                         (lambda_max > 0.0) ? d_active_cell_accept.data : 0,
                         (lambda_max > 0.0) ? d_active_cell_move_type_translate.data : 0),
-                    d_params.data);
+                    params.data());
 
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
@@ -634,9 +635,10 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                                 0, 0, 0, 0, 0,
                                 d_d_min.data,
                                 d_d_max.data,
-                                extra_bytes,
-                                m_mgpu_context),
-                            d_params.data);
+                                first,
+                                m_mgpu_context,
+                                m_stream),
+                            params.data());
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                             CHECK_CUDA_ERROR();
@@ -730,9 +732,10 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                                 d_depletant_lnb.data,
                                 d_d_min.data,
                                 d_d_max.data,
-                                extra_bytes,
-                                m_mgpu_context),
-                            d_params.data);
+                                first,
+                                m_mgpu_context,
+                                m_stream),
+                            params.data());
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                             CHECK_CUDA_ERROR();
@@ -745,6 +748,8 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
 
                     if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
                     }
+
+                first = false;
                 } // end loop over cell sets
             } // end loop nselect*particles_per_cell
 
@@ -897,6 +902,17 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::updateCellWidth()
     IntegratorHPMCMonoImplicit<Shape>::updateCellWidth();
 
     this->m_cl->setNominalWidth(this->m_nominal_width);
+
+    // attach the parameters to the kernel stream so that they are visible
+    // when other kernels are called
+    cudaStreamAttachMemAsync(m_stream, this->m_params.data(), 0, cudaMemAttachSingle);
+    CHECK_CUDA_ERROR();
+
+    for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
+        {
+        // attach nested memory regions
+        this->m_params[i].attach_to_stream(m_stream);
+        }
     }
 
 

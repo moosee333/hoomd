@@ -68,7 +68,7 @@ class ExternalFieldMono : public ExternalField
         virtual void computeGPU(unsigned int timestep) {}
 
         //! method to accept or reject the proposed move used by the integrator.
-        virtual bool accept(const unsigned int& index, const vec3<Scalar>& position_old, const Shape& shape_old, const vec3<Scalar>& position_new, const Shape& shape_new, Saru& rng){return 0;}
+        virtual bool accept(const unsigned int& index, const unsigned int type_i, const vec3<Scalar>& position_old, const Shape& shape_old, const vec3<Scalar>& position_new, const Shape& shape_new, Saru& rng){return 0;}
 
         //! method to calculate the boltzmann factor for the proposed move.
         virtual Scalar boltzmann(const unsigned int& index, const vec3<Scalar>& position_old, const Shape& shape_old, const vec3<Scalar>& position_new, const Shape& shape_new){return 0;}

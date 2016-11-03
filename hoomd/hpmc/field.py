@@ -937,7 +937,7 @@ class gibbs_sampler(_external):
         composite_field = hpmc.compute.external_field_composite(mc, fields=[walls, lattice])
 
     """
-    def __init__(self, mc, fugacities, composite = False):
+    def __init__(self, mc, seed, fugacities, composite = False):
         _external.__init__(self);
         cls = None;
         if not hoomd.context.exec_conf.isCUDAEnabled():
@@ -959,7 +959,7 @@ class gibbs_sampler(_external):
             densities.append(item[1])
 
         self.compute_name = "gibbs_sampler"
-        self.cpp_compute = cls(hoomd.context.current.system_definition, mc.cpp_integrator, indices, densities);
+        self.cpp_compute = cls(hoomd.context.current.system_definition, mc.cpp_integrator, indices, densities, seed);
         hoomd.context.current.system.addCompute(self.cpp_compute, self.compute_name)
         if not composite:
             mc.set_external(self);

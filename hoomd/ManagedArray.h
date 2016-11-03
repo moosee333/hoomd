@@ -4,7 +4,13 @@
 #pragma once
 
 #ifndef NVCC
+#include "managed_allocator.h"
+
 #include <algorithm>
+#endif
+
+#ifdef ENABLE_CUDA
+#include <cuda_runtime.h>
 #endif
 
 #include <memory>
@@ -107,6 +113,14 @@ class ManagedArray
             return data;
             }
 
+        #ifdef ENABLE_CUDA
+        //! Attach managed memory to CUDA stream
+        void attach_to_stream(cudaStream_t stream) const
+            {
+            if (managed && data) cudaStreamAttachMemAsync(stream, data, 0, cudaMemAttachSingle);
+            }
+        #endif
+
         HOSTDEVICE void load_shared(char *& ptr, bool load=true) const
             {
             // align to size of data type
@@ -145,46 +159,14 @@ class ManagedArray
         #ifndef NVCC
         void allocate()
             {
-            #ifdef ENABLE_CUDA
-            if (managed)
-                {
-                cudaError_t error = cudaMallocManaged(&data, N*sizeof(T), cudaMemAttachGlobal);
-                if (error != cudaSuccess)
-                    {
-                    std::cerr << cudaGetErrorString(error) << std::endl;
-                    throw std::runtime_error("managed_allocator: Error allocating managed memory");
-                    }
-                }
-            else
-            #endif
-                {
-                int retval = posix_memalign((void **) &data, 32, N*sizeof(T));
-                if (retval != 0)
-                    {
-                    throw std::runtime_error("Error allocating aligned memory");
-                    }
-                }
+            data = managed_allocator<T>::allocate(N, managed);
             }
 
         void deallocate()
             {
             if (N > 0)
                 {
-                #ifdef ENABLE_CUDA
-                if (managed)
-                    {
-                    cudaError_t error = cudaFree(data);
-                    if (error != cudaSuccess)
-                        {
-                        std::cerr << cudaGetErrorString(error) << std::endl;
-                        throw std::runtime_error("managed_allocator: Error freeing managed memory");
-                        }
-                    }
-                else
-                #endif
-                    {
-                    free(data);
-                    }
+                managed_allocator<T>::deallocate(data, N, managed);
                 }
             }
         #endif
