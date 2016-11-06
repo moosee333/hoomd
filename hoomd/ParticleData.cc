@@ -980,7 +980,7 @@ void ParticleData::initializeFromSnapshot(const SnapshotParticleData<Real>& snap
 template <class Real>
 std::map<unsigned int, unsigned int> ParticleData::takeSnapshot(SnapshotParticleData<Real> &snapshot)
     {
-    // a map to containt a particle tag-> snapshot idx lookup
+    // a map to contain a particle tag-> snapshot idx lookup
     std::map<unsigned int, unsigned int> index;
 
     m_exec_conf->msg->notice(4) << "ParticleData: taking snapshot" << std::endl;

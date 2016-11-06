@@ -9,8 +9,7 @@
 */
 
 #include "ExternalField.h"
-
-// May automatically convert list to scalar
+#include <hoomd/SnapshotSystemData.h>
 //NOTE: Check if we prefer to do this internally for some reason
 #include <hoomd/extern/pybind/include/pybind11/stl.h>
 #include <chrono>
@@ -18,12 +17,11 @@
 
 /*
 Oustanding issues;
-The checkoverlaps function requires some type information, but I'm not sure how to pass that in since it's entirely possible that I'll be passing in vec3 of positions that doesn't contain types
-NEed to be very careful everywhere as to whether I"m correctly passing references vs actual objects, or I'll get lots of compile errors
-//NOTE: Ask Jens whether my use of references in the checkGibbsOverlaps function signature is correct
-//NOTE: I'm not sure why it's necessary to always use this->m_pdata and this->m_exec_conf. Worth checking with Jens.
-//NOTE: Allow dumping out the information of how many particles of each type were actually inserted
-//NOTE: Need to add a way to visualize the particles
+//NOTE: I'm not sure why it's necessary to always use the "this" keyword in this->m_pdata and this->m_exec_conf since they should be part of this class. Worth checking with Jens.
+//NOTE: Still need to allow MPI decomposition
+//NOTE: The way I'm dealing with multiple GPUArray acquires is generally clean for thing like positions, but not for the overlaps matrix. The fact that I re-store that locally in the compute function each time is pretty hackish. Ideally I need to implement something in GPUArrays that allows release and reacquire, but that may just be a separate project, and then I can come back here after to fix it
+//NOTE: Is it worth defining a central method for checking overlaps and having my two functions call that? The main reason not to is that the underlying particle data positions are stored as vec<Scalar3>, whereas I store the Gibbs particles internally as vec3<Scalar>. In order to have a centralized, consistent interface, I would have to interconvert, which seems computationally inefficient and unnecessary
+//NOTE: The size of the AABB list is now just double the poisson parameter, which is a bit hackish and is really not the smartest solution, especially since with some (probably vanishingly small, but still finite) probability it could fail if we pull an unusually large value from the distribution. A smarter way would be to dynamically resize whenever the AABB list was in danger of getting too long.
  */
 namespace hpmc
 {
@@ -56,7 +54,27 @@ class GibbsSampler : public ExternalFieldMono<Shape>
          */
         bool accept(const unsigned int& index, const unsigned int type_i, const vec3<Scalar>& position_old, const Shape& shape_old, const vec3<Scalar>& position_new, const Shape& shape_new, Saru& rng)
             {
+                //printf("The boltzmann value is %f\n", boltzmann(index, type_i, position_old, shape_old, position_new, shape_new));
             return boltzmann(index, type_i, position_old, shape_old, position_new, shape_new) == 1;
+            }
+
+        // Unfortunately there's no clean way around having both of these functions because partial specialization is forbidden in C++ and we have to have specialized templates for pybind. I've encapsulated all of the actual logic into one helper function, though
+        /**
+         * Adds the Gibbs particles to a provides snapshot for visualization purposes. Used when python is in float mode
+         * @param snapshot A snapshot to add the particle data to
+         */
+        void appendSnapshot_float(std::shared_ptr< SnapshotSystemData<float> > snapshot)
+            {
+            this->appendSnapshot<float>(snapshot);
+            }
+
+        /**
+         * Adds the Gibbs particles to a provides snapshot for visualization purposes. Used when python is in double mode
+         * @param snapshot A snapshot to add the particle data to
+         */
+        void appendSnapshot_double(std::shared_ptr< SnapshotSystemData<double> > snapshot)
+            {
+            this->appendSnapshot<double>(snapshot);
             }
 
         /**
@@ -78,6 +96,15 @@ class GibbsSampler : public ExternalFieldMono<Shape>
         void compute(unsigned int timestep);
 
         /**
+         * How many particles of type i exist in the system
+         * @param type_i   The type of particle for which we want counts
+         */
+        unsigned int getCount(const unsigned int type_i)
+            {
+            return m_type_counts[std::find(m_type_indices.begin(), m_type_indices.end(), type_i) - m_type_indices.begin()];
+            }
+
+        /**
          * Change the densities of the particle types specified in type_indices to the new densities
          * @param type_indices   The types (the CPP indices) we want to change densities for
          * @param type_densities The corresponding new densities
@@ -85,7 +112,13 @@ class GibbsSampler : public ExternalFieldMono<Shape>
         void setParams(std::vector<unsigned int> type_indices, std::vector<Scalar> type_densities);
 
     protected:
-        //NOTE: For now we have two separate functions for checking overlaps depending on whether we're checking Gibbs particles or system particles. This is less hackish than the old way, but it's not the cleanest
+        /**
+         * Adds the Gibbs particles to a provides snapshot for visualization purposes. Used when python is in double mode
+         * @param snapshot A snapshot to add the particle data to
+         */
+        template<typename Real>
+        void appendSnapshot(std::shared_ptr< SnapshotSystemData<Real> > snapshot);
+
         /**
          * Determine whether or not a particle of typ_i at position_i with shape_i will overlap with any particles of the type corresponding to typ_index_j
          * @param  typ_i       The type of the particle being checked
@@ -118,7 +151,6 @@ class GibbsSampler : public ExternalFieldMono<Shape>
         void initializePoissonDistribution();
 
     private:
-        //NOTE: Do I need to include typename in all of these templates?
         std::vector<std::vector<vec3<Scalar> >, managed_allocator<std::vector<vec3<Scalar> > > > m_positions;
         std::vector<std::vector<quat<Scalar> >, managed_allocator<std::vector<quat<Scalar> > > > m_orientations;
         std::vector<detail::AABBTree, managed_allocator<detail::AABBTree> > m_aabb_trees;
@@ -126,7 +158,7 @@ class GibbsSampler : public ExternalFieldMono<Shape>
 
         std::shared_ptr<IntegratorHPMCMono<Shape> > m_mc;
         std::vector<unsigned int> m_type_indices;
-        std::vector<Scalar> m_type_densities; //NOTE: This is probably not the preferred type, I'll fix this in a second
+        std::vector<Scalar> m_type_densities;
         std::vector<unsigned int> m_type_samples; // The number of particles sampled
         std::vector<unsigned int> m_type_counts; // The number of particles actually placed
         unsigned int m_num_species; // The number of distinct species in the Gibbs Sampler
@@ -140,25 +172,6 @@ class GibbsSampler : public ExternalFieldMono<Shape>
 template<class Shape>
 GibbsSampler<Shape>::GibbsSampler(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<IntegratorHPMCMono<Shape> > mc, std::vector<unsigned int> type_indices, std::vector<Scalar> type_densities, unsigned int seed) : ExternalFieldMono<Shape>(sysdef), m_mc(mc), m_type_indices(type_indices), m_type_densities(type_densities), m_num_species(type_densities.size()), m_seed(seed)
     {
-    if (m_type_indices.size() != m_type_densities.size())
-        {
-        this->m_exec_conf->msg->error() << "You must provide desired quantities for every type you want included in the Gibbs Sampler" << std::endl;
-        }
-    // Using the Gibbs Sampler for a type that overlap checks itself makes no sense, so check that first
-    ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
-    const Index2D& indexer = m_mc->getOverlapIndexer();
-    unsigned int type_i, overlap_index;
-    for(unsigned int i = 0; i < m_num_species; i++)
-        {
-        type_i = m_type_indices[i];
-        overlap_index = indexer(type_i, type_i);
-        if (h_overlaps.data[overlap_index] != 0) // Assuming 0 means overlap checks are not occurring
-            {
-            //NOTE: Maybe we shouldn't make it an error if the overlap settings are off, that will allow things like what Jens was doing before. For now it's an error because I don't think we support it...
-            this->m_exec_conf->msg->error() << "A type was specified for the Gibbs Sampler, but the interaction matrix currently specifies that overlap checks should be performed between two particles of this type. This is likely an error" << std::endl; //NOTE: Would be useful to add in the actual type index to the warning
-            }
-        }
-
     // Have to ensure that the vector of configurations and the aabb trees are identically indexed
     //NOTE: Do these need to have managed allocators too?
     m_type_samples = std::vector<unsigned int>();
@@ -184,7 +197,6 @@ GibbsSampler<Shape>::GibbsSampler(std::shared_ptr<SystemDefinition> sysdef, std:
         m_orientations.push_back(std::vector<quat<Scalar> >());
         m_aabb_trees.push_back(detail::AABBTree());
 
-        //NOTE:For now I've just hacked it to have double the average level of space...could do better. This also happens in setParams
         int retval = posix_memalign((void**)&temp_aabb, 32, 2*m_type_samples[i]*sizeof(detail::AABB));
 
         if (retval != 0)
@@ -242,7 +254,6 @@ Scalar GibbsSampler<Shape>::boltzmann(const unsigned int& index, const unsigned 
 template<class Shape>
 void GibbsSampler<Shape>::compute(unsigned int timestep)
     {
-    //NOTE: We store a local copy of the overlaps matrix to avoid any issues with acquiring GPUArrays multiple times in accept (because it has already been acquired in the integrator). Long term we'll want a better solution to this, however
     m_overlaps = m_mc->getInteractionMatrix();
     const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
     for (unsigned int i = 0; i < m_num_species; i++)
@@ -284,7 +295,7 @@ void GibbsSampler<Shape>::setParams(std::vector<unsigned int> type_indices, std:
                     {
                     if (m_aabbs[j] != NULL)
                         {
-                        int retval = posix_memalign((void**)&temp_aabb, 32, 2*m_type_samples[j]*sizeof(detail::AABB));
+                        int retval = posix_memalign((void**)&temp_aabb, 32, 2*new_sample_size*sizeof(detail::AABB));
                         if (retval != 0)
                             {
                             this->m_exec_conf->msg->error() << "Error allocating aligned memory" << std::endl;
@@ -300,9 +311,75 @@ void GibbsSampler<Shape>::setParams(std::vector<unsigned int> type_indices, std:
                 m_type_samples[j] = new_sample_size;
                 this->initializePoissonDistribution();
                 }
-            }
-        }
+            } // End loop over included types
+        } // End loops over types whose params are getting set
     }
+
+/*
+template<class Shape>
+bool GibbsSampler<Shape>::checkOverlapsHelper(const detail::AABBTree& aabb_tree, const vec3<Scalar>& position_i, const Shape& shape_i, const vec3*)
+    {
+        // List of things I need:
+        // The aabb_tree, which is fully specified by the typ_index_j
+        // Position and shape of the particle I'm checking
+    detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
+
+    const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
+    bool overlap = false;
+    unsigned int err_count = 0;
+    // All image boxes (including the primary)
+    std::vector<vec3<Scalar> > image_list = this->m_mc->updateImageList();
+    const unsigned int n_images = image_list.size();
+    for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+        {
+        vec3<Scalar> pos_i_image = position_i + image_list[cur_image];
+        detail::AABB aabb = aabb_i_local;
+        aabb.translate(pos_i_image);
+
+        // stackless search
+        for (unsigned int cur_node_idx = 0; cur_node_idx < aabb_tree.getNumNodes(); cur_node_idx++)
+            {
+            if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                {
+                if (aabb_tree.isNodeLeaf(cur_node_idx))
+                    {
+                    for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                        {
+                        // read in its position and orientation
+                        unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                        // load the position and orientation of the j particle
+                        vec3<Scalar> position_j = m_positions[typ_index_j][j];
+                        quat<Scalar> orientation_j = m_orientations[typ_index_j][j];
+                        Shape shape_j(quat<Scalar>(orientation_j), params[m_type_indices[typ_index_j]]);
+
+                        // put particles in coordinate system of particle i
+                        vec3<Scalar> r_ij = position_j - pos_i_image;
+
+                        if (check_circumsphere_overlap(r_ij, shape_i, shape_j)
+                            && test_overlap(r_ij, shape_i, shape_j, err_count))
+                            {
+                            overlap = true;
+                            break;
+                            }
+                        }
+                    }
+                }
+            else
+                {
+
+                // skip ahead
+                cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                }
+
+            if (overlap){break;}
+            }  // end loop over AABB nodes
+
+        if (overlap){break;}
+        }
+        return overlap;
+    }
+    */
 
 template<class Shape>
 bool GibbsSampler<Shape>::checkGibbsOverlaps(unsigned int typ_i, const vec3<Scalar>& position_i, const Shape& shape_i, int typ_index_j)
@@ -310,7 +387,6 @@ bool GibbsSampler<Shape>::checkGibbsOverlaps(unsigned int typ_i, const vec3<Scal
     // Set up the aabb tree we're testing against
     const detail::AABBTree& aabb_tree = m_aabb_trees[typ_index_j];
 
-    //NOTE:It may be more efficient to pass the image list as an arg. I'm not sure how intelligent updateImageList is
     detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
 
     const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
@@ -376,7 +452,6 @@ bool GibbsSampler<Shape>::checkOverlaps(unsigned int typ_i, const vec3<Scalar>& 
     // Set up the aabb tree we're testing against
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
-    //NOTE:It may be more efficient to pass the image list as an arg. I'm not sure how intelligent updateImageList is
     detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
 
     const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
@@ -484,7 +559,7 @@ std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > GibbsSampler<
         {
         overlap = false;
         // select a random particle coordinate in the box
-        Saru rng_i(i, m_seed + this->m_exec_conf->getRank(), timestep);
+        Saru rng_i(i, m_seed + this->m_exec_conf->getRank() + type_index_i, timestep);
 
         Scalar xrand = rng_i.f();
         Scalar yrand = rng_i.f();
@@ -499,7 +574,7 @@ std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > GibbsSampler<
             shape_i.orientation = generateRandomOrientation(rng_i);
             }
 
-        // access particle data and system box
+        // Check whether we overlap with the actual system particles. This isn't necessary for accepting moves because those overlaps are checked by the integrator, but when we generate new configs we need to make sure the Gibbs particles don't overlap with system particles
         overlap = checkOverlaps(type_i, pos_i, shape_i);
 
         // If the main particles overlapped then no need to continue
@@ -537,10 +612,35 @@ std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > GibbsSampler<
     // Update the actual counts now
     m_type_counts[type_index_i] = positions_new.size();
 
-    // If there were overlaps at any point, return an empty configuration. Otherwise return the new configuration
-    //NOTE: This is a pretty hackish way to do this, but not sure what the preferred method would be
     std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > return_val(positions_new, orientations_new);
     return return_val;
+    }
+
+template<class Shape>
+template<class Real>
+void GibbsSampler<Shape>::appendSnapshot(std::shared_ptr< SnapshotSystemData<Real> > snapshot)
+//NOTE: I don't know why I have to explicitly include the SnapshotSystemData file again. It doesn't make sense to me since it's already included by ExternalField
+    {
+    unsigned int n_gibbs_particles = 0;
+    SnapshotParticleData<Real>& pdata = snapshot->particle_data;
+    unsigned int snap_id = pdata.size;
+    for(unsigned int i = 0; i < m_num_species; i++)
+        {
+        n_gibbs_particles += m_type_counts[i];
+        }
+    pdata.resize(pdata.size + n_gibbs_particles);
+
+    for(unsigned int i = 0; i < m_num_species; i++)
+        {
+        for(unsigned int j = 0; j < m_type_counts[i]; j++)
+            {
+            pdata.pos[snap_id] = m_positions[i][j];
+            pdata.orientation[snap_id] = m_orientations[i][j];
+            pdata.diameter[snap_id] = 1;
+            pdata.type[snap_id] = m_type_indices[i];
+            snap_id++;
+            }
+        }
     }
 
 template<class Shape>
@@ -562,10 +662,12 @@ template<class Shape> void export_GibbsSampler(pybind11::module& m, std::string 
     {
    pybind11::class_<GibbsSampler<Shape>, std::shared_ptr< GibbsSampler<Shape> > >(m, name.c_str(), pybind11::base< ExternalFieldMono<Shape> >())
     .def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<IntegratorHPMCMono<Shape> >, std::vector<unsigned int>, std::vector<Scalar>, unsigned int >())
-    .def("setParams", &GibbsSampler<Shape>::setParams)
+    .def("setParams", &GibbsSampler<Shape >::setParams)
+    .def("getCount", &GibbsSampler<Shape >::getCount)
+    .def("appendSnapshot_float", &GibbsSampler<Shape>::appendSnapshot_float)
+    .def("appendSnapshot_double", &GibbsSampler<Shape>::appendSnapshot_double)
     ;
     }
-
 }
 
 #endif // _GIBBS_SAMPLER_H

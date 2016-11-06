@@ -920,24 +920,24 @@ class gibbs_sampler(_external):
 
     Args:
         mc (:py:mod:`hoomd.hpmc.integrate`): MC integrator
-        densities (dict): Mapping between particle types (specified as strings) to include in the sampler and the desired number densities (floats) of each species
+        fugacities (dict): Mapping between particle types (specified as strings) to include in the sampler and the desired number densities (floats) of each species
         composite (bool): Set this to True when this field is part of a :py:class:`external_field_composite`.
+        allow_interaction (bool): Set this to True if you intend to include particles in the Gibbs Sampler that cannot overlap with themselves
 
     :py:class:`gibbs_sampler` adds an arbitrary number of implicit species and samples the joint distribution of their configurations
-
-    Once initialized, the compute provides a log quantities that other external
-    fields create. See those external fields to find the quantities.
 
     Examples::
     **NEEDS REWRITE**
 
         mc = hpmc.integrate.shape(...);
-        walls = hpmc.compute.walls(...)
-        lattice = hpmc.compute.lattice(...)
-        composite_field = hpmc.compute.external_field_composite(mc, fields=[walls, lattice])
+        mc.overlap_checks.set('A','A',False)
+        mc.overlap_checks.set('B','B',False)
+        seed = 10583934
+        fugacities = {'A':0.01, 'B':0.01}
+        gibbs = hpmc.field.gibbs_sampler(mc, seed, fugacities)
 
     """
-    def __init__(self, mc, seed, fugacities, composite = False):
+    def __init__(self, mc, seed, fugacities, composite = False, allow_interaction = False):
         _external.__init__(self);
         cls = None;
         if not hoomd.context.exec_conf.isCUDAEnabled():
@@ -954,7 +954,11 @@ class gibbs_sampler(_external):
         # The ordering is arbitrary as long as we associate the appropriate density with the index
         indices = []
         densities = []
+        self.gibbs_types = []
         for item in fugacities.items():
+            if mc.overlap_checks.get(item[0], item[0]) == True and not allow_interaction:
+                raise RuntimeError("You have included type {typename} in the Gibbs Sampler, but this particle type is currently not allowed to overlap with itself. If this is intentional, use the allow_interaction parameter in the constructor\n".format(typename = item[0]))
+            self.gibbs_types.append(item[0])
             indices.append(hoomd.context.current.system_definition.getParticleData().getTypeByName(item[0]))
             densities.append(item[1])
 
@@ -968,11 +972,9 @@ class gibbs_sampler(_external):
         R""" Set the fugacities for each species
 
         Args:
-            densities (dict): Mapping between particle types (specified as strings) to include in the sampler and the desired number densities (floats) of each species
+            fugacities (dict): Mapping between particle types (specified as strings) to include in the sampler and the desired number densities (floats) of each species
 
         Example::
-        **NEEDS REWRITE**
-
             mc = hpmc.integrate.sphere(seed=415236);
             lattice = hpmc.compute.lattice_field(mc=mc, position=fcc_lattice, k=1000.0);
             ks = np.linspace(1000, 0.01, 100);
@@ -986,6 +988,44 @@ class gibbs_sampler(_external):
         indices = []
         densities = []
         for item in fugacities.items():
-            indices.append(hoomd.context.current.system_definition.getParticleData().getTypebyName(item[0]))
+            if item[0] not in self.gibbs_types:
+                raise RuntimeError("Unexpected type provided to setParams!\n")
+            indices.append(hoomd.context.current.system_definition.getParticleData().getTypeByName(item[0]))
             densities.append(item[1])
         self.cpp_compute.setParams(indices, densities);
+
+    def get_counts(self, typenames):
+        R""" Get the number of particles of type `typename` in the system
+
+        Args:
+            typenames (str or list of str): A list of the types of particle for which to get counts, or just one type
+
+        Returns:
+            If typenames was a string, the number of particles of type typename in the system. If typenames was a list, a dictionary composed of typename->count elements
+        """
+        if isinstance(typenames, str):
+            return self.cpp_compute.getCount(hoomd.context.current.system_definition.getParticleData().getTypeByName(typenames))
+        else:
+            counts = {}
+            for typename in typenames:
+                counts[typename] = self.cpp_compute.getCount(hoomd.context.current.system_definition.getParticleData().getTypeByName(typename))
+            return counts
+
+    def append_to_snapshot(self, snapshot):
+        R""" Appends Gibbs particles to an existing snapshot
+        @TODO: Allow specification of which types of particles to add
+
+        Args:
+            snapshot (:py:mod:`hoomd.data` snapshot): The snapshot to which to add the particles
+
+        See Also:
+            :py:func:`hoomd.init.read_snapshot()`
+            :py:func:`hoomd.data.make_snapshot()`
+        """
+        if type(snapshot) == _hoomd.SnapshotSystemData_double:
+            self.cpp_compute.appendSnapshot_double(snapshot);
+        elif type(snapshot) == _hoomd.SnapshotSystemData_float:
+            self.cpp_compute.appendSnapshot_float(snapshot);
+        else:
+            raise ValueError("The input must be a snapshot object!");
+        return snapshot;
