@@ -227,9 +227,9 @@ IntegratorHPMCMonoImplicit< Shape >::IntegratorHPMCMonoImplicit(std::shared_ptr<
 
     m_lambda.resize(this->m_pdata->getNTypes(),FLT_MAX);
 
-    if (this->m_sysdef->getNDimensions() == 2)
+    if (this->m_sysdef->getNDimensions() == 3)
         {
-        throw std::runtime_error("2D runs not supported for this integrator.");
+        this->m_exec_conf->msg->warning() << "Simulation is 2d, but using 3d free volume in implicit depletant statistics." << std::endl;
         }
     }
 

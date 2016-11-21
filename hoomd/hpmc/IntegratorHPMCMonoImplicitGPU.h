@@ -295,11 +295,9 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
     BoxDim box = this->m_pdata->getBox();
     Scalar3 npd = box.getNearestPlaneDistance();
 
-    // Currently only 3D
-    if (this->m_sysdef->getNDimensions() != 3)
+    if (this->m_sysdef->getNDimensions() == 3)
         {
-        this->m_exec_conf->msg->error() << "At this time, implicit depletant simulations are supported in 3D only." << std::endl;
-        throw std::runtime_error("Error performing HPMC update");
+        this->m_exec_conf->msg->warning() << "Simulation is 2d, but using 3d free volume in implicit depletant statistics." << std::endl;
         }
 
     if ((box.getPeriodic().x && npd.x <= this->m_nominal_width*2) ||
