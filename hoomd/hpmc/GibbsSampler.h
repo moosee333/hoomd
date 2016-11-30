@@ -14,6 +14,7 @@
 #include <hoomd/extern/pybind/include/pybind11/stl.h>
 #include <chrono>
 #include <thread>
+#include <sstream>
 
 /*
 Oustanding issues;
@@ -54,7 +55,6 @@ class GibbsSampler : public ExternalFieldMono<Shape>
          */
         bool accept(const unsigned int& index, const unsigned int type_i, const vec3<Scalar>& position_old, const Shape& shape_old, const vec3<Scalar>& position_new, const Shape& shape_new, Saru& rng)
             {
-                //printf("The boltzmann value is %f\n", boltzmann(index, type_i, position_old, shape_old, position_new, shape_new));
             return boltzmann(index, type_i, position_old, shape_old, position_new, shape_new) == 1;
             }
 
@@ -110,6 +110,16 @@ class GibbsSampler : public ExternalFieldMono<Shape>
          * @param type_densities The corresponding new densities
          */
         void setParams(std::vector<unsigned int> type_indices, std::vector<Scalar> type_densities);
+
+        /**
+         * Get a list of logged quantities
+         */
+        virtual std::vector< std::string > getProvidedLogQuantities();
+
+        /**
+         * Get the value of a logged quantity
+         */
+        virtual Scalar getLogValue(const std::string& quantity, unsigned int timestep);
 
     protected:
         /**
@@ -254,6 +264,8 @@ Scalar GibbsSampler<Shape>::boltzmann(const unsigned int& index, const unsigned 
 template<class Shape>
 void GibbsSampler<Shape>::compute(unsigned int timestep)
     {
+    //NOTE:Why does this line require a this? Is the problem that we're now two levels removed in the class hierarchy, so it doesn't see shouldCompute without being told? Is that also why we needed the this for the exec conf and stuff?
+    if (!this->shouldCompute(timestep)) { return;}
     m_overlaps = m_mc->getInteractionMatrix();
     const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
     for (unsigned int i = 0; i < m_num_species; i++)
@@ -262,6 +274,8 @@ void GibbsSampler<Shape>::compute(unsigned int timestep)
         std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > new_configuration(generateRandomConfiguration(i, timestep));
         m_positions[i] = new_configuration.first;
         m_orientations[i] = new_configuration.second;
+        // Update the actual counts now
+        m_type_counts[i] = m_positions[i].size();
 
         // We have to reconstruct AABBs for each particle and save them so we can pass a full list of AABBs to the AABBTree construction
         for(unsigned int j = 0; j < m_positions[i].size(); j++)
@@ -315,72 +329,6 @@ void GibbsSampler<Shape>::setParams(std::vector<unsigned int> type_indices, std:
         } // End loops over types whose params are getting set
     }
 
-/*
-template<class Shape>
-bool GibbsSampler<Shape>::checkOverlapsHelper(const detail::AABBTree& aabb_tree, const vec3<Scalar>& position_i, const Shape& shape_i, const vec3*)
-    {
-        // List of things I need:
-        // The aabb_tree, which is fully specified by the typ_index_j
-        // Position and shape of the particle I'm checking
-    detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
-
-    const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
-    bool overlap = false;
-    unsigned int err_count = 0;
-    // All image boxes (including the primary)
-    std::vector<vec3<Scalar> > image_list = this->m_mc->updateImageList();
-    const unsigned int n_images = image_list.size();
-    for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
-        {
-        vec3<Scalar> pos_i_image = position_i + image_list[cur_image];
-        detail::AABB aabb = aabb_i_local;
-        aabb.translate(pos_i_image);
-
-        // stackless search
-        for (unsigned int cur_node_idx = 0; cur_node_idx < aabb_tree.getNumNodes(); cur_node_idx++)
-            {
-            if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
-                {
-                if (aabb_tree.isNodeLeaf(cur_node_idx))
-                    {
-                    for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
-                        {
-                        // read in its position and orientation
-                        unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                        // load the position and orientation of the j particle
-                        vec3<Scalar> position_j = m_positions[typ_index_j][j];
-                        quat<Scalar> orientation_j = m_orientations[typ_index_j][j];
-                        Shape shape_j(quat<Scalar>(orientation_j), params[m_type_indices[typ_index_j]]);
-
-                        // put particles in coordinate system of particle i
-                        vec3<Scalar> r_ij = position_j - pos_i_image;
-
-                        if (check_circumsphere_overlap(r_ij, shape_i, shape_j)
-                            && test_overlap(r_ij, shape_i, shape_j, err_count))
-                            {
-                            overlap = true;
-                            break;
-                            }
-                        }
-                    }
-                }
-            else
-                {
-
-                // skip ahead
-                cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
-                }
-
-            if (overlap){break;}
-            }  // end loop over AABB nodes
-
-        if (overlap){break;}
-        }
-        return overlap;
-    }
-    */
-
 template<class Shape>
 bool GibbsSampler<Shape>::checkGibbsOverlaps(unsigned int typ_i, const vec3<Scalar>& position_i, const Shape& shape_i, int typ_index_j)
     {
@@ -433,7 +381,6 @@ bool GibbsSampler<Shape>::checkGibbsOverlaps(unsigned int typ_i, const vec3<Scal
                 }
             else
                 {
-
                 // skip ahead
                 cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
                 }
@@ -505,7 +452,6 @@ bool GibbsSampler<Shape>::checkOverlaps(unsigned int typ_i, const vec3<Scalar>& 
                 }
             else
                 {
-
                 // skip ahead
                 cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
                 }
@@ -522,11 +468,6 @@ bool GibbsSampler<Shape>::checkOverlaps(unsigned int typ_i, const vec3<Scalar>& 
 template<class Shape>
 std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > GibbsSampler<Shape>::generateRandomConfiguration(unsigned int type_index_i, unsigned int timestep)
     {
-    //NOTE: Still have to account for the number of ranks for MPI
-    //#ifdef ENABLE_MPI
-    //num_particles /= m_mc.m_exec_conf->getNRanks();
-    //#endif
-
     // access parameters and interaction matrix
     const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
     const BoxDim& box = this->m_pdata->getBox();
@@ -555,6 +496,7 @@ std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > GibbsSampler<
     //unsigned int random_num_samples = m_type_samples[type_index_i];
 
     // This is looping over the number of particles to try to insert
+#pragma omp parallel for
     for (unsigned int i = 0; i < random_num_samples ; i++)
         {
         overlap = false;
@@ -604,13 +546,12 @@ std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > GibbsSampler<
             }
         else
             {
+#pragma omp critical
             positions_new.push_back(pos_i);
+#pragma omp critical
             orientations_new.push_back(shape_i.orientation);
             }
         } // end loop through all particles
-
-    // Update the actual counts now
-    m_type_counts[type_index_i] = positions_new.size();
 
     std::pair<std::vector<vec3<Scalar> >, std::vector<quat<Scalar> > > return_val(positions_new, orientations_new);
     return return_val;
@@ -644,13 +585,47 @@ void GibbsSampler<Shape>::appendSnapshot(std::shared_ptr< SnapshotSystemData<Rea
     }
 
 template<class Shape>
+std::vector< std::string > GibbsSampler<Shape>::getProvidedLogQuantities()
+    {
+    // start with the integrator provided quantities
+    std::vector< std::string > result = ExternalFieldMono<Shape>::getProvidedLogQuantities();
+    // then add ours
+    for (unsigned int i = 0; i < this->m_num_species; i++)
+      {
+      std::ostringstream tmp_str;
+      tmp_str<<"gibbs_count_"<<this->m_pdata->getNameByType(m_type_indices[i]);
+      result.push_back(tmp_str.str());
+      }
+    return result;
+    }
+
+template<class Shape>
+Scalar GibbsSampler<Shape>::getLogValue(const std::string& quantity, unsigned int timestep)
+    {
+    compute(timestep);
+    //loop over per particle move size quantities
+    for (unsigned int i = 0; i < this->m_num_species; i++)
+      {
+      std::ostringstream tmp_str;
+      tmp_str<<"gibbs_count_"<<this->m_pdata->getNameByType(m_type_indices[i]);
+
+      if (quantity == tmp_str.str())
+        {
+        return m_type_counts[i];
+        }
+      }
+    this->m_exec_conf->msg->error() << "field.gibbs_sampler: " << quantity << " is not a valid log quantity." << std::endl;
+    throw std::runtime_error("Error getting log value");
+    }
+
+template<class Shape>
 void GibbsSampler< Shape >::initializePoissonDistribution()
     {
     m_poisson.resize(this->m_num_species);
 
     for (unsigned int i = 0; i < this->m_num_species; i++)
         {
-        // parameter for Poisson distribution
+        // Make a new poisson distribution
         m_poisson[i] = std::poisson_distribution<unsigned int>(this->m_type_samples[i]);
         }
     }
