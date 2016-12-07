@@ -320,7 +320,8 @@ __global__ void gpu_hpmc_implicit_count_overlaps_kernel(Scalar4 *d_postype,
                                      const unsigned int groups_per_cell,
                                      const Scalar *d_d_min,
                                      const Scalar *d_d_max,
-                                     const typename Shape::param_type *d_params)
+                                     const typename Shape::param_type *d_params,
+                                     unsigned int max_extra_bytes)
     {
     // flags to tell what type of thread we are
     unsigned int group;
@@ -382,9 +383,10 @@ __global__ void gpu_hpmc_implicit_count_overlaps_kernel(Scalar4 *d_postype,
 
     // initialize extra shared mem
     char *s_extra = (char *)(s_check_overlaps + overlap_idx.getNumElements());
+    char *s_extra_begin = s_extra;
 
     for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
-        s_params[cur_type].load_shared(s_extra, true);
+        s_params[cur_type].load_shared(s_extra, true, s_extra_begin + max_extra_bytes);
 
     __syncthreads();
 
@@ -717,7 +719,8 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
                                      const Scalar *d_d_min,
                                      const Scalar *d_d_max,
                                      const typename Shape::param_type *d_params,
-                                     unsigned int max_queue_size)
+                                     unsigned int max_queue_size,
+                                     unsigned int max_extra_bytes)
     {
     // flags to tell what type of thread we are
     unsigned int group;
@@ -798,9 +801,10 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
 
     // initialize extra shared mem
     char *s_extra = (char *)(s_queue_gid + max_queue_size);
+    char *s_extra_begin = s_extra;
 
     for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
-        s_params[cur_type].load_shared(s_extra, true);
+        s_params[cur_type].load_shared(s_extra, true, s_extra_begin + max_extra_bytes);
 
     __syncthreads();
 
@@ -907,6 +911,11 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
     vec3<Scalar> pos_test;
     vec3<Scalar> r_ij;
     bool overlap_shape = false;
+
+    if (master)
+        {
+        s_overlap[group] = 0;
+        }
 
     if (active)
         {
@@ -1034,21 +1043,28 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
             overlap_shape_new = true;
             }
 
-        // we count a possible trial insertion as one that overlaps with either the
-        // old or the new colloid shape, but not with both
-        overlap_shape = ((forward && overlap_shape_old && !overlap_shape_new)
-            || (!forward && !overlap_shape_old && overlap_shape_new));
+        // we count a possible trial insertion as one that overlaps with the old shape or the new one,
+        // depending on which Rosenbluth weight we are computing
+        overlap_shape = ((forward && overlap_shape_old) || (!forward && overlap_shape_new));
+
+        if ((forward && overlap_shape_new) || (!forward && overlap_shape_old))
+            {
+            // shortcut, reject
+            if (master) s_overlap[group] = 1;
+            }
 
         // check if depletant overlaps with the old configuration
-        if (master && overlap_shape)
+        if (master && overlap_shape && !s_overlap[group])
             {
             overlap_checks += excell_size;
             }
         }
 
+    __syncthreads();
+
     // if the check for the updated particle fails, no need to check for overlaps with other particles
     bool trial_active = true;
-    if (!overlap_shape)
+    if (!overlap_shape || s_overlap[group])
         {
         trial_active = false;
         }
@@ -1058,10 +1074,6 @@ __global__ void gpu_hpmc_implicit_reinsert_kernel(Scalar4 *d_postype,
         // initialize queue
         s_queue_size = 0;
         s_still_searching = 1;
-        }
-    if (master)
-        {
-        s_overlap[group] = 0;
         }
     __syncthreads();
 
@@ -1408,9 +1420,9 @@ void gpu_hpmc_implicit_count_overlaps(const hpmc_implicit_args_t& args, const ty
     // determine the maximum block size and clamp the input block size down
     static int max_block_size = -1;
     static int sm = -1;
+    static cudaFuncAttributes attr;
     if (max_block_size == -1)
         {
-        cudaFuncAttributes attr;
         cudaFuncGetAttributes(&attr, gpu_hpmc_implicit_count_overlaps_kernel<Shape>);
         max_block_size = attr.maxThreadsPerBlock;
         sm = attr.binaryVersion;
@@ -1479,8 +1491,15 @@ void gpu_hpmc_implicit_count_overlaps(const hpmc_implicit_args_t& args, const ty
     unsigned int shared_bytes = args.num_types * (sizeof(typename Shape::param_type))
         + args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
+    static unsigned int base_shared_bytes = UINT_MAX;
+    bool shared_bytes_changed = base_shared_bytes != shared_bytes;
+    if (shared_bytes_changed != base_shared_bytes)
+        base_shared_bytes = shared_bytes + attr.sharedSizeBytes;
+
+    unsigned int max_extra_bytes = args.devprop.sharedMemPerBlock - base_shared_bytes;
+
     static unsigned int extra_bytes = UINT_MAX;
-    if (extra_bytes == UINT_MAX || args.update_shape_param)
+    if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
         {
         // required for memory coherency
         cudaDeviceSynchronize();
@@ -1490,7 +1509,7 @@ void gpu_hpmc_implicit_count_overlaps(const hpmc_implicit_args_t& args, const ty
         char *ptr =  ptr_begin;
         for (unsigned int i = 0; i < args.num_types; ++i)
             {
-            d_params[i].load_shared(ptr,false);
+            d_params[i].load_shared(ptr,false, ptr_begin + max_extra_bytes);
             }
         extra_bytes = ptr - ptr_begin;
         }
@@ -1556,7 +1575,8 @@ void gpu_hpmc_implicit_count_overlaps(const hpmc_implicit_args_t& args, const ty
                                                                  args.groups_per_cell,
                                                                  args.d_d_min,
                                                                  args.d_d_max,
-                                                                 d_params);
+                                                                 d_params,
+                                                                 max_extra_bytes);
 
     // advance per-cell RNG states
     cudaMemcpyAsync(args.d_state_cell, args.d_state_cell_new, sizeof(curandState_t)*args.n_active_cells, cudaMemcpyDeviceToDevice, args.stream);
@@ -1623,26 +1643,10 @@ cudaError_t gpu_hpmc_implicit_accept_reject(const hpmc_implicit_args_t& args, co
         // setup the grid to run the kernel
         unsigned int n_groups = block_size / group_size / stride;
 
-        static unsigned int extra_bytes = UINT_MAX;
-        if (extra_bytes == UINT_MAX || args.update_shape_param)
-            {
-            // required for memory coherency
-            cudaDeviceSynchronize();
-
-            // determine dynamically requested shared memory
-            char *ptr_begin = nullptr;
-            char *ptr =  ptr_begin;
-            for (unsigned int i = 0; i < args.num_types; ++i)
-                {
-                d_params[i].load_shared(ptr,false);
-                }
-            extra_bytes = ptr - ptr_begin;
-            }
-
         unsigned int shared_bytes = n_groups * (sizeof(unsigned int) + sizeof(Scalar4) + sizeof(Scalar3)) +
                                     block_size*sizeof(unsigned int)*2 +
                                     args.num_types * (sizeof(typename Shape::param_type)) +
-                                    args.overlap_idx.getNumElements() * sizeof(unsigned int) + extra_bytes;
+                                    args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
         while (shared_bytes + attr.sharedSizeBytes >= args.devprop.sharedMemPerBlock)
             {
@@ -1660,8 +1664,33 @@ cudaError_t gpu_hpmc_implicit_accept_reject(const hpmc_implicit_args_t& args, co
             shared_bytes = n_groups * (sizeof(unsigned int) + sizeof(Scalar4) + sizeof(Scalar3)) +
                            block_size*sizeof(unsigned int)*2 +
                            args.num_types * (sizeof(typename Shape::param_type)) +
-                           args.overlap_idx.getNumElements() * sizeof(unsigned int) + extra_bytes;
+                           args.overlap_idx.getNumElements() * sizeof(unsigned int);
             }
+
+        static unsigned int base_shared_bytes = UINT_MAX;
+        bool shared_bytes_changed = base_shared_bytes != shared_bytes;
+        if (shared_bytes_changed != base_shared_bytes)
+            base_shared_bytes = shared_bytes + attr.sharedSizeBytes;
+
+        unsigned int max_extra_bytes = args.devprop.sharedMemPerBlock - base_shared_bytes;
+
+        static unsigned int extra_bytes = UINT_MAX;
+        if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
+            {
+            // required for memory coherency
+            cudaDeviceSynchronize();
+
+            // determine dynamically requested shared memory
+            char *ptr_begin = nullptr;
+            char *ptr =  ptr_begin;
+            for (unsigned int i = 0; i < args.num_types; ++i)
+                {
+                d_params[i].load_shared(ptr,false, ptr_begin + max_extra_bytes);
+                }
+            extra_bytes = ptr - ptr_begin;
+            }
+
+        shared_bytes += extra_bytes;
 
         // reset counters
         cudaMemsetAsync(args.d_n_success_forward,0, sizeof(unsigned int)*args.n_overlaps, args.stream);
@@ -1728,7 +1757,8 @@ cudaError_t gpu_hpmc_implicit_accept_reject(const hpmc_implicit_args_t& args, co
                                                                      args.d_d_min,
                                                                      args.d_d_max,
                                                                      d_params,
-                                                                     block_size);
+                                                                     block_size,
+                                                                     max_extra_bytes);
 
         block_size = 256;
 

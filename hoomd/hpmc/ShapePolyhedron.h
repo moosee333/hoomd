@@ -41,18 +41,17 @@ namespace detail
 
 //! maximum number of faces that can be stored
 /*! \ingroup hpmc_data_structs */
-const unsigned int MAX_POLY3D_FACES=128;
+const unsigned int MAX_POLY3D_FACES=25000;
 
 //! maximum number of vertices per face
 /*! \ingroup hpmc_data_structs */
 const unsigned int MAX_POLY3D_FACE_VERTS=4;
-const unsigned int MAX_POLY3D_VERTS = 128;
 
 //! Maximum number of OBB Tree nodes
-const unsigned int MAX_POLY3D_NODES=64;
+const unsigned int MAX_POLY3D_NODES=5000;
 
 //! Maximum number of faces per OBB tree leaf node
-const unsigned int MAX_POLY3D_CAPACITY=4;
+const unsigned int MAX_POLY3D_CAPACITY=2;
 
 //! Data structure for general polytopes
 /*! \ingroup hpmc_data_structs */
@@ -61,12 +60,44 @@ struct poly3d_data : param_base
     {
     poly3d_data() : n_faces(0), ignore(0) {};
 
-    poly3d_verts<MAX_POLY3D_VERTS> verts;                             //!< Holds parameters of convex hull
-    unsigned int face_offs[MAX_POLY3D_FACES+1];     //!< Offset of every face in the list of vertices per face
-    unsigned int face_verts[MAX_POLY3D_FACE_VERTS*MAX_POLY3D_FACES]; //!< Ordered vertex IDs of every face
+    #ifndef NVCC
+    //! Constructor
+    poly3d_data(unsigned int nverts, unsigned int _n_faces, unsigned int _n_face_verts, bool _managed)
+        : n_faces(_n_faces)
+        {
+        verts = poly3d_verts(nverts, _managed);
+        face_offs = ManagedArray<unsigned int>(n_faces+1,_managed);
+        face_verts = ManagedArray<unsigned int>(_n_face_verts, _managed);
+        }
+    #endif
+
+    poly3d_verts verts;                             //!< Holds parameters of convex hull
+    ManagedArray<unsigned int> face_offs;           //!< Offset of every face in the list of vertices per face
+    ManagedArray<unsigned int> face_verts;          //!< Ordered vertex IDs of every face
     unsigned int n_faces;                           //!< Number of faces
     unsigned int ignore;                            //!< Bitwise ignore flag for stats, overlaps. 1 will ignore, 0 will not ignore
-                                                    //   First bit is ignore overlaps, Second bit is ignore statistics
+
+     //! Load dynamic data members into shared memory and increase pointer
+    /*! \param ptr Pointer to load data to (will be incremented)
+        \param load If true, copy data to pointer, otherwise increment only
+        \param ptr_max Maximum address in shared memory
+     */
+    HOSTDEVICE void load_shared(char *& ptr, bool load, char *ptr_max) const
+        {
+        verts.load_shared(ptr, load, ptr_max);
+        face_offs.load_shared(ptr, load, ptr_max);
+        face_verts.load_shared(ptr, load, ptr_max);
+        }
+
+    #ifdef ENABLE_CUDA
+    //! Attach managed memory to CUDA stream
+    void attach_to_stream(cudaStream_t stream) const
+        {
+        verts.attach_to_stream(stream);
+        face_offs.attach_to_stream(stream);
+        face_verts.attach_to_stream(stream);
+        }
+    #endif
     } __attribute__((aligned(32)));
 
 }; // end namespace detail
@@ -104,10 +135,13 @@ struct ShapePolyhedron
         //! Load dynamic data members into shared memory and increase pointer
         /*! \param ptr Pointer to load data to (will be incremented)
             \param load If true, copy data to pointer, otherwise increment only
+            \param ptr_max Maximum address in shared memory
+
          */
-        HOSTDEVICE void load_shared(char *& ptr, bool load=true) const
+        HOSTDEVICE void load_shared(char *& ptr, bool load, char *ptr_max) const
             {
-            tree.load_shared(ptr, load);
+            tree.load_shared(ptr, load, ptr_max);
+            data.load_shared(ptr, load, ptr_max);
             }
 
         #ifdef ENABLE_CUDA
@@ -116,6 +150,7 @@ struct ShapePolyhedron
             {
             // attach managed memory arrays to stream
             tree.attach_to_stream(stream);
+            data.attach_to_stream(stream);
             }
         #endif
         }
@@ -561,11 +596,12 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> r_ab,
                                               const ShapePolyhedron& a,
                                               const ShapePolyhedron& b,
                                               unsigned int cur_node_a,
-                                              unsigned int cur_node_b)
+                                              unsigned int cur_node_b,
+                                              unsigned int &err)
     {
     // An absolute tolerance.
     // Possible improvement: make this adaptive as a function of ratios of occuring length scales
-    const OverlapReal abs_tol(1e-7);
+    const OverlapReal abs_tol(1e-16);
 
     // loop through faces of cur_node_a
     unsigned int na = a.tree.getNumParticles(cur_node_a);
@@ -594,7 +630,7 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> r_ab,
             unsigned int nverts_s0 = nverts_a;
             unsigned int nverts_s1 = nverts_b;
 
-            if (nverts_a > 1 && nverts_b > 1)
+            if (nverts_a > 2 && nverts_b > 2)
                 {
                 // check collision between polygons
                 unsigned int offs_s0 = offs_a;
@@ -637,20 +673,25 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> r_ab,
                     v_next_a = rotate(q,v_next_a) + dr;
 
                     bool collinear = false;
-                    unsigned int face_idx_aux_a = face_idx_next;
-                    vec3<OverlapReal> v_aux_a;
+                    unsigned int face_idx_aux_a = face_idx_next + 1;
+                    vec3<OverlapReal> v_aux_a,c;
                     do
                         {
-                        face_idx_aux_a++;
                         face_idx_aux_a = (face_idx_aux_a == nverts_s0) ? 0 : face_idx_aux_a;
                         unsigned int idx_aux_a = s0.data.face_verts[offs_s0 + face_idx_aux_a];
                         v_aux_a.x = s0.data.verts.x[idx_aux_a];
                         v_aux_a.y = s0.data.verts.y[idx_aux_a];
                         v_aux_a.z = s0.data.verts.z[idx_aux_a];
                         v_aux_a = rotate(q,v_aux_a) + dr;
-                        vec3<OverlapReal> c = cross(v_next_a - v_a, v_aux_a - v_a);
+                        c = cross(v_next_a - v_a, v_aux_a - v_a);
                         collinear = CHECK_ZERO(dot(c,c),abs_tol);
-                        } while(collinear);
+                        } while(collinear && ++face_idx_aux_a < nverts_s0);
+
+                    if (collinear)
+                        {
+                        err++;
+                        return true;
+                        }
 
                     bool overlap = false;
 
@@ -1013,13 +1054,13 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
     // test overlap of convex hulls
     if (a.isSpheroPolyhedron() || b.isSpheroPolyhedron())
         {
-        if (!test_overlap(r_ab, ShapeSpheropolyhedron<detail::MAX_POLY3D_VERTS>(a.orientation,a.data.verts),
-               ShapeSpheropolyhedron<detail::MAX_POLY3D_VERTS>(b.orientation,b.data.verts),err)) return false;
+        if (!test_overlap(r_ab, ShapeSpheropolyhedron(a.orientation,a.data.verts),
+               ShapeSpheropolyhedron(b.orientation,b.data.verts),err)) return false;
         }
     else
         {
-        if (!test_overlap(r_ab, ShapeConvexPolyhedron<detail::MAX_POLY3D_VERTS>(a.orientation,a.data.verts),
-           ShapeConvexPolyhedron<detail::MAX_POLY3D_VERTS>(b.orientation,b.data.verts),err)) return false;
+        if (!test_overlap(r_ab, ShapeConvexPolyhedron(a.orientation,a.data.verts),
+           ShapeConvexPolyhedron(b.orientation,b.data.verts),err)) return false;
         }
 
     vec3<OverlapReal> dr = r_ab;
@@ -1059,7 +1100,7 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
             while (cur_node_b < tree_b.getNumNodes())
                 {
                 unsigned int query_node = cur_node_b;
-                if (tree_b.queryNode(obb_a, cur_node_b) && test_narrow_phase_overlap(r_ab, a, b, cur_node_a, query_node)) return true;
+                if (tree_b.queryNode(obb_a, cur_node_b) && test_narrow_phase_overlap(r_ab, a, b, cur_node_a, query_node, err)) return true;
                 }
             }
         }
@@ -1078,7 +1119,7 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
             while (cur_node_a < tree_a.getNumNodes())
                 {
                 unsigned int query_node = cur_node_a;
-                if (tree_a.queryNode(obb_b, cur_node_a) && test_narrow_phase_overlap(-r_ab, b, a, cur_node_b, query_node)) return true;
+                if (tree_a.queryNode(obb_b, cur_node_a) && test_narrow_phase_overlap(-r_ab, b, a, cur_node_b, query_node, err)) return true;
                 }
             }
         }
