@@ -2,6 +2,35 @@
 
 [TOC]
 
+## v2.1.2
+
+Not yet released
+
+*Bug fixes*
+
+* (HPMC) Implicit depletants with spheres and faceted spheres now produces correct ensembles
+* (HPMC) Implicit depletants with ntrial > 0 now produces correct ensembles
+* (HPMC) NPT ensemble in HPMC (`hpmc.update.boxmc`) now produces correct ensembles
+* Fix a bug where multiple nvt/npt integrators caused warnings from analyze.log.
+
+* Other changes *
+
+* Drop support for compute 2.0 GPU devices
+* Support cusolver with CUDA 8.0
+
+## v2.1.1
+
+Released 2016/10/23
+
+*Bug fixes*
+
+* Fix `force.active` memory allocation bug
+* Quiet Python.h warnigns when building (python 2.7)
+* Allow multi-character particle types in HPMC (python 2.7)
+* Enable `dump.getar.writeJSON` in MPI
+* Allow the flow to change directions in `md.update.mueller_plathe_flow`
+* Fix critical bug in MPI communication when using HPMC integrators
+
 ## v2.1.0
 
 Released 2016/10/04
