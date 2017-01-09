@@ -108,11 +108,31 @@ class EvaluatorWalls
             //Calculate Transformation Matrix
             getTransMatrix(old_box, new_box, trans_matrix);
 
+
+
             //Rescale through wall planes
-            for(unsigned int k = 0; k < field.numPlanes; k++)
+            if (field.numPlanes > 0)
                 {
-                rescaleWall(field.Planes[k],old_box, trans_matrix );
+                Scalar tranf_inv_trans[9];
+                getInvMatrix(trans_matrix, tranf_inv_trans);
+                for(unsigned int k = 0; k < field.numPlanes; k++)
+                    {
+                    rescaleWall(field.Planes[k], trans_matrix, tranf_inv_trans);
+                    }
                 }
+
+            //Rescale through wall spheres
+            for(unsigned int k = 0; k < field.numSpheres; k++)
+                {
+                rescaleWall(field.Spheres[k], trans_matrix);
+                }
+
+            //Rescale through wall cylinders
+            for(unsigned int k = 0; k < field.numCylinders; k++)
+                {
+                rescaleWall(field.Cylinders[k], trans_matrix);
+                }
+
             // TODO: NPT_walls add the rest of the geometries functions then complete the loops
             }
 

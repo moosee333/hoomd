@@ -168,7 +168,7 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
 
     ArrayHandle<param_type> h_params(m_params, access_location::host, access_mode::read);
 
-    //rescale Wall Geometries if needed
+    //rescale external parameters if needed for box changes
     const BoxDim& box = m_pdata->getGlobalBox();
     if(evaluator::needsFieldRescale() and m_rescale)
         {

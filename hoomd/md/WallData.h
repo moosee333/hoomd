@@ -190,7 +190,6 @@ DEVICE inline Scalar distWall(const PlaneWall& wall, const Scalar3& position)
     };
 
 //! Method for rescaling the plane wall properties iteratively
-// inline void rescaleWall()
 //Andres:Rescale Plane Walls
 inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar *A )
     {
@@ -247,56 +246,118 @@ inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar 
     A[8] = a_new.z*inv13 + b_new.z*inv23 + c_new.z*inv33;
     }
 
-//inline void rescaleWall( PlaneWall& wall, const BoxDim& old_box,const BoxDim& new_box)
-
-inline void rescaleWall(PlaneWall& wall, const BoxDim& old_box, const Scalar *transMatrix )
+// find inverse of Matrix
+inline void getInvMatrix(Scalar *A, Scalar *B)
     {
-    //!Rescale Wall origin and center using transformation matrix
+    B[0] = A[4] * A[8] - A[5] * A[7];
+    B[1] = A[2] * A[7] - A[1] * A[8];
+    B[2] = A[1] * A[5] - A[2] * A[4];
+    B[3] = A[5] * A[6] - A[3] * A[8];
+    B[4] = A[0] * A[8] - A[2] * A[6];
+    B[5] = A[2] * A[3] - A[0] * A[5];
+    B[6] = A[3] * A[7] - A[4] * A[6];
+    B[7] = A[1] * A[6] - A[0] * A[7];
+    B[8] = A[0] * A[4] - A[1] * A[3];
 
+    Scalar detinv = A[0] * B[0] + A[1] * B[3] + A[2] * B[6];
+    B[0] /= detinv;
+    B[1] /= detinv;
+    B[2] /= detinv;
+    B[3] /= detinv;
+    B[4] /= detinv;
+    B[5] /= detinv;
+    B[6] /= detinv;
+    B[7] /= detinv;
+    B[8] /= detinv;
+    }
 
-		//rescale origin
+//!Rescale a Plane Wall using transformation matrix and transpose inverse of the transformation matrix
+inline void rescaleWall(PlaneWall& wall, const Scalar *transMatrix, const Scalar *invTransMatrix)
+    {
+	//rescale origin
+    Scalar3 new_origin;
+    new_origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
+    new_origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
+    new_origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
+    wall.origin = new_origin;
 
-    
+    //rescale normal using the inverse transpose of the transMatrix
+    Scalar3 new_normal;
+    new_normal.x = wall.normal.x * invTransMatrix[0] + wall.normal.y * invTransMatrix[3] +wall.normal.z * invTransMatrix[6];
+    new_normal.y = wall.normal.x * invTransMatrix[1] + wall.normal.y * invTransMatrix[4] +wall.normal.z * invTransMatrix[7];
+    new_normal.z = wall.normal.x * invTransMatrix[2] + wall.normal.y * invTransMatrix[5] +wall.normal.z * invTransMatrix[8];
+    Scalar invNormLength = fast::rsqrt(new_normal.x*new_normal.x + new_normal.y*new_normal.y + new_normal.z*new_normal.z);
+    wall.normal = new_normal*invNormLength;
+    };
 
-    wall.origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
-    wall.origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
-    wall.origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
+//!Rescale a Spherical Wall using transformation matrix
+inline void rescaleWall(SphereWall& wall, const Scalar *transMatrix)
+    {
+    //TODO: NPT_walls, consider if any of this would work with a 2D system
+    Scalar k = (transMatrix[0] + transMatrix[4] + transMatrix[8])/3.0;
 
+	//rescale origin
+    wall.origin.x *= k;
+    wall.origin.y *= k;
+    wall.origin.z *= k;
 
-    //rescale normal 
-    // find transpose inverse of transMatrix
+    //rescale r
+    wall.r *= k;
+    };
 
-    Scalar inv11 = transMatrix[4] * transMatrix[8] - transMatrix[5] * transMatrix[7];
-    Scalar inv12 = transMatrix[2] * transMatrix[7] - transMatrix[1] * transMatrix[8];
-    Scalar inv13 = transMatrix[1] * transMatrix[5] - transMatrix[2] * transMatrix[4];
-    Scalar inv21 = transMatrix[5] * transMatrix[6] - transMatrix[3] * transMatrix[8];
-    Scalar inv22 = transMatrix[0] * transMatrix[8] - transMatrix[2] * transMatrix[6];
-    Scalar inv23 = transMatrix[2] * transMatrix[3] - transMatrix[0] * transMatrix[5];
-    Scalar inv31 = transMatrix[3] * transMatrix[7] - transMatrix[4] * transMatrix[6];
-    Scalar inv32 = transMatrix[1] * transMatrix[6] - transMatrix[0] * transMatrix[7];
-    Scalar inv33 = transMatrix[0] * transMatrix[4] - transMatrix[1] * transMatrix[3];
+//!Rescale a Cylindrical Wall using transformation matrix
+inline void rescaleWall(CylinderWall& wall, const Scalar *transMatrix)
+    {
+    //rescale origin
+    Scalar3 new_origin;
+    new_origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
+    new_origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
+    new_origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
+    wall.origin = new_origin;
 
-    Scalar detinv = transMatrix[0] * inv11 + transMatrix[1] * inv21 + transMatrix[2] * inv31;
-    inv11 /= detinv;
-    inv12 /= detinv;
-    inv13 /= detinv;
-    inv21 /= detinv;
-    inv22 /= detinv;
-    inv23 /= detinv;
-    inv31 /= detinv;
-    inv32 /= detinv;
-    inv33 /= detinv;
+    // TODO: NPT_walls, decide if we can skew or not... seems like not, if confirmed can remove adative 0s in origin calc
 
+    // //rescale axis
+    // Scalar3 new_axis;
+    // new_axis.x = wall.axis.x * transMatrix[0] + wall.axis.y * transMatrix[1] +wall.axis.z * transMatrix[2];
+    // new_axis.y = wall.axis.x * transMatrix[3] + wall.axis.y * transMatrix[4] +wall.axis.z * transMatrix[5];
+    // new_axis.z = wall.axis.x * transMatrix[6] + wall.axis.y * transMatrix[7] +wall.axis.z * transMatrix[8];
+    // wall.axis = new_axis;
+    //
+    // //recalculate the rotation quaternion
+    // Scalar3 zNorm = make_scalar3(0.0,0.0,1.0);
+    // Scalar normVec=fast::sqrt(dot(wall.axis,wall.axis));
+    // Scalar realPart=normVec + dot(zNorm,wall.axis);
+    // Scalar3 w;
+    // if (realPart < Scalar(1.0e-6) * normVec)
+    //     {
+    //         realPart=Scalar(0.0);
+    //         w=make_scalar3(0.0, -1.0, 0.0);
+    //     }
+    // else
+    //     {
+    //         w=make_scalar3(zNorm.y * wall.axis.z - zNorm.z * wall.axis.y,
+    //                        zNorm.z * wall.axis.x - zNorm.x * wall.axis.z,
+    //                        zNorm.x * wall.axis.y - zNorm.y * wall.axis.x);
+    //         realPart=Scalar(realPart);
+    //     }
+    //     wall.quatAxisToZRot=quat<Scalar>(realPart,vec3<Scalar>(w));
+    //     Scalar norm=fast::rsqrt(norm2(wall.quatAxisToZRot));
+    //     wall.quatAxisToZRot=norm*wall.quatAxisToZRot;
 
-    wall.normal.x = wall.normal.x * inv11 + wall.normal.y * inv21 +wall.normal.z * inv31;
-    wall.normal.y = wall.normal.x * inv12 + wall.normal.y * inv22 +wall.normal.z * inv32;
-    wall.normal.z = wall.normal.x * inv13 + wall.normal.y * inv23 +wall.normal.z * inv33;
-
-
-    Scalar invNormLength=fast::rsqrt(wall.normal.x*wall.normal.x + wall.normal.y*wall.normal.y + wall.normal.z*wall.normal.z);
-
-    wall.normal=wall.normal*invNormLength;
-
+    //figure out which directions are coupled and scale r
+    Scalar k;
+    if (transMatrix[0]==transMatrix[4])
+        {k=transMatrix[0];}
+    else if (transMatrix[0]==transMatrix[8])
+        {k=transMatrix[0];}
+    else if (transMatrix[4]==transMatrix[8])
+        {k=transMatrix[4];}
+    else
+        {//you messed up? make it crash
+        // TODO: NPT_walls, think this through fully, remove or change for numerical precision problems
+        k=0;}
+    wall.r *= k;
 
     };
 
