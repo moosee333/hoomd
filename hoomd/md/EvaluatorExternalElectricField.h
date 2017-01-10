@@ -76,12 +76,6 @@ class EvaluatorExternalElectricField
 
 		DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box){}
 
-        DEVICE static std::string printField(field_type& field)
-            {
-            std::string output = std::string("");
-            return output;
-            }
-
         //! Evaluate the force, energy and virial
         /*! \param F force vector
             \param energy value of the energy
