@@ -40,6 +40,9 @@ class PotentialExternal: public ForceCompute
         void setParams(unsigned int type, param_type params);
         void setField(field_type field);
 
+        //! Gets python output for field
+        pybind11::object getFieldPy();
+
         //! Returns a list of log quantities this compute calculates
         virtual std::vector< std::string > getProvidedLogQuantities();
 
@@ -256,6 +259,15 @@ void PotentialExternal<evaluator>::setField(field_type field)
     *(h_field.data) = field;
     }
 
+template<class evaluator>
+pybind11::object PotentialExternal<evaluator>::getFieldPy()
+    {
+    ArrayHandle<field_type> h_field(m_field, access_location::host, access_mode::read);
+    field_type& field = *(h_field.data);
+    pybind11::object field_object = evaluator::getFieldPy(field);
+    return field_object;
+    }
+
 //! Export this external potential to python
 /*! \param name Name of the class in the exported python module
     \tparam T Class type to export. \b Must be an instantiated PotentialExternal class template.
@@ -267,6 +279,7 @@ void export_PotentialExternal(pybind11::module& m, const std::string& name)
                   .def(pybind11::init< std::shared_ptr<SystemDefinition>, const std::string& >())
                   .def("setParams", &T::setParams)
                   .def("setField", &T::setField)
+                  .def("getFieldPy", &T::getFieldPy)
                   ;
     }
 

@@ -93,6 +93,12 @@ class EvaluatorExternalPeriodic
 
 		DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box){}
 
+        DEVICE static pybind11::object getFieldPy(field_type& field)
+            {
+            pybind11::object nothing;
+            return nothing;
+            }
+            
         //! Evaluate the force, energy and virial
         /*! \param F force vector
             \param energy value of the energy

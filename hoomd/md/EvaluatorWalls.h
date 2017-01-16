@@ -134,6 +134,30 @@ class EvaluatorWalls
                 }
             }
 
+        DEVICE static pybind11::object getFieldPy(field_type& w)
+            {
+            pybind11::list walls_spheres;
+            pybind11::list walls_cylinders;
+            pybind11::list walls_planes;
+            for(unsigned int i = 0; i < w.numSpheres; i++)
+                {
+                walls_spheres.append(pybind11::cast(w.Spheres[i]));
+                }
+            for(unsigned int i = 0; i < w.numCylinders; i++)
+                {
+                walls_cylinders.append(pybind11::cast(w.Cylinders[i]));
+                }
+            for(unsigned int i = 0; i < w.numPlanes; i++)
+                {
+                walls_planes.append(pybind11::cast(w.Planes[i]));
+                }
+            pybind11::object walls;
+            walls.attr("spheres") = walls_spheres;
+            walls.attr("cylinders") = walls_cylinders;
+            walls.attr("planes") = walls_planes;
+            return walls;
+            }
+
 
         DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const Scalar3 dr)
             {

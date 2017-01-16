@@ -138,6 +138,7 @@ class group(object):
         for wall in walls:
             self.add(wall);
 
+
     def add(self,wall):
         R""" Generic wall add for wall objects.
 
@@ -666,6 +667,15 @@ class wallpotential(external._external_force):
             if self.force_coeff.values[str(type)]['r_cut']<=0:
                 self.force_coeff.values[str(type)]['r_cut']=0;
         external._external_force.update_coeffs(self);
+
+    def update_wallobject(self):
+        cpp_walls=self.cpp_force.getFieldPy()
+        for i in range(len(cpp_walls.spheres)):
+            self.walls.spheres[i]._cpp = cpp_walls.spheres[i]
+        for i in range(len(cpp_walls.cylinders)):
+            self.walls.cylinders[i]._cpp = cpp_walls.cylinders[i]
+        for i in range(len(cpp_walls.planes)):
+            self.walls.planes[i]._cpp = cpp_walls.planes[i]
 
 
 class lj(wallpotential):
