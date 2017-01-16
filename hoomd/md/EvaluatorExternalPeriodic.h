@@ -14,6 +14,8 @@
 #include <math.h>
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/BoxDim.h"
+#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
+
 
 /*! \file EvaluatorExternalPeriodic.h
     \brief Defines the external potential evaluator to induce a periodic ordered phase
@@ -98,7 +100,7 @@ class EvaluatorExternalPeriodic
             pybind11::object nothing;
             return nothing;
             }
-            
+
         //! Evaluate the force, energy and virial
         /*! \param F force vector
             \param energy value of the energy

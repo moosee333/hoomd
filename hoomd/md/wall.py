@@ -669,14 +669,24 @@ class wallpotential(external._external_force):
         external._external_force.update_coeffs(self);
 
     def update_wallobject(self):
+        #grab a list of wall objects from cpp_force
         cpp_walls=self.cpp_force.getFieldPy()
-        for i in range(len(cpp_walls.spheres)):
-            self.walls.spheres[i]._cpp = cpp_walls.spheres[i]
-        for i in range(len(cpp_walls.cylinders)):
-            self.walls.cylinders[i]._cpp = cpp_walls.cylinders[i]
-        for i in range(len(cpp_walls.planes)):
-            self.walls.planes[i]._cpp = cpp_walls.planes[i]
-
+        #update current defintions
+        if len(cpp_walls[0])==len(self.field_coeff.spheres):
+            for i in range(len(cpp_walls[0])):
+                self.field_coeff.spheres[i]._cpp = cpp_walls[0][i]
+        else:
+            RuntimeError('Wall group update failed due to mismatched numbers of sphere walls.')
+        if len(cpp_walls[1])==len(self.field_coeff.cylinders):
+            for i in range(len(cpp_walls[1])):
+                self.field_coeff.cylinders[i]._cpp = cpp_walls[1][i]
+        else:
+            RuntimeError('Wall group update failed due to mismatched numbers of cylinder walls.')
+        if len(cpp_walls[2])==len(self.field_coeff.planes):
+            for i in range(len(cpp_walls[2])):
+                self.field_coeff.planes[i]._cpp = cpp_walls[2][i]
+        else:
+            RuntimeError('Wall group update failed due to mismatched numbers of plane walls.')
 
 class lj(wallpotential):
     R""" Lennard-Jones wall potential.

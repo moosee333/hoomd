@@ -14,6 +14,8 @@
 #include <math.h>
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/BoxDim.h"
+#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
+
 
 /*! \file EvaluatorExternalElectricField.h
     \brief Defines the external potential evaluator to induce a periodic ordered phase

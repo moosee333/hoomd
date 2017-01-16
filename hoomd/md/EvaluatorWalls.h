@@ -17,6 +17,8 @@
 
 #include "hoomd/BoxDim.h"
 #include "WallData.h"
+#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
+
 
 #undef DEVICE
 #ifdef NVCC
@@ -151,10 +153,10 @@ class EvaluatorWalls
                 {
                 walls_planes.append(pybind11::cast(w.Planes[i]));
                 }
-            pybind11::object walls;
-            walls.attr("spheres") = walls_spheres;
-            walls.attr("cylinders") = walls_cylinders;
-            walls.attr("planes") = walls_planes;
+            pybind11::list walls;
+            walls.append(walls_spheres);
+            walls.append(walls_cylinders);
+            walls.append(walls_planes);
             return walls;
             }
 
