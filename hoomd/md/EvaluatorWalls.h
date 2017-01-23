@@ -13,11 +13,11 @@
 
 #ifndef NVCC
 #include <string>
+#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
 
 #include "hoomd/BoxDim.h"
 #include "WallData.h"
-#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
 
 #undef DEVICE
@@ -136,29 +136,28 @@ class EvaluatorWalls
                 }
             }
 
-        DEVICE static pybind11::object getFieldPy(field_type& w)
+
+        #ifndef NVCC
+        //! Update the python copy of the field
+        /*! \updates the python object for a field that has been modified durring a run, i.e. via rescaleField.
+        */
+        static void updateFieldPy(field_type& field, pybind11::object walls)
             {
-            pybind11::list walls_spheres;
-            pybind11::list walls_cylinders;
-            pybind11::list walls_planes;
-            for(unsigned int i = 0; i < w.numSpheres; i++)
+            for(unsigned int i = 0; i < field.numSpheres; i++)
                 {
-                walls_spheres.append(pybind11::cast(w.Spheres[i]));
+                walls.attr("spheres").cast<pybind11::list>()[i].cast<pybind11::object>().attr("_cpp") = pybind11::cast(field.Spheres[i]);
                 }
-            for(unsigned int i = 0; i < w.numCylinders; i++)
+            for(unsigned int i = 0; i < field.numCylinders; i++)
                 {
-                walls_cylinders.append(pybind11::cast(w.Cylinders[i]));
+                walls.attr("cylinders").cast<pybind11::list>()[i].cast<pybind11::object>().attr("_cpp") = pybind11::cast(field.Cylinders[i]);
                 }
-            for(unsigned int i = 0; i < w.numPlanes; i++)
+            for(unsigned int i = 0; i < field.numPlanes; i++)
                 {
-                walls_planes.append(pybind11::cast(w.Planes[i]));
+                walls.attr("planes").cast<pybind11::list>()[i].cast<pybind11::object>().attr("_cpp") = pybind11::cast(field.Planes[i]);
                 }
-            pybind11::list walls;
-            walls.append(walls_spheres);
-            walls.append(walls_cylinders);
-            walls.append(walls_planes);
-            return walls;
             }
+        #endif
+
 
 
         DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const Scalar3 dr)

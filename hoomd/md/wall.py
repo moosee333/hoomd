@@ -668,25 +668,10 @@ class wallpotential(external._external_force):
                 self.force_coeff.values[str(type)]['r_cut']=0;
         external._external_force.update_coeffs(self);
 
+    # TODO: NPT_walls, documentation for this functionality, settle on nameing?
     def update_wallobject(self):
-        #grab a list of wall objects from cpp_force
-        cpp_walls=self.cpp_force.getFieldPy()
-        #update current defintions
-        if len(cpp_walls[0])==len(self.field_coeff.spheres):
-            for i in range(len(cpp_walls[0])):
-                self.field_coeff.spheres[i]._cpp = cpp_walls[0][i]
-        else:
-            RuntimeError('Wall group update failed due to mismatched numbers of sphere walls.')
-        if len(cpp_walls[1])==len(self.field_coeff.cylinders):
-            for i in range(len(cpp_walls[1])):
-                self.field_coeff.cylinders[i]._cpp = cpp_walls[1][i]
-        else:
-            RuntimeError('Wall group update failed due to mismatched numbers of cylinder walls.')
-        if len(cpp_walls[2])==len(self.field_coeff.planes):
-            for i in range(len(cpp_walls[2])):
-                self.field_coeff.planes[i]._cpp = cpp_walls[2][i]
-        else:
-            RuntimeError('Wall group update failed due to mismatched numbers of plane walls.')
+        self.cpp_force.updateFieldPy(self.field_coeff)
+
 
 class lj(wallpotential):
     R""" Lennard-Jones wall potential.

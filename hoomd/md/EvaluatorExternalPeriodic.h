@@ -9,12 +9,12 @@
 
 #ifndef NVCC
 #include <string>
+#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
 
 #include <math.h>
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/BoxDim.h"
-#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
 
 /*! \file EvaluatorExternalPeriodic.h
@@ -95,11 +95,9 @@ class EvaluatorExternalPeriodic
 
 		DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box){}
 
-        DEVICE static pybind11::object getFieldPy(field_type& field)
-            {
-            pybind11::object nothing;
-            return nothing;
-            }
+        #ifndef NVCC
+        static void updateFieldPy(field_type& field, pybind11::object field_py){}
+        #endif
 
         //! Evaluate the force, energy and virial
         /*! \param F force vector
