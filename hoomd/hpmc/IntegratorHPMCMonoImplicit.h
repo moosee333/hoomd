@@ -989,17 +989,282 @@ Scalar IntegratorHPMCMonoImplicit<Shape>::getLogValue(const std::string& quantit
     return IntegratorHPMCMono<Shape>::getLogValue(quantity, timestep);
     }
 
-/*! NPT simulations are not supported with implicit depletants
-
-    (The Nmu_ptPT ensemble is instable)
+/*! For N_mu_p PT simulation
 
     \returns false if resize results in overlaps
 */
 template<class Shape>
 bool IntegratorHPMCMonoImplicit<Shape>::attemptBoxResize(unsigned int timestep, const BoxDim& new_box)
     {
-    this->m_exec_conf->msg->error() << "Nmu_pPT simulations are unsupported." << std::endl;
-    throw std::runtime_error("Error during implicit depletant integration\n");
+    // store old box
+    const BoxDim& old_box = this->m_pdata->getGlobalBox();
+    const BoxDim& old_local_box = this->m_pdata->getBox();
+
+    Scalar3 npd_old = old_box.getNearestPlaneDistance();
+    Scalar3 npd_new = new_box.getNearestPlaneDistance();
+
+    // maximum contraction of nearest plane distance
+    Scalar3 max_delta3 = make_scalar3(std::max(npd_old.x-npd_new.x,0.0),
+        std::max(npd_old.y-npd_new.y,0.0),
+        std::max(npd_old.z-npd_new.z,0.0));
+
+    Scalar max_delta = std::max(max_delta3.x, std::max(max_delta3.y, max_delta3.z));
+
+    // pad ghost layer to pull in ghost particles in old AND new configuration
+    Scalar old_extra_ghost_width = this->m_extra_ghost_width;
+    this->setExtraGhostWidth(old_extra_ghost_width + max_delta);
+
+    // update box dimensions and check for colloid overlaps
+    bool has_overlaps = !IntegratorHPMCMono<Shape>::attemptBoxResize(timestep, new_box);
+
+    if (!has_overlaps)
+        {
+        // update the aabb tree
+        const detail::AABBTree& aabb_tree = this->buildAABBTree();
+
+        // update the image list
+        const std::vector<vec3<Scalar> >&image_list = this->updateImageList();
+
+        if (this->m_prof) this->m_prof->push(this->m_exec_conf, "HPMC implicit box rescale");
+
+        // access particle data and system box
+        ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+
+        // access interaction matrix
+        ArrayHandle<unsigned int> h_overlaps(this->m_overlaps, access_location::host, access_mode::read);
+
+        bool overlap = false;
+
+        Scalar V = old_local_box.getVolume();
+
+        // parameter for Poisson distribution
+        Scalar lambda = getDepletantDensity()*V;
+
+        unsigned int n = 0;
+        if (lambda>Scalar(0.0))
+            {
+            std::poisson_distribution<unsigned int> poisson(lambda);
+
+            // combine four seeds
+            std::vector<unsigned int> seed_seq(3);
+            seed_seq[0] = this->m_seed;
+            seed_seq[1] = timestep;
+            seed_seq[2] = this->m_exec_conf->getRank();
+            std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+
+            // RNG for poisson distribution
+            std::mt19937 rng_poisson(seed);
+
+            n = poisson(rng_poisson);
+            }
+
+        // Depletant type
+        unsigned int type_d = getDepletantType();
+
+        unsigned int err_count = 0;
+
+        Saru rng(this->m_seed, this->m_exec_conf->getRank(), timestep);
+
+        // for every test depletant
+        for (unsigned int k = 0; k < n; ++k)
+            {
+            Scalar xrand = rng.template s<Scalar>();
+            Scalar yrand = rng.template s<Scalar>();
+            Scalar zrand = rng.template s<Scalar>();
+
+            Scalar3 f_test = make_scalar3(xrand, yrand, zrand);
+            vec3<Scalar> pos_test = vec3<Scalar>(old_local_box.makeCoordinates(f_test));
+
+            // scale depletant coordinates to new box
+            Scalar3 f_test_new = old_box.makeFraction(vec_to_scalar3(pos_test));
+            vec3<Scalar> pos_test_new(new_box.makeCoordinates(f_test_new));
+
+            Shape shape_test(quat<Scalar>(), this->m_params[type_d]);
+            if (shape_test.hasOrientation())
+                {
+                shape_test.orientation = generateRandomOrientation(rng);
+                }
+
+            // check against overlap in old box
+            overlap=false;
+            bool overlap_old = false;
+            detail::AABB aabb_test_local = shape_test.getAABB(vec3<Scalar>(0,0,0));
+
+            // All image boxes (including the primary)
+            const unsigned int n_images = image_list.size();
+            for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                {
+                vec3<Scalar> pos_test_image = pos_test_new + image_list[cur_image];
+                Scalar3 f = new_box.makeFraction(vec_to_scalar3(pos_test_image));
+                vec3<Scalar> pos_test_image_old = vec3<Scalar>(old_box.makeCoordinates(f));
+
+                // set up AABB in old coordinates
+                detail::AABB aabb = aabb_test_local;
+                aabb.translate(pos_test_image_old);
+
+                // scale AABB to new coordinates (the AABB tree contains new coordinates)
+                vec3<Scalar> lower, upper;
+                lower = aabb.getLower();
+                f = old_box.makeFraction(vec_to_scalar3(lower));
+                lower = vec3<Scalar>(new_box.makeCoordinates(f));
+                upper = aabb.getUpper();
+                f = old_box.makeFraction(vec_to_scalar3(upper));
+                upper = vec3<Scalar>(new_box.makeCoordinates(f));
+                aabb = detail::AABB(lower,upper);
+
+                // stackless search
+                for (unsigned int cur_node_idx = 0; cur_node_idx < aabb_tree.getNumNodes(); cur_node_idx++)
+                    {
+                    if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                        {
+                        if (aabb_tree.isNodeLeaf(cur_node_idx))
+                            {
+                            for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                                {
+                                // read in its position and orientation
+                                unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                                Scalar4 postype_j;
+                                Scalar4 orientation_j;
+
+                                // load the old position and orientation of the j particle
+                                postype_j = h_postype.data[j];
+                                orientation_j = h_orientation.data[j];
+
+                                // compute the particle position scaled in the old box
+                                f = new_box.makeFraction(make_scalar3(postype_j.x,postype_j.y,postype_j.z));
+                                vec3<Scalar> pos_j_old(old_box.makeCoordinates(f));
+
+                                // put particles in coordinate system of particle i
+                                vec3<Scalar> r_ij = pos_j_old - pos_test_image_old;
+
+                                unsigned int typ_j = __scalar_as_int(postype_j.w);
+                                Shape shape_j(quat<Scalar>(orientation_j), this->m_params[typ_j]);
+
+                                // check circumsphere overlap
+                                OverlapReal rsq = dot(r_ij,r_ij);
+                                OverlapReal DaDb = shape_test.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+                                bool circumsphere_overlap = (rsq*OverlapReal(4.0) <= DaDb * DaDb);
+
+                                if (h_overlaps.data[this->m_overlap_idx(m_type,typ_j)]
+                                    && circumsphere_overlap && test_overlap(r_ij, shape_test, shape_j, err_count))
+                                    {
+                                    overlap = true;
+
+                                    // depletant is ignored for any overlap in the old configuration
+                                    overlap_old = true;
+                                    break;
+                                    }
+                                }
+                            }
+                        }
+                    else
+                        {
+                        // skip ahead
+                        cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                        }
+                    if (overlap)
+                        break;
+                    }  // end loop over AABB nodes
+
+                if (overlap)
+                    break;
+
+                } // end loop over images
+
+            if (!overlap_old)
+                {
+                // check for overlap in new configuration
+
+                for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                    {
+                    // shift *unscaled* depletant position by new box vector
+                    vec3<Scalar> pos_test_image = pos_test + image_list[cur_image];
+                    detail::AABB aabb = aabb_test_local;
+                    aabb.translate(pos_test_image);
+
+                    // stackless search
+                    for (unsigned int cur_node_idx = 0; cur_node_idx < aabb_tree.getNumNodes(); cur_node_idx++)
+                       {
+                       if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                            {
+                            if (aabb_tree.isNodeLeaf(cur_node_idx))
+                                {
+                                for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                                    {
+                                    // read in its position and orientation
+                                    unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                                    Scalar4 postype_j;
+                                    Scalar4 orientation_j;
+
+                                    // load the new position and orientation of the j particle
+                                    postype_j = h_postype.data[j];
+                                    orientation_j = h_orientation.data[j];
+
+                                    // put particles in coordinate system of particle i
+                                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_test_image;
+
+                                    unsigned int typ_j = __scalar_as_int(postype_j.w);
+                                    Shape shape_j(quat<Scalar>(orientation_j), this->m_params[typ_j]);
+                                    // check circumsphere overlap
+                                    OverlapReal rsq = dot(r_ij,r_ij);
+                                    OverlapReal DaDb = shape_test.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+                                    bool circumsphere_overlap = (rsq*OverlapReal(4.0) <= DaDb * DaDb);
+
+                                    if (h_overlaps.data[this->m_overlap_idx(m_type,typ_j)]
+                                         && circumsphere_overlap && test_overlap(r_ij, shape_test, shape_j, err_count))
+                                         {
+                                         overlap = true;
+                                         break;
+                                         }
+                                     }
+                                 }
+                             }
+                         else
+                             {
+                             // skip ahead
+                             cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                             }
+
+                         }  // end loop over AABB nodes
+
+                    if (overlap)
+                        break;
+                    } // end loop over images
+               } // end overlap check in new configuration
+
+            if (overlap_old)
+                {
+                overlap = false;
+                continue;
+                }
+
+            if (overlap)
+                {
+                break;
+                }
+            } // end loop over test depletants
+
+        unsigned int overlap_count = overlap;
+
+        #ifdef ENABLE_MPI
+        if (this->m_comm)
+            {
+            MPI_Allreduce(MPI_IN_PLACE, &overlap_count, 1, MPI_UNSIGNED, MPI_MAX, this->m_exec_conf->getMPICommunicator());
+            }
+        #endif
+
+        if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
+
+        has_overlaps = overlap_count;
+        }
+
+    // reset extra ghost width
+    this->setExtraGhostWidth(old_extra_ghost_width);
+
+    return !has_overlaps;
     }
 
 //! Export this hpmc integrator to python
