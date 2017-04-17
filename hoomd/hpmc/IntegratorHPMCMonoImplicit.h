@@ -1220,6 +1220,7 @@ bool IntegratorHPMCMonoImplicit<Shape>::attemptBoxResize(unsigned int timestep, 
                                          break;
                                          }
                                      }
+                                 if (overlap) break;
                                  }
                              }
                          else
