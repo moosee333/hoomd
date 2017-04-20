@@ -1,4 +1,4 @@
-# Copyright (c) 2009-2016 The Regents of the University of Michigan
+# Copyright (c) 2009-2017 The Regents of the University of Michigan
 # This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
 """ Shape data structures.
@@ -127,7 +127,7 @@ class sphere_params(_hpmc.sphere_param_proxy, _param):
 
     def __str__(self):
         # should we put this in the c++ side?
-        return "sphere(r = {})".format(self.diameter)
+        return "sphere(diameter = {})".format(self.diameter)
 
     def make_param(self, diameter, ignore_statistics=False):
         return self.make_fn(float(diameter)/2.0,
