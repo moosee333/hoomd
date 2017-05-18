@@ -57,7 +57,7 @@
 class EvaluatorPairDipole
     {
     public:
-        typedef Scalar3 param_type;
+        typedef Scalar4 param_type;
         //! Constructs the pair potential evaluator
         /*! \param _dr Displacement vector between particle centres of mass
             \param _rcutsq Squared distance at which the potential goes to 0
@@ -66,11 +66,12 @@ class EvaluatorPairDipole
             \param _mu Dipole magnitude of particles
             \param _A Electrostatic energy scale
             \param _kappa Inverse screening length
+            \param _gamma Multiplication factor for ion-dipole coupling
             \param _params Per type pair parameters of this potential
         */
         DEVICE EvaluatorPairDipole(Scalar3& _dr, Scalar4& _quat_i, Scalar4& _quat_j, Scalar _rcutsq, param_type& params)
             :dr(_dr), rcutsq(_rcutsq), quat_i(_quat_i), quat_j(_quat_j),
-             mu(params.x), A(params.y), kappa(params.z)
+             mu(params.x), A(params.y), kappa(params.z), gamma(params.w)
             {
             }
 
@@ -164,9 +165,9 @@ class EvaluatorPairDipole
             if (mu != Scalar(0.0) && q_j != Scalar(0.0))
                 {
                 Scalar pidotr = dot(p_i, rvec);
-                Scalar pre1 = prefactor*Scalar(3.0)*q_j*r5inv * pidotr;
-                Scalar pre2 = prefactor*q_j*r3inv;
-                Scalar pre3 = prefactor*q_j*r3inv*pidotr*kappa*rinv;
+                Scalar pre1 = gamma*prefactor*Scalar(3.0)*q_j*r5inv * pidotr;
+                Scalar pre2 = gamma*prefactor*q_j*r3inv;
+                Scalar pre3 = gamma*prefactor*q_j*r3inv*pidotr*kappa*rinv;
 
                 f += pre2*p_i - pre1*rvec + pre3*rvec;
 
@@ -178,11 +179,11 @@ class EvaluatorPairDipole
             if (q_i != Scalar(0.0) && mu != Scalar(0.0))
                 {
                 Scalar pjdotr = dot(p_j, rvec);
-                Scalar pre1 = prefactor*Scalar(3.0)*q_i*r5inv * pjdotr;
-                Scalar pre2 = prefactor*q_i*r3inv;
-                Scalar pre3 = prefactor*q_i*r3inv*pjdotr*kappa*rinv;
+                Scalar pre1 = gamma*prefactor*Scalar(3.0)*q_i*r5inv * pjdotr;
+                Scalar pre2 = gamma*prefactor*q_i*r3inv;
+                Scalar pre3 = gamma*prefactor*q_i*r3inv*pjdotr*kappa*rinv;
 
-                f += pre1*rvec - pre2*p_j + pre3*rvec;
+                f += pre1*rvec - pre2*p_j - pre3*rvec;
 
                 t_j += -pre2*cross(p_j, rvec);
 
@@ -224,6 +225,7 @@ class EvaluatorPairDipole
         Scalar q_i, q_j;            //!< Stored particle charges
         Scalar4 quat_i,quat_j;      //!< Stored quaternion of ith and jth particle from constuctor
         Scalar mu, A, kappa;        //!< Stored dipole magnitude, electrostatic magnitude and inverse screeing length
+        Scalar gamma;               //!< Multiplication factor for ion-dipole coupling
     };
 
 

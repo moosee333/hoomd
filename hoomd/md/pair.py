@@ -2290,7 +2290,7 @@ class dipole(ai_pair):
 
         U_{dd} = A e^{-\kappa r} \left(\frac{\vec{\mu_i}\cdot\vec{\mu_j}}{r^3} - 3\frac{(\vec{\mu_i}\cdot \vec{r_{ji}})(\vec{\mu_j}\cdot \vec{r_{ji}})}{r^5}\right)
 
-        U_{de} = A e^{-\kappa r} \left(\frac{(\vec{\mu_j}\cdot \vec{r_{ji}})q_i}{r^3} - \frac{(\vec{\mu_i}\cdot \vec{r_{ji}})q_j}{r^3}\right)
+        U_{de} = A \gamma e^{-\kappa r} \left(\frac{(\vec{\mu_j}\cdot \vec{r_{ji}})q_i}{r^3} - \frac{(\vec{\mu_i}\cdot \vec{r_{ji}})q_j}{r^3}\right)
 
         U_{ee} = A e^{-\kappa r} \frac{q_i q_j}{r}
 
@@ -2302,6 +2302,7 @@ class dipole(ai_pair):
     - mu - magnitude of :math:`\vec{\mu} = \mu (1, 0, 0)` in the particle local reference frame
     - A - electrostatic energy scale :math:`A` (default value 1.0)
     - kappa - inverse screening length :math:`\kappa`
+    - gamma - Ion-dipole coupling multiplication factor (default value 1.0)
 
     Example::
 
@@ -2330,16 +2331,18 @@ class dipole(ai_pair):
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
         ## setup the coefficent options
-        self.required_coeffs = ['mu', 'A', 'kappa'];
+        self.required_coeffs = ['mu', 'A', 'kappa', 'gamma'];
 
         self.pair_coeff.set_default_coeff('A', 1.0)
+        self.pair_coeff.set_default_coeff('gamma', 1.0)
 
     def process_coeff(self, coeff):
         mu = float(coeff['mu']);
         A = float(coeff['A']);
         kappa = float(coeff['kappa']);
+        gamma = float(coeff['gamma']);
 
-        params = _hoomd.make_scalar3(mu, A, kappa)
+        params = _hoomd.make_scalar4(mu, A, kappa, gamma)
 
         return params
 
