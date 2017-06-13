@@ -689,6 +689,8 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
         std::vector<std::set< unsigned int > > overlap_ij_old(m_pdata->getN());
         std::vector<std::set< unsigned int > > overlap_ij_new(m_pdata->getN());
 
+        std::vector<bool> accepted_i(m_pdata->getN(), true);
+
         #pragma omp parallel for schedule(guided, 8)
         for (unsigned int n = 0; n < collision_ij.size(); ++n)
             {
@@ -776,25 +778,44 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
             unsigned int typ_j = __scalar_as_int(postype_j.w);
             Shape shape_j(quat<Scalar>(orientation_j), m_params[typ_j]);
 
-            counters.overlap_checks++;
-            if (test_overlap(r_ij, shape_i, shape_j, counters.overlap_err_count))
+            // if particle is already rejected, exit early
+            bool early_exit = !accepted_i[i];
+
+            if (!early_exit)
                 {
-                if (collision_type[n])
+                counters.overlap_checks++;
+                if (test_overlap(r_ij, shape_i, shape_j, counters.overlap_err_count))
                     {
-                    #pragma omp critical
-                    overlap_ij_new[i].insert(j);
-                    }
-                else
-                    {
-                    #pragma omp critical
-                    overlap_ij_old[i].insert(j);
-                    }
+                    if (collision_type[n])
+                        {
+                        #pragma omp critical
+                            {
+                            overlap_ij_new[i].insert(j);
 
+                            // if the same particle generates an overlap in both of its configurations,
+                            // certain reject
+                            if (overlap_ij_old[i].find(j) != overlap_ij_old[i].end())
+                                accepted_i[i] = false;
+                            }
+                        }
+                    else
+                        {
+                        #pragma omp critical
+                            {
+                            overlap_ij_old[i].insert(j);
+
+                            // also if j comes after i and it's old configuration generates an overlap,
+                            // reject i, too
+                            if (overlap_ij_new[i].find(j) != overlap_ij_new[i].end()
+                                || m_update_order[j] > m_update_order[i])
+                                accepted_i[i] = false;
+
+                            }
+                        }
+
+                    }
                 }
-
             } // end loop over collision list
-
-        std::vector<bool> accepted_i(m_pdata->getN(), false);
 
         for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
             {
@@ -853,16 +874,14 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
             bool overlap = reject_external;
             for (auto it = overlap_ij_new[i].begin(); it != overlap_ij_new[i].end(); ++it)
-                if (accepted_i[*it]) overlap = true;
+                if (accepted_i[*it] && m_update_order[*it] <= m_update_order[i]) overlap = true;
 
             for (auto it = overlap_ij_old[i].begin(); it != overlap_ij_old[i].end(); ++it)
-                if (!accepted_i[*it]) overlap = true;
+                if (!accepted_i[*it] || m_update_order[*it] > m_update_order[i]) overlap = true;
 
             // if the move is accepted
             if (!overlap && !reject_external)
                 {
-                accepted_i[i] = true;
-
                 // increment accept counter and assign new position
                 if (!shape_i.ignoreStatistics())
                   {
@@ -882,6 +901,8 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
             else
                 {
+                accepted_i[i] = false;
+
                 if (!shape_i.ignoreStatistics())
                     {
                     // increment reject counter
