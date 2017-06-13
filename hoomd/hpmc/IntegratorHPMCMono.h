@@ -454,7 +454,73 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
         ArrayHandle<Scalar> h_d(m_d, access_location::host, access_mode::read);
         ArrayHandle<Scalar> h_a(m_a, access_location::host, access_mode::read);
 
-        // loop through N particles in a shuffled order
+        std::vector<vec3<Scalar> > new_pos(m_pdata->getN());
+        std::vector<quat<Scalar> > new_orientation(m_pdata->getN());
+
+        // update AABB tree with new positions for all particles
+        for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
+            {
+            unsigned int i = m_update_order[cur_particle];
+
+            // read in the current position and orientation
+            Scalar4 postype_i = h_postype.data[i];
+            Scalar4 orientation_i = h_orientation.data[i];
+            vec3<Scalar> pos_i = vec3<Scalar>(postype_i);
+
+            #ifdef ENABLE_MPI
+            if (m_comm)
+                {
+                // only move particle if active
+                if (!isActive(make_scalar3(postype_i.x, postype_i.y, postype_i.z), box, ghost_fraction))
+                    continue;
+                }
+            #endif
+
+            // make a trial move for i
+            Saru rng_i(i, m_seed + m_exec_conf->getRank()*m_nselect + i_nselect, timestep);
+            int typ_i = __scalar_as_int(postype_i.w);
+            Shape shape_i(quat<Scalar>(orientation_i), m_params[typ_i]);
+            unsigned int move_type_select = rng_i.u32() & 0xffff;
+            bool move_type_translate = !shape_i.hasOrientation() || (move_type_select < m_move_ratio);
+
+            Shape shape_old(quat<Scalar>(orientation_i), m_params[typ_i]);
+            vec3<Scalar> pos_old = pos_i;
+
+            new_pos[i] = pos_old;
+            new_orientation[i] = quat<Scalar>(orientation_i);
+
+            if (move_type_translate)
+                {
+                move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
+
+                #ifdef ENABLE_MPI
+                if (m_comm)
+                    {
+                    // check if particle has moved into the ghost layer, and skip if it is
+                    if (!isActive(vec_to_scalar3(pos_i), box, ghost_fraction))
+                        {
+                        continue;
+                        }
+                    }
+                #endif
+                new_pos[i] = pos_i;
+                }
+            else
+                {
+                move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
+                new_orientation[i] = shape_i.orientation;
+                }
+            detail::AABB aabb = shape_i.getAABB(vec3<Scalar>(0,0,0));
+            aabb.translate(pos_i);
+            m_aabb_tree.update(i, aabb);
+            }
+
+        // check overlaps against new and old position of every particle
+
+        std::vector<std::set< unsigned int > > overlap_ij_old(m_pdata->getN());
+        std::vector<std::set< unsigned int > > overlap_ij_new(m_pdata->getN());
+
+        #pragma omp parallel for
         for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
             {
             unsigned int i = m_update_order[cur_particle];
@@ -511,8 +577,9 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                 }
 
             // check for overlaps with neighboring particle's positions
-            bool overlap=false;
             detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
+
+            bool overlap = false;
 
             // All image boxes (including the primary)
             const unsigned int n_images = m_image_list.size();
@@ -537,12 +604,36 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                 Scalar4 postype_j;
                                 Scalar4 orientation_j;
 
+                                bool overlap_old = false;
+                                bool overlap_new = false;
+
                                 // handle j==i situations
                                 if ( j != i )
                                     {
                                     // load the position and orientation of the j particle
                                     postype_j = h_postype.data[j];
                                     orientation_j = h_orientation.data[j];
+
+                                    // put particles in coordinate system of particle i
+                                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+
+                                    unsigned int typ_j = __scalar_as_int(postype_j.w);
+                                    Shape shape_j(quat<Scalar>(orientation_j), m_params[typ_j]);
+
+                                    counters.overlap_checks++;
+                                    if (h_overlaps.data[m_overlap_idx(typ_i, typ_j)]
+                                        && check_circumsphere_overlap(r_ij, shape_i, shape_j)
+                                        && test_overlap(r_ij, shape_i, shape_j, counters.overlap_err_count))
+                                        {
+                                        overlap_old = true;
+                                        }
+                                    }
+
+                                if ( j != i )
+                                    {
+                                    // load the position and orientation of the j particle
+                                    postype_j = make_scalar4(new_pos[j].x,new_pos[j].y, new_pos[j].z, h_postype.data[j].w);
+                                    orientation_j = quat_to_scalar4(new_orientation[j]);
                                     }
                                 else
                                     {
@@ -570,6 +661,15 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                     && check_circumsphere_overlap(r_ij, shape_i, shape_j)
                                     && test_overlap(r_ij, shape_i, shape_j, counters.overlap_err_count))
                                     {
+                                    overlap_new = true;
+                                    }
+
+                                if (overlap_old) overlap_ij_old[i].insert(j);
+                                if (overlap_new) overlap_ij_new[i].insert(j);
+
+                                if (overlap_old && overlap_new)
+                                    {
+                                    // This particle overlaps with j in old AND new position, so it will be rejected for sure
                                     overlap = true;
                                     break;
                                     }
@@ -589,10 +689,77 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                 if (overlap)
                     break;
                 } // end loop over images
+            } // end loop over particles
+
+        std::vector<bool> accepted_i(m_pdata->getN(), false);
+
+        for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
+            {
+            unsigned int i = m_update_order[cur_particle];
+
+            // read in the current position and orientation
+            Scalar4 postype_i = h_postype.data[i];
+            Scalar4 orientation_i = h_orientation.data[i];
+            vec3<Scalar> pos_i = vec3<Scalar>(postype_i);
+
+            #ifdef ENABLE_MPI
+            if (m_comm)
+                {
+                // only move particle if active
+                if (!isActive(make_scalar3(postype_i.x, postype_i.y, postype_i.z), box, ghost_fraction))
+                    continue;
+                }
+            #endif
+
+            // make a trial move for i
+            Saru rng_i(i, m_seed + m_exec_conf->getRank()*m_nselect + i_nselect, timestep);
+            int typ_i = __scalar_as_int(postype_i.w);
+            Shape shape_i(quat<Scalar>(orientation_i), m_params[typ_i]);
+            unsigned int move_type_select = rng_i.u32() & 0xffff;
+            bool move_type_translate = !shape_i.hasOrientation() || (move_type_select < m_move_ratio);
+
+            Shape shape_old(quat<Scalar>(orientation_i), m_params[typ_i]);
+            vec3<Scalar> pos_old = pos_i;
+
+            if (move_type_translate)
+                {
+                move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
+
+                #ifdef ENABLE_MPI
+                if (m_comm)
+                    {
+                    // check if particle has moved into the ghost layer, and skip if it is
+                    if (!isActive(vec_to_scalar3(pos_i), box, ghost_fraction))
+                        continue;
+                    }
+                #endif
+                }
+            else
+                {
+                move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
+                }
+
+            // move could be rejected by the external potential or the overlap.
+            // check the external porential first because it will most likely be
+            // faster
+            bool reject_external = false;
+            if(m_external && !m_external->accept(i, pos_old, shape_old, pos_i, shape_i, rng_i))
+                {
+                reject_external = true;
+                }
+
+            bool overlap = false;
+            for (auto it = overlap_ij_new[i].begin(); it != overlap_ij_new[i].end(); ++it)
+                if (accepted_i[*it]) overlap = true;
+
+            for (auto it = overlap_ij_old[i].begin(); it != overlap_ij_old[i].end(); ++it)
+                if (!accepted_i[*it]) overlap = true;
 
             // if the move is accepted
             if (!overlap && !reject_external)
                 {
+                accepted_i[i] = true;
+
                 // increment accept counter and assign new position
                 if (!shape_i.ignoreStatistics())
                   {
@@ -601,11 +768,6 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                   else
                       counters.rotate_accept_count++;
                   }
-                // update the position of the particle in the tree for future updates
-                detail::AABB aabb = aabb_i_local;
-                aabb.translate(pos_i);
-                m_aabb_tree.update(i, aabb);
-
                 // update position of particle
                 h_postype.data[i] = make_scalar4(pos_i.x,pos_i.y,pos_i.z,postype_i.w);
 
