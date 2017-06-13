@@ -521,6 +521,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 ;
         std::vector<unsigned int> collision_img;
 
+        #pragma omp parallel for
         for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
             {
             unsigned int i = m_update_order[cur_particle];
@@ -620,8 +621,13 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                         && check_circumsphere_overlap(r_ij, shape_i, shape_j))
                                         {
                                         // save for detailed collision check
+                                        #pragma omp critical
                                         collision_ij.push_back(std::make_pair(i,j));
+
+                                        #pragma omp critical
                                         collision_type.push_back(false);
+
+                                        #pragma omp critical
                                         collision_img.push_back(cur_image);
                                         }
                                     }
@@ -658,8 +664,13 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                     && check_circumsphere_overlap(r_ij, shape_i, shape_j))
                                     {
                                     // save for detailed collision check
+                                    #pragma omp critical
                                     collision_ij.push_back(std::make_pair(i,j));
+
+                                    #pragma omp critical
                                     collision_type.push_back(true);
+
+                                    #pragma omp critical
                                     collision_img.push_back(cur_image);
                                     }
 
