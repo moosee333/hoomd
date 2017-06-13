@@ -622,13 +622,11 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                         {
                                         // save for detailed collision check
                                         #pragma omp critical
-                                        collision_ij.push_back(std::make_pair(i,j));
-
-                                        #pragma omp critical
-                                        collision_type.push_back(false);
-
-                                        #pragma omp critical
-                                        collision_img.push_back(cur_image);
+                                            {
+                                            collision_ij.push_back(std::make_pair(i,j));
+                                            collision_type.push_back(false);
+                                            collision_img.push_back(cur_image);
+                                            }
                                         }
                                     }
 
@@ -665,13 +663,11 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                     {
                                     // save for detailed collision check
                                     #pragma omp critical
-                                    collision_ij.push_back(std::make_pair(i,j));
-
-                                    #pragma omp critical
-                                    collision_type.push_back(true);
-
-                                    #pragma omp critical
-                                    collision_img.push_back(cur_image);
+                                        {
+                                        collision_ij.push_back(std::make_pair(i,j));
+                                        collision_type.push_back(true);
+                                        collision_img.push_back(cur_image);
+                                        }
                                     }
 
                                 }
