@@ -630,6 +630,9 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                         }
                                     }
 
+                                // no need to check against new positions of particles that are moved later
+                                if ( m_update_order[j] > m_update_order[i]) continue;
+
                                 if ( j != i )
                                     {
                                     // load the position and orientation of the j particle
