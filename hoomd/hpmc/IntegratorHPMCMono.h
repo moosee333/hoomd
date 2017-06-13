@@ -875,8 +875,13 @@ unsigned int IntegratorHPMCMono<Shape>::countOverlaps(unsigned int timestep, boo
     ArrayHandle<unsigned int> h_overlaps(m_overlaps, access_location::host, access_mode::read);
 
     // Loop over all particles
+    bool flag = false;
+    #pragma omp parallel for reduction(+: overlap_count)
     for (unsigned int i = 0; i < m_pdata->getN(); i++)
         {
+        #ifdef _OPENMP
+        if (flag) continue;
+        #endif
         // read in the current position and orientation
         Scalar4 postype_i = h_postype.data[i];
         Scalar4 orientation_i = h_orientation.data[i];
@@ -955,7 +960,11 @@ unsigned int IntegratorHPMCMono<Shape>::countOverlaps(unsigned int timestep, boo
 
         if (overlap_count && early_exit)
             {
+            #ifndef _OPENMP
             break;
+            #else
+            flag = true;
+            #endif
             }
         } // end loop over particles
 
