@@ -689,7 +689,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
         std::vector<std::set< unsigned int > > overlap_ij_old(m_pdata->getN());
         std::vector<std::set< unsigned int > > overlap_ij_new(m_pdata->getN());
 
-        #pragma omp parallel for schedule(dynamic)
+        #pragma omp parallel for schedule(guided, 8)
         for (unsigned int n = 0; n < collision_ij.size(); ++n)
             {
             unsigned int i = collision_ij[n].first;
