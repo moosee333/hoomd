@@ -817,9 +817,13 @@ class yukawa(pair):
         :nowrap:
 
         \begin{eqnarray*}
-         V_{\mathrm{yukawa}}(r)  = & \varepsilon \frac{ \exp \left( -\kappa r \right) }{r} & r < r_{\mathrm{cut}} \\
+         V_{\mathrm{yukawa}}(r)  = & \varepsilon \frac{ \exp \left[ -\kappa \left(r-\frac{D_i+D_j}/2\right) \right] }{\left(1+\frac12 \kappa*D_i\right)\left(1+\frac12 \kappa*D_j\right)}r} & r < r_{\mathrm{cut}} \\
                             = & 0 & r \ge r_{\mathrm{cut}} \\
         \end{eqnarray*}
+
+    Here, :math:`D_i` and :math:`D_j` are the particle diameters. They are only used if **use_diameter** is set,
+    otherwise are taken to be zero. With particle diameters, :py:class`yukawa` can be used to implement
+    DLVO screened electrostatic interactions.
 
     See :py:class:`pair` for details on how forces are calculated and the available energy shifting and smoothing modes.
     Use :py:meth:`pair_coeff.set <coeff.set>` to set potential coefficients.
@@ -828,6 +832,8 @@ class yukawa(pair):
 
     - :math:`\varepsilon` - *epsilon* (in energy units)
     - :math:`\kappa` - *kappa* (in units of 1/distance)
+    - **use_diameter** - True if we should use particle diameters (default: False)
+        .. versionadded:: 2.2
     - :math:`r_{\mathrm{cut}}` - *r_cut* (in distance units)
       - *optional*: defaults to the global r_cut specified in the pair command
     - :math:`r_{\mathrm{on}}`- *r_on* (in distance units)
@@ -840,6 +846,7 @@ class yukawa(pair):
         yukawa.pair_coeff.set('A', 'A', epsilon=1.0, kappa=1.0)
         yukawa.pair_coeff.set('A', 'B', epsilon=2.0, kappa=0.5, r_cut=3.0, r_on=2.0);
         yukawa.pair_coeff.set(['A', 'B'], ['C', 'D'], epsilon=0.5, kappa=3.0)
+        yukawa.pair_coeff.set('A', 'A', epsilon=1.0, kappa=1.0,use_diameter=True)
 
     """
     def __init__(self, r_cut, nlist, name=None):
@@ -862,13 +869,15 @@ class yukawa(pair):
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
         # setup the coefficent options
-        self.required_coeffs = ['epsilon', 'kappa'];
+        self.required_coeffs = ['epsilon', 'kappa','use_diameter'];
+        self.pair_coeff.set_default_coeff('use_diameter', False);
 
     def process_coeff(self, coeff):
         epsilon = coeff['epsilon'];
         kappa = coeff['kappa'];
+        use_diameter = coeff['use_diameter']
 
-        return _hoomd.make_scalar2(epsilon, kappa);
+        return _hoomd.make_scalar3(epsilon, kappa, int(use_diameter));
 
 class ewald(pair):
     R""" Ewald pair potential.

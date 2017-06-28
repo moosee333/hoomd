@@ -47,7 +47,7 @@ class EvaluatorPairYukawa
     {
     public:
         //! Define the parameter type used by this pair potential evaluator
-        typedef Scalar2 param_type;
+        typedef Scalar3 param_type;
 
         //! Constructs the pair potential evaluator
         /*! \param _rsq Squared distance beteen the particles
@@ -55,17 +55,25 @@ class EvaluatorPairYukawa
             \param _params Per type pair parameters of this potential
         */
         DEVICE EvaluatorPairYukawa(Scalar _rsq, Scalar _rcutsq, const param_type& _params)
-            : rsq(_rsq), rcutsq(_rcutsq), epsilon(_params.x), kappa(_params.y)
+            : rsq(_rsq), rcutsq(_rcutsq), epsilon(_params.x), kappa(_params.y), use_diameter(__scalar_as_int(_params.z)), Ra(0.0), Rb(0.0)
             {
             }
 
-        //! Yukawa doesn't use diameter
-        DEVICE static bool needsDiameter() { return false; }
+        //! Yukawa takes the particle diameter (and uses it when use_diameter=1
+        DEVICE static bool needsDiameter() { return true; }
+
         //! Accept the optional diameter values
         /*! \param di Diameter of particle i
             \param dj Diameter of particle j
         */
-        DEVICE void setDiameter(Scalar di, Scalar dj) { }
+        DEVICE void setDiameter(Scalar di, Scalar dj)
+            {
+            if (use_diameter)
+                {
+                Ra = Scalar(0.5)*di;
+                Rb = Scalar(0.5)*dj;
+                }
+            }
 
         //! Yukawa doesn't use charge
         DEVICE static bool needsCharge() { return false; }
@@ -93,7 +101,7 @@ class EvaluatorPairYukawa
                 Scalar r = Scalar(1.0) / rinv;
                 Scalar r2inv = Scalar(1.0) / rsq;
 
-                Scalar exp_val = fast::exp(-kappa * r);
+                Scalar exp_val = fast::exp(-kappa * (r-Ra-Rb))/(1+kappa*Ra)/(1+kappa*Rb);
 
                 force_divr = epsilon * exp_val * r2inv * (rinv + kappa);
                 pair_eng = epsilon * exp_val * rinv;
@@ -126,6 +134,9 @@ class EvaluatorPairYukawa
         Scalar rcutsq;  //!< Stored rcutsq from the constructor
         Scalar epsilon; //!< epsilon parameter extracted from the params passed to the constructor
         Scalar kappa;   //!< kappa parameter extracted from the params passed to the constructor
+        unsigned int use_diameter; //!< 1 if we use the diameter field
+        Scalar Ra;      //!< Particle radius a
+        Scalar Rb;      //!< Particle radius b
     };
 
 

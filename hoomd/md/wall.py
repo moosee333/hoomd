@@ -821,6 +821,9 @@ class yukawa(wallpotential):
     See :py:class:`hoomd.md.pair.yukawa` for force details and base parameters and :py:class:`wallpotential` for
     generalized wall potential implementation
 
+    Note:
+        If **use_diameter** is set to True, the wall diameter is assumed to be zero.
+
     Example::
 
         walls=wall.group()
@@ -829,6 +832,7 @@ class yukawa(wallpotential):
         wall_force_yukawa.force_coeff.set('A', epsilon=1.0, kappa=1.0)
         wall_force_yukawa.force_coeff.set('A', epsilon=2.0, kappa=0.5, r_cut=3.0)
         wall_force_yukawa.force_coeff.set(['C', 'D'], epsilon=0.5, kappa=3.0)
+        wall_force_yukawa.force_coeff.set('A', epsilon=2.0, kappa=0.5, r_cut=3.0,use_diameter=True)
 
     """
     def __init__(self, walls, r_cut=False, name=""):
@@ -850,12 +854,14 @@ class yukawa(wallpotential):
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
         # setup the coefficent options
-        self.required_coeffs += ['epsilon', 'kappa'];
+        self.required_coeffs += ['epsilon', 'kappa','use_diameter'];
+        self.force_coeff.set_default_coeff('use_diameter', False);
 
     def process_coeff(self, coeff):
         epsilon = coeff['epsilon'];
         kappa = coeff['kappa'];
-        return _md.make_wall_yukawa_params(_hoomd.make_scalar2(epsilon, kappa), coeff['r_cut']*coeff['r_cut'], coeff['r_extrap']);
+        use_diameter = int(coeff['use_diameter'])
+        return _md.make_wall_yukawa_params(_hoomd.make_scalar3(epsilon, kappa,use_diameter), coeff['r_cut']*coeff['r_cut'], coeff['r_extrap']);
 
 class morse(wallpotential):
     R""" Morse wall potential.

@@ -30,7 +30,7 @@ cudaError_t gpu_compute_slj_forces(const pair_args_t& pair_args,
 
 //! Compute yukawa pair forces on the GPU with PairEvaluatorGauss
 cudaError_t gpu_compute_yukawa_forces(const pair_args_t& pair_args,
-                                      const Scalar2 *d_params);
+                                      const Scalar3 *d_params);
 
 //! Compute morse pair forces on the GPU with PairEvaluatorMorse
 cudaError_t gpu_compute_morse_forces(const pair_args_t& pair_args,
