@@ -47,7 +47,7 @@ cudaError_t gpu_compute_slj_forces(const pair_args_t& pair_args,
     }
 
 cudaError_t gpu_compute_yukawa_forces(const pair_args_t& pair_args,
-                                      const Scalar3 *d_params)
+                                      const Scalar4 *d_params)
     {
     return gpu_compute_pair_forces<EvaluatorPairYukawa>(pair_args,
                                                         d_params);

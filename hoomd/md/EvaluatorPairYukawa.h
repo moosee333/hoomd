@@ -47,7 +47,7 @@ class EvaluatorPairYukawa
     {
     public:
         //! Define the parameter type used by this pair potential evaluator
-        typedef Scalar3 param_type;
+        typedef Scalar4 param_type;
 
         //! Constructs the pair potential evaluator
         /*! \param _rsq Squared distance beteen the particles
@@ -55,7 +55,10 @@ class EvaluatorPairYukawa
             \param _params Per type pair parameters of this potential
         */
         DEVICE EvaluatorPairYukawa(Scalar _rsq, Scalar _rcutsq, const param_type& _params)
-            : rsq(_rsq), rcutsq(_rcutsq), epsilon(_params.x), kappa(_params.y), use_diameter(__scalar_as_int(_params.z)), Ra(0.0), Rb(0.0)
+            : rsq(_rsq), rcutsq(_rcutsq), epsilon(_params.x), kappa(_params.y),
+              use_diameter(__scalar_as_int(_params.z)),
+              use_charge(__scalar_as_int(_params.w)),
+              Ra(0.0), Rb(0.0), qiqj(1.0)
             {
             }
 
@@ -75,13 +78,18 @@ class EvaluatorPairYukawa
                 }
             }
 
-        //! Yukawa doesn't use charge
-        DEVICE static bool needsCharge() { return false; }
+        //! Yukawa uses charge when use_charge is True
+        DEVICE static bool needsCharge() { return true; }
+
         //! Accept the optional diameter values
         /*! \param qi Charge of particle i
             \param qj Charge of particle j
         */
-        DEVICE void setCharge(Scalar qi, Scalar qj) { }
+        DEVICE void setCharge(Scalar qi, Scalar qj)
+            {
+            if (use_charge)
+                qiqj = qi*qj;
+            }
 
         //! Evaluate the force and energy
         /*! \param force_divr Output parameter to write the computed force divided by r.
@@ -103,14 +111,14 @@ class EvaluatorPairYukawa
 
                 Scalar exp_val = fast::exp(-kappa * (r-Ra-Rb))/(1+kappa*Ra)/(1+kappa*Rb);
 
-                force_divr = epsilon * exp_val * r2inv * (rinv + kappa);
-                pair_eng = epsilon * exp_val * rinv;
+                force_divr = qiqj*epsilon * exp_val * r2inv * (rinv + kappa);
+                pair_eng = qiqj*epsilon * exp_val * rinv;
 
                 if (energy_shift)
                     {
                     Scalar rcutinv = fast::rsqrt(rcutsq);
                     Scalar rcut = Scalar(1.0) / rcutinv;
-                    pair_eng -= epsilon * fast::exp(-kappa * rcut) * rcutinv;
+                    pair_eng -= qiqj * epsilon * fast::exp(-kappa * (rcut-Ra-Rb)) * rcutinv;
                     }
                 return true;
                 }
@@ -135,8 +143,10 @@ class EvaluatorPairYukawa
         Scalar epsilon; //!< epsilon parameter extracted from the params passed to the constructor
         Scalar kappa;   //!< kappa parameter extracted from the params passed to the constructor
         unsigned int use_diameter; //!< 1 if we use the diameter field
+        unsigned int use_charge; //!< 1 if we use the diameter field
         Scalar Ra;      //!< Particle radius a
         Scalar Rb;      //!< Particle radius b
+        Scalar qiqj;    //!< Product of particle charges
     };
 
 
