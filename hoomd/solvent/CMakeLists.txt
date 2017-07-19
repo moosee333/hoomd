@@ -1,9 +1,11 @@
 # Maintainer: jglaser
 
 set(_solvent_sources module-solvent.cc
-                   )
+    GridData.cc
+    )
 
-set(_solvent_headers                )
+set(_solvent_headers GridData.h
+    )
 
 if (ENABLE_CUDA)
 list(APPEND _solvent_sources )
@@ -61,20 +63,6 @@ MACRO(copy_file file)
 ENDMACRO(copy_file)
 
 set(files __init__.py
-          angle.py
-          bond.py
-          charge.py
-          constrain.py
-          dihedral.py
-          external.py
-          force.py
-          improper.py
-          integrate.py
-          nlist.py
-          pair.py
-          update.py
-          wall.py
-          special_pair.py
     )
 
 install(FILES ${files}
