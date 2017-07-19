@@ -43,10 +43,16 @@ class GridPotentialPair : public GridForceCompute
         virtual ~GridPotentialPair();
 
         //! Pre-compute the energy terms on the grid
-        virtual void precomputeEnergyTerms(unsigned int timestep;
+        virtual void precomputeEnergyTerms(unsigned int timestep)
+            {
+            computeGrid(false);
+            }
 
         //! Actually compute the forces
-        virtual void computeGridForces(unsigned int timestep) {}
+        virtual void computeGridForces(unsigned int timestep)
+            {
+            computeGrid(true);
+            }
 
         //! Set the parameters for a single type
         virtual void setParams(unsigned int type, const param_type& param);
@@ -88,6 +94,11 @@ class GridPotentialPair : public GridForceCompute
 
         std::string m_prof_name;                    //!< Cached profiler name
         std::string m_log_name;                     //!< Cached log name
+
+        //! Helper method to iterate over grid
+        /*! \param forces if True, compute forces, energy terms otherwise
+         */
+        virtual void computeGrid(unsigned int timestep, bool forces);
 
         //! Method to be called when number of types changes
         virtual void slotNumTypesChange()
@@ -196,23 +207,18 @@ Scalar GridPotentialPair< evaluator >::getLogValue(const std::string& quantity, 
         }
     }
 
-//! Compute particle forces
+//! Pre-compute energy on grid
 template< class evaluator >
-void GridPotentialPair< evaluator >::precomputeEnergyTerms(unsigned int timestep)
+void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool forces)
     {
-    // skip if we shouldn't compute this step
-    if (!m_particles_sorted && !shouldCompute(timestep))
-        return;
-
-    m_particles_sorted = false;
-
     // begin by updating the CellList
     m_cl->compute(timestep);
 
-    std::shared_ptr<GridData> grid_data(m_solver->getGridData());
+    auto grid_data = m_solver->getGridData();
 
     // get the velocity grid to precompute the energy on
-    ArrayHandle<Scalar> h_fn(grid_data, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_fn(grid_data->getVelocityGrid(), access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_phi(grid_data->getPhiGrid(), access_location::host, access_mode::readwrite);
 
     Index3D gi = grid_data->getIndexer();
 
@@ -228,6 +234,9 @@ void GridPotentialPair< evaluator >::precomputeEnergyTerms(unsigned int timestep
     // arrays for cut-off and potential parameters
     ArrayHandle<Scalar> h_rcutsq(m_rcutsq, access_location::host, access_mode::read);
     ArrayHandle<param_type> h_params(m_params, access_location::host, access_mode::read);
+
+    // access the force arrays
+    ArrayHandle<Scalar4> h_force(m_force, access_location::host, access_mode::read);
 
     int3 dim = grid_data->getDimensions();
 
@@ -294,7 +303,7 @@ void GridPotentialPair< evaluator >::precomputeEnergyTerms(unsigned int timestep
                                 unsigned int idx_i = h_cell_idx[cli(cur_ptl, cell_idx)];
 
                                 Scalar4 postype = h_postype.data[idx_i];
-                                vec3<Scalar> dr = center-vec3<Scalar>(postype);
+                                vec3<Scalar> dr = vec3<Scalar>(postype) - center;
                                 unsigned int cur_type = __scalar_as_int(postype.w);
 
                                 // shift into minimum image
@@ -338,13 +347,29 @@ void GridPotentialPair< evaluator >::precomputeEnergyTerms(unsigned int timestep
 
                                     bool evaluated = eval.evalForceAndEnergy(force_divr, pair_eng, energy_shift);
 
-                                    // update the energy on the grid cell
-                                    h_fn.data[grid_idx] += pair_eng;
+                                    if (forces)
+                                        {
+                                        // NOTE: simple Heaviside function, to be improved
+                                        if (h_phi.data[grid_idx] >= 0.0)
+                                            {
+                                            vec3<Scalar> fi = dx*force_divr;
+                                            h_force.data[idx_i].x += fi.x;
+                                            h_force.data[idx_i].y += fi.y;
+                                            h_force.data[idx_i].z += fi.z;
+                                            h_force.data[idx_i].w += pair_eng; // no factor of 0.5 here
+                                            }
+                                        }
+                                    else
+                                        {
+                                        // update the energy on the grid cell
+                                        h_fn.data[grid_idx] += pair_eng;
+                                        }
                                     }
                                 }
-                            }
+                            } // end loop over particles in cell
                 }
     }
+
 } // end namespace
 
 #endif // __GRID_PAIR_POTENTIAL_H__
