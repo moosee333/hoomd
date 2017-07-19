@@ -42,6 +42,8 @@ GridData::computeDimensions()
     Scalar3 L = box.getL();
     m_dim = make_int3(ceil(L.x/m_sigma),ceil(L.y/m_sigma),ceil(L.x/m_sigma));
 
+    m_indexer = Index3D(m_dim.x, m_dim.y, m_dim.z);
+
     m_exec_conf->msg->notice(6) << "hoomd.solvent: Initializing grid as "
         << m_dim.x << "x" << m_dim.y << "x" << m_dim.z << std::endl;
     }

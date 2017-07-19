@@ -18,6 +18,8 @@
 #include "hoomd/SystemDefinition.h"
 #include "hoomd/GPUArray.h"
 #include "hoomd/HOOMDMath.h"
+#include "hoomd/Index1D.h"
+
 #include <hoomd/extern/nano-signal-slot/nano_signal_slot.hpp>
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
@@ -37,9 +39,9 @@ class SnapshotGridData<Real>;
     an implicitly defined surface as the zero level set of a function phi: IR^3 -> IR.
     It is iteratively updated using another grid of scalar values, f_n, that define normal
     velocities for the propagation of the interface on every grid point. The function defining
-    the implicit surface, phi, and the velocities, f_n, are variables of the level set equation.
-    Within every HOOMD time step, multiple iterations of the level set methods are performed
-    until convergence.
+    the implicit surface, phi, and the precomputed velocities, f_n, are variables in the level
+    set equation.  Within every HOOMD time step, multiple iterations of the level set methods are
+    performed until convergence.
 
     The class design is as follows: this class, GridData, holds the data structures necessary
     for the grid, phi, and f_n, to update it. Other classes may access those data through
@@ -97,10 +99,20 @@ class GridData
         std::shared_ptr<SnapshotGridData<Real> > takeSnapshot();
 
         //! Return the grid spacing along every dimension
-        const Scalar3 getSpacing() const
+        Scalar3 getSpacing() const
             {
+            initializeGrid(); // initialize grid if necessary
+
             Scalar3 L = m_pdata->getBox().getL();
             return make_scalar3(L.x/m_dim.x, L.y/m_dim.y, L.z/m_dim.z);
+            }
+
+        //! Return the dimensions of the grid
+        int3 getDimensions() const
+            {
+            initializeGrid();
+
+            return m_dim;
             }
 
         //! Set the maximum grid spacing
@@ -116,6 +128,11 @@ class GridData
             return m_sigma;
             }
 
+        Index3D getIndexer() const
+            {
+            return m_indexer;
+            }
+
     protected:
         //! Helper function to re-initialize the grid when necessary
         void initializeGrid();
@@ -129,7 +146,6 @@ class GridData
         //! Helper function to compute grid dimensions
         void computeDimensions();
 
-    private:
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
         std::shared_ptr<ExecutionConfiguration> m_exec_conf; //!< HOOMD execution configuration
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data
@@ -141,7 +157,9 @@ class GridData
 
         GPUArray<Scalar> m_phi; //!< The phi grid, of dimensions m_dim
         GPUArray<Scalar> m_fn;  //!< The velocity grid
-    }
+
+        Index3D m_indexer;      //!< The grid indexer
+    };
 
 template<class Real>
 struct SnapshotGridData
@@ -160,7 +178,7 @@ struct SnapshotGridData
 
     std::vector<Real> phi;
     std::vector<Real> fn;
-    }
+    };
 
 //! Export SnapshotGridData<Real> to python
 template<class Real>

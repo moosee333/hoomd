@@ -28,6 +28,6 @@ will not require any modifications.
 """
 
 # need to import all submodules defined in this directory
-from hoomd.solvent import force
+from hoomd.solvent import pair
 
 import hoomd
