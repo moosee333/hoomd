@@ -337,6 +337,12 @@ if (BUILD_DEM AND BUILD_MD)
     add_subdirectory(dem)
 endif()
 
+option(BUILD_SOLVENT "Build the solvent package" on)
+if (BUILD_SOLVENT AND BUILD_MD)
+    add_subdirectory(solvent)
+endif()
+
+
 file(GLOB _directory_contents RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *)
 
 # explicitly remove packages which are already explicitly dealt with
