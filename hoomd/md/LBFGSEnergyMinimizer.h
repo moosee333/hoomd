@@ -59,9 +59,7 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
             }
 
         //! Set the intial guess for the diagonal elements of the inverse Hessian
-        /*! \param dguess is the new guess to set
-        */
-        void setDguess(Scalar dguess) {m_dguess = dguess;}
+        void setDguess(Scalar dguess);
 
         //! Set the stopping criterion based on the change in energy between successive iterations
         /*! \param etol is the new energy tolerance to set
@@ -73,10 +71,14 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
         */
         void setFtol(Scalar ftol) {m_ftol = ftol;}
 
-        //! Set the maximum energy rise permitted in the step direction
-        /*! \param erise is the new maximum energy rise to set
+        //! Set the number of step size decreases before a step fails
+        /*! \param decrease is the new number of decreases to set
         */
-        void setMaxErise(Scalar erise) {m_max_erise = erise;}
+        void setMaxDecrease(unsigned int decrease) {m_max_decrease = decrease;}
+
+        //! Set the maximum energy rise permitted in the step direction
+        */
+        void setMaxErise(Scalar erise);
 
         //! Set the maximum number of step failures before the minimisation is considered to have failed
         /*! \param fails is the new number of failures
@@ -84,24 +86,15 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
         void setMaxFails(unsigned int fails) {m_max_fails = fails;}
 
         //! Set the maximum permitted step size
-        /*! \param step is the new maximum energy rise to set
-        */
-        void setMaxStep(Scalar step) {m_max_step = step;}
-
-        //! Set the number of step size decreases before a step fails
-        /*! \param decrease is the new number of decreases to set
-        */
-        void setDecrease(unisgned int decrease) {m_no_decrease = decrease;}
+        void setMaxStep(Scalar step);
 
         //! Set the scale factor for decreasing the step size
-        /*! \param scale is the new scale factor to set
-        */
-        void setScale(Scalar scale) {m_scale = scale;}
+        void setScale(Scalar scale);
 
         //! Set the number of previous steps used when calculating the step direction
         /*! \param updates is the new number of steps
         */
-        void setScale(unsigned int updates) {m_updates = updates;}
+        void setUpdates(unsigned int updates) {m_updates = updates;}
 
         //! Set the stopping criterion based on the total torque on all particles in the system
         /*! \param wtol is the new torque tolerance to set
@@ -120,21 +113,30 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
 
     protected:
 
-        bool m_converged;                   //!< whether the minimisation has converged
+        // Minimiser parameters
         Scalar m_dguess;                    //!< initial guess for the diagonal elements of the inverse Hessian
-        Scalar m_energy_total;              //!< Total energy of all integrator groups
         Scalar m_etol;                      //!< stopping tolerance based on the chance in energy
-        bool m_failed;                      //!< whether the minimisation has failed
         Scalar m_ftol;                      //!< stopping tolerance based on total force
+        unsigned int m_max_decrease;        //!< number of decreases in the step size before the step is considered to have failed
         Scalar m_max_erise;                 //!< largest permitted energy increase in the step direction
         unsigned int m_max_fails;           //!< number of step failures before the minimisation is considered to have failed
         Scalar m_max_step;                  //!< largest permitted step size
-        unsigned int m_no_decrease;         //!< number of decreases in the step size before the step is considered to have failed
-        Scalar m_no_fails;                  //!< number of step failures experienced
         Scalar m_scale;                     //!< factor to decrease the step size by on an energy increase
         unsigned int m_updates;             //!< number of previous steps to consider when calculating the step direction
-        bool m_was_reset;                   //!< whether or not the minimizer was reset
         Scalar m_wtol;                      //!< stopping tolerance based on total torque
+
+        // State of the minimiser
+        bool m_converged;                   //!< whether the minimisation has converged
+        Scalar m_energy_total;              //!< Total energy of all integrator groups
+        bool m_failed;                      //!< whether the minimisation has failed
+        unsigned int m_iter;                //!< number of previous steps available
+        unsigned int m_no_decrease;         //!< current number of step decreases
+        unsigned int m_no_fails;            //!< number of step failures experienced
+        bool m_was_reset;                   //!< whether or not the minimizer was reset
+        GPUArray<Scalar4> m_pos_history;    //!< history of positions
+        GPUArray<Scalar3> m_grad_history;   //!< history of gradients
+        GPUArray<Scala> m_rho_history;      //!< rho history, intermediate value in step calculation
+        GPUArray<Scalar3> m_step;           //!< calculated step direction
 
     private:
 
