@@ -17,6 +17,7 @@ set(_md_sources module-md.cc
                    HarmonicImproperForceCompute.cc
                    IntegrationMethodTwoStep.cc
                    IntegratorTwoStep.cc
+                   LBFGSEnergyMinimizer.cc
                    MolecularForceCompute.cc
                    NeighborListBinned.cc
                    NeighborList.cc
@@ -99,6 +100,7 @@ set(_md_headers ActiveForceComputeGPU.h
                 HarmonicImproperForceCompute.h
                 IntegrationMethodTwoStep.h
                 IntegratorTwoStep.h
+                LBFGSEnergyMinimizer.h
                 MolecularForceCompute.h
                 NeighborListBinned.h
                 NeighborListGPUBinned.h
