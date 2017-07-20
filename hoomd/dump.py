@@ -552,6 +552,10 @@ class gsd(hoomd.analyze._analyzer):
         * constraints/
         * pairs/
 
+    * ``integrators''
+
+        * intagrator_varaibles/
+
     See https://bitbucket.org/glotzer/gsd and http://gsd.readthedocs.io/ for more information on GSD files.
 
     If you only need to store a subset of the system, you can save file size and time spent analyzing data by
