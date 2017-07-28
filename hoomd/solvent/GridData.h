@@ -30,7 +30,7 @@ namespace solvent
 {
 
 template<class Real>
-class SnapshotGridData<Real>;
+struct SnapshotGridData;
 
 /*! This class implements a storage for scalars on a 3D grid. It is used in the computations
     of the variational implicit solvent model.
@@ -81,7 +81,7 @@ class GridData
         virtual ~GridData();
 
         //! Returns the distance function grid
-        const GPUArray<Scalar>& getPhiGrid() const
+        const GPUArray<Scalar>& getPhiGrid()
             {
             initializeGrid(); // initialize grid if necessary
             return m_phi;
@@ -99,7 +99,7 @@ class GridData
         std::shared_ptr<SnapshotGridData<Real> > takeSnapshot();
 
         //! Return the grid spacing along every dimension
-        Scalar3 getSpacing() const
+        Scalar3 getSpacing()
             {
             initializeGrid(); // initialize grid if necessary
 
@@ -108,7 +108,7 @@ class GridData
             }
 
         //! Return the dimensions of the grid
-        int3 getDimensions() const
+        uint3 getDimensions()
             {
             initializeGrid();
 
@@ -147,11 +147,12 @@ class GridData
         void computeDimensions();
 
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
-        std::shared_ptr<ExecutionConfiguration> m_exec_conf; //!< HOOMD execution configuration
+        //std::shared_ptr<ExecutionConfiguration> m_exec_conf; //!< HOOMD execution configuration
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data
+        std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
 
         Scalar m_sigma;     //!< The maximum grid spacing along each axis
-        int3 m_dim;         //!< The current grid dimensions
+        uint3 m_dim;         //!< The current grid dimensions
 
         bool m_need_init_grid;  //!< True if we need to re-initialize the grid
 
@@ -164,7 +165,8 @@ class GridData
 template<class Real>
 struct SnapshotGridData
     {
-    SnapshotGridData(unsigned int n_elements)
+    SnapshotGridData(unsigned int n_elements, uint3 dim)
+        : m_dim(make_uint3(dim.x, dim.y, dim.z))
         {
         phi.resize(n_elements,Scalar(0.0));
         fn.resize(n_elements,Scalar(0.0));
@@ -175,9 +177,10 @@ struct SnapshotGridData
 
     //! Returns the velocity grid
     pybind11::object getVelocityGridNP() const;
-
+    
     std::vector<Real> phi;
     std::vector<Real> fn;
+    uint3 m_dim;         //!< The grid dimensions of the underlying grid
     };
 
 //! Export SnapshotGridData<Real> to python

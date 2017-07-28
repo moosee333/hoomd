@@ -15,6 +15,7 @@
 #define __GRID_FORCE_COMPUTE_H__
 
 #include "GridData.h"
+#include "hoomd/ForceCompute.h"
 
 namespace solvent
 {
@@ -32,14 +33,17 @@ namespace solvent
     subclassing ForceCompute to not have to re-implement the relevant internal data structures.
 
  */
-template<class evaluator>
+template<class Evaluator>
 class GridForceCompute : public ForceCompute
     {
     public:
-        GridForceCompute(std::shared_ptr<SystemDefinition> sysdef,
-            std::shared_ptr<GridData> grid)
-            : Compute(sysdef)
+        //! Constructor
+        GridForceCompute(std::shared_ptr<SystemDefinition> sysdef)
+            : ForceCompute(sysdef)
             { }
+
+        //! Destructor
+        ~GridForceCompute();
 
         //! Abstract method to pre-compute the energy terms
         /*! \param timestep Current time step
@@ -75,7 +79,6 @@ class GridForceCompute : public ForceCompute
         virtual void precomputeEnergyTerms(unsigned int timestep){}
 
     };
-
 } // end namespace
 
 #endif // __GRID_FORCE_COMPUTE_H__
