@@ -100,7 +100,7 @@ endforeach()
 add_custom_target(copy_solvent_headers ALL DEPENDS ${_solvent_headers})
 endif()
 
-if (BUILD_TESTING)
+if (1==0)
     add_subdirectory(test-py)
     add_subdirectory(test)
 endif()
