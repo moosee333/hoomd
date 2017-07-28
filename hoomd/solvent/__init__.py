@@ -20,7 +20,7 @@ proceeds iteratively.
 
 .. rubric:: Stability
 
-:py:mod:`hoomd.hpmc` is **stable**. When upgrading from version 2.x to 2.y (y > x),
+:py:mod:`hoomd.solvent` is **stable**. When upgrading from version 2.x to 2.y (y > x),
 existing job scripts that follow *documented* interfaces for functions and classes
 will not require any modifications.
 
@@ -28,6 +28,6 @@ will not require any modifications.
 """
 
 # need to import all submodules defined in this directory
-from hoomd.solvent import pair
+from hoomd.solvent import grid_pair
 
 import hoomd
