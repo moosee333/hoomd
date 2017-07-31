@@ -183,8 +183,7 @@ struct SnapshotGridData
     uint3 m_dim;         //!< The grid dimensions of the underlying grid
     };
 
-//! Export SnapshotGridData<Real> to python
-template<class Real>
+//! Export SnapshotGridData to python
 void export_SnapshotGridData(pybind11::module& m);
 
 //! Export GridData to python

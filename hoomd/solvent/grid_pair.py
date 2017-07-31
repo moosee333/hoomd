@@ -1,7 +1,7 @@
 # Copyright (c) 2009-2017 The Regents of the University of Michigan
 # This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
-# Maintainer: vramasub / All Developers are free to add commands for new features
+# Maintainer: vramasub
 
 R""" Grid pair potentials.
 
@@ -34,12 +34,14 @@ of the coefficients.
 """
 
 from hoomd import _hoomd
-import hoomd;
+import hoomd
+from hoomd.md import force # NOTE: NOT SURE WE WANT TO DO THIS, BUT I DON'T WANT TO REIMPLEMENT force._force here right now
+from hoomd.solvent import _solvent
 
-import math;
-import sys;
+import math
+import sys
 
-class coeff:
+class coeff(object):
     R""" Define potential coefficients.
 
     The coefficients for all potentials are specified using this class. Coefficients are
@@ -173,7 +175,7 @@ class coeff:
             type = type_list[i];
 
             if type not in self.values.keys():
-                hoomd.context.msg.error("No coeffs found for particle type " + str(type) "\n");
+                hoomd.context.msg.error("No coeffs found for particle type " + str(type) + "\n");
                 valid = False;
                 continue;
 
@@ -207,7 +209,7 @@ class coeff:
         if not coeff_val:
             raise RuntimeError("Bug detected, coefficient {coeff} not set for particle type {type}".format(coeff = coeff_name, type = type))
         else:
-            return coeff_name
+            return coeff_val
 
     ## \internal
     # \brief Return metadata
@@ -231,11 +233,14 @@ class _grid_pair(force._force):
     # Initializes the cpp_force to None.
     # If specified, assigns a name to the instance
     # Assigns a name to the force in force_name;
-    def __init__(self, name=None):
+    def __init__(self, nlist):
         # initialize the base class
-        super(_grid_pair, self).__init__(name);
+        super(_grid_pair, self).__init__();
 
         self.cpp_force = None;
+        self.nlist = nlist;
+        #self.nlist.subscribe(lambda:self.get_rcut())
+        #self.nlist.update_rcut()
 
         # setup the coefficient vector
         self.grid_coeff = coeff();
@@ -317,16 +322,16 @@ class lj(_grid_pair):
         lj.pair_coeff.set(['A', 'B'], ['C', 'D'], epsilon=1.5, sigma=2.0)
 
     """
-    def __init__(self, r_cut, nlist, name=None):
+    def __init__(self, r_cut, nlist):
         hoomd.util.print_status_line();
 
         # initialize the base class
-        super(lj, _grid_pair).__init__(r_cut, nlist, name);
+        super(lj, self).__init__(nlist);
 
         # create the c++ mirror class
         if not hoomd.context.exec_conf.isCUDAEnabled():
-            self.cpp_force = _md.GridPotentialPairLJ(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
-            self.cpp_class = _md.GridPotentialPairLJ;
+            self.cpp_force = _solvent.GridPotentialPairLJ(hoomd.context.current.system_definition, self.nlist.cpp_cl);
+            self.cpp_class = _solvent.GridPotentialPairLJ;
         else:
             raise NotImplementedError("Grid pair potentials are not yet GPU enabled!")
 
@@ -334,7 +339,7 @@ class lj(_grid_pair):
 
         # setup the coefficent options
         self.required_coeffs = ['epsilon', 'sigma', 'alpha'];
-        self.pair_coeff.set_default_coeff('alpha', 1.0);
+        self.grid_coeff.set_default_coeff('alpha', 1.0);
 
 
     def process_coeff(self, coeff):

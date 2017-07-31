@@ -13,11 +13,6 @@ namespace py = pybind11;
     \brief Contains code for the GridData class
 */
 
-/*
- * Questions
- * I don't know why it's requiring me to declare the exec conf as constant
- * Once I change it, it's saying that the order in which things will be initialized is wrong.
- */
 namespace solvent
 {
 

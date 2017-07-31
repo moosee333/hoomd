@@ -6,6 +6,7 @@
 
 #include "GridData.h"
 #include "GridPotentialPair.h"
+#include "GridForceCompute.h"
 #include "AllGridPairPotentials.h"
 
 //! Create the python module
@@ -15,17 +16,17 @@
 
 using namespace solvent;
 
-PYBIND11_PLUGIN(_md)
+PYBIND11_PLUGIN(_solvent)
     {
     pybind11::module m("_solvent");
 
     export_GridData(m);
+    export_GridForceCompute(m, "GridForceCompute");
     export_GridPotentialPair<GridPotentialPairLJ>(m, "GridPotentialPairLJ");
     export_GridPotentialPair<GridPotentialPairSLJ>(m, "GridPotentialPairSLJ");
     export_GridPotentialPair<GridPotentialPairEwald>(m, "GridPotentialPairEwald");
     export_GridPotentialPair<GridPotentialPairForceShiftedLJ>(m, "GridPotentialPairForceShiftedLJ");
-    export_SnapshotGridData<float>(m);
-    export_SnapshotGridData<double>(m);
+    export_SnapshotGridData(m);
 
     return m.ptr();
     }

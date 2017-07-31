@@ -2,7 +2,7 @@
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
 
-// Maintainer: vramasub / Anyone is free to add their own pair potentials here
+// Maintainer: vramasub
 
 #ifndef __GRID_PAIR_POTENTIALS__H__
 #define __GRID_PAIR_POTENTIALS__H__

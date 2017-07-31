@@ -17,7 +17,6 @@
 #include "GridForceCompute.h"
 
 #include "hoomd/CellList.h"
-#include "hoomd/md/NeighborList.h"
 
 #include <hoomd/extern/nano-signal-slot/nano_signal_slot.hpp>
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
@@ -35,7 +34,7 @@ namespace solvent
 {
 
 template<class evaluator>
-class GridPotentialPair : public GridForceCompute<evaluator>
+class GridPotentialPair : public GridForceCompute
     {
     //! Param type from evaluator
     typedef typename evaluator::param_type param_type;
@@ -90,6 +89,7 @@ class GridPotentialPair : public GridForceCompute<evaluator>
     protected:
         std::shared_ptr<CellList> m_cl; //!< The solute cell list
         //std::shared_ptr<LevelSetSolver> m_solver; //!< The level set solver
+        std::shared_ptr<GridData> grid_data; //TESTING ONLY
 
         energyShiftMode m_shift_mode;               //!< Store the mode with which to handle the energy shift at r_cut
 
@@ -129,12 +129,13 @@ GridPotentialPair<evaluator>::GridPotentialPair(std::shared_ptr<SystemDefinition
     //std::shared_ptr<CellList> cl,
     //std::shared_ptr<LevelSetSolver> solver)
     //: GridForceCompute<evaluator>(sysdef), m_cl(cl), m_solver(solver),
-    : GridForceCompute<evaluator>(sysdef), m_cl(cl),
-      m_shift_mode(no_shift),
+    : GridForceCompute(sysdef), m_cl(cl),
+      m_shift_mode(no_shift), 
       m_radius(1), m_diameter_shift(false), m_d(1.0), m_q(0.0)
     {
-    assert(m_sysdef);
-    //assert(m_solver);
+    assert(this->m_sysdef);
+    //assert(this->m_solver);
+    grid_data = std::shared_ptr<GridData>(new GridData(sysdef, 0));
 
     // create a default cell list if none was specified
     if (!m_cl)
@@ -156,6 +157,13 @@ GridPotentialPair<evaluator>::GridPotentialPair(std::shared_ptr<SystemDefinition
 
     // connect to the ParticleData to receive notifications when the maximum number of particles changes
     this->m_pdata->getNumTypesChangeSignal().template connect<GridPotentialPair<evaluator>, &GridPotentialPair<evaluator>::slotNumTypesChange>(this);
+    }
+
+//! Destructor
+template<class evaluator>
+GridPotentialPair<evaluator>::~GridPotentialPair()
+    {
+    grid_data.reset();
     }
 
 //! Set the parameters for a single type
@@ -228,7 +236,7 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
 
     //NOTE: JUST FOR DEBUGGING COMPILATION BEFORE WRITING LEVELSETSOLVER
     //auto grid_data = this->m_solver->getGridData();
-    auto grid_data = new GridData(this->m_sysdef, 0);
+    //auto grid_data = new GridData(this->m_sysdef, 0); // Shouldn't be using new in general since it'll cause memory leaks, but allowing for now.
 
     // get the velocity grid to precompute the energy on
     ArrayHandle<Scalar> h_fn(grid_data->getVelocityGrid(), access_location::host, access_mode::readwrite);
@@ -391,7 +399,7 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
 */
 template < class T > void export_GridPotentialPair(pybind11::module& m, const std::string& name)
     {
-    pybind11::class_<T, std::shared_ptr<T> > potentialpair(m, name.c_str(), pybind11::base<GridForceCompute<T>>());
+    pybind11::class_<T, std::shared_ptr<T> > potentialpair(m, name.c_str(), pybind11::base<GridForceCompute>());
     potentialpair.def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<CellList>>())
         .def("setParams", &T::setParams)
         .def("setShiftMode", &T::setShiftMode)

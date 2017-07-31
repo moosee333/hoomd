@@ -63,6 +63,7 @@ MACRO(copy_file file)
 ENDMACRO(copy_file)
 
 set(files __init__.py
+          grid_pair.py
     )
 
 install(FILES ${files}

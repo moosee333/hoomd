@@ -33,7 +33,6 @@ namespace solvent
     subclassing ForceCompute to not have to re-implement the relevant internal data structures.
 
  */
-template<class Evaluator>
 class GridForceCompute : public ForceCompute
     {
     public:
@@ -43,7 +42,8 @@ class GridForceCompute : public ForceCompute
             { }
 
         //! Destructor
-        ~GridForceCompute();
+        ~GridForceCompute()
+            { }
 
         //! Abstract method to pre-compute the energy terms
         /*! \param timestep Current time step
@@ -79,6 +79,18 @@ class GridForceCompute : public ForceCompute
         virtual void precomputeEnergyTerms(unsigned int timestep){}
 
     };
-} // end namespace
 
+//! Export the grid force compute to python. This should never be initialized directly, however, 
+//! and it exists solely to allow the GridPotentialPair to declare it as a base class.
+/*! \param name Name of the class in the exported python module
+    \tparam T Class type to export. \b Must be an instantiated GridPotentialPair class template.
+*/
+void export_GridForceCompute(pybind11::module& m, const std::string& name)
+    {
+    pybind11::class_<GridForceCompute, std::shared_ptr<GridForceCompute> >(m, name.c_str(), pybind11::base<ForceCompute>())
+        .def(pybind11::init< std::shared_ptr<SystemDefinition>>())
+    ;
+    }
+
+} // end namespace
 #endif // __GRID_FORCE_COMPUTE_H__
