@@ -358,6 +358,8 @@ class lj(_grid_pair):
         else:
             raise NotImplementedError("Grid pair potentials are not yet GPU enabled!")
 
+        hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
+
         # setup the coefficent options
         self.required_coeffs = ['epsilon', 'sigma', 'alpha'];
         self.grid_coeff.set_default_coeff('alpha', 1.0);

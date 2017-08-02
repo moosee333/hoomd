@@ -49,9 +49,10 @@ class _grid_force(hoomd.meta._metadata):
         id = _grid_force.cur_id;
         _grid_force.cur_id += 1;
 
-        self.force_name = "force%d" % (id);
+        self.force_name = "grid_force%d" % (id);
         self.enabled = True;
         self.log =True;
+        hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
         hoomd.context.current.grid_forces.append(self);
 
         # base class constructor
@@ -113,6 +114,7 @@ class _grid_force(hoomd.meta._metadata):
 
         # remove the compute from the system if it is not going to be logged
         if not log:
+            hoomd.context.current.system.removeCompute(self.cpp_force, self.force_name);
             hoomd.context.current.grid_forces.remove(self)
 
     def enable(self):
@@ -134,6 +136,7 @@ class _grid_force(hoomd.meta._metadata):
 
         # add the compute back to the system if it was removed
         if not self.log:
+            hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
             hoomd.context.current.grid_forces.append(self)
 
         self.enabled = True;
