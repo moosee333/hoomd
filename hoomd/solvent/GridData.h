@@ -98,6 +98,12 @@ class GridData
         template<class Real>
         std::shared_ptr<SnapshotGridData<Real> > takeSnapshot();
 
+        //! Function to set grid values, primarily useful for initialization
+        /*! \param flags Bits indicating which grid to update (1 for energies, 2 for forces, 3 for both)
+            \param value The value to set the grid to
+         */
+        void setGrid(unsigned int flags = 0, double value = 0.0);
+
         //! Return the grid spacing along every dimension
         Scalar3 getSpacing()
             {
@@ -133,6 +139,16 @@ class GridData
             return m_indexer;
             }
 
+        //! \name Enumerations
+        //@{
+
+        //! Simple enumeration of flags to employ for working with forces, energies, or both
+        enum flags
+            {
+            energies = 1,
+            forces = 2
+            };
+
     protected:
         //! Helper function to re-initialize the grid when necessary
         void initializeGrid();
@@ -160,6 +176,7 @@ class GridData
         GPUArray<Scalar> m_fn;  //!< The velocity grid
 
         Index3D m_indexer;      //!< The grid indexer
+
     };
 
 template<class Real>

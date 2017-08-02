@@ -11,6 +11,8 @@
 #error This header cannot be compiled by nvcc
 #endif
 
+#include <chrono>
+#include <thread>
 #include <memory>
 
 #include "GridData.h"
@@ -85,6 +87,12 @@ class GridPotentialPair : public GridForceCompute
             {
             m_shift_mode = mode;
             }
+        
+        //TEST FUNCTION ONLY: Return grid object
+        std::shared_ptr<SnapshotGridData<float> > getSnapshot() const 
+            {
+            return grid_data->takeSnapshot<float>();
+            }
 
     protected:
         std::shared_ptr<CellList> m_cl; //!< The solute cell list
@@ -130,12 +138,14 @@ GridPotentialPair<evaluator>::GridPotentialPair(std::shared_ptr<SystemDefinition
     //std::shared_ptr<LevelSetSolver> solver)
     //: GridForceCompute<evaluator>(sysdef), m_cl(cl), m_solver(solver),
     : GridForceCompute(sysdef), m_cl(cl),
-      m_shift_mode(no_shift), 
+      m_shift_mode(no_shift),
       m_radius(1), m_diameter_shift(false), m_d(1.0), m_q(0.0)
     {
     assert(this->m_sysdef);
     //assert(this->m_solver);
-    grid_data = std::shared_ptr<GridData>(new GridData(sysdef, 0));
+    grid_data = std::shared_ptr<GridData>(new GridData(sysdef, 0.1)); // TESTING only
+    // Initialize grid with zeros; MUST BE MOVED TO LEVELSETSOLVER
+    grid_data->setGrid(grid_data->energies & grid_data->forces);
 
     // create a default cell list if none was specified
     if (!m_cl)
@@ -145,6 +155,7 @@ GridPotentialPair<evaluator>::GridPotentialPair(std::shared_ptr<SystemDefinition
     m_cl->setRadius(0); // we don't need the adjacency matrix
     m_cl->setComputeTDB(false);
     m_cl->setFlagIndex();
+    m_cl->setComputeIdx(true);
 
     GPUArray<Scalar> rcutsq(this->m_pdata->getNTypes(), this->m_exec_conf);
     m_rcutsq.swap(rcutsq);
@@ -236,7 +247,6 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
 
     //NOTE: JUST FOR DEBUGGING COMPILATION BEFORE WRITING LEVELSETSOLVER
     //auto grid_data = this->m_solver->getGridData();
-    //auto grid_data = new GridData(this->m_sysdef, 0); // Shouldn't be using new in general since it'll cause memory leaks, but allowing for now.
 
     // get the velocity grid to precompute the energy on
     ArrayHandle<Scalar> h_fn(grid_data->getVelocityGrid(), access_location::host, access_mode::readwrite);
@@ -260,7 +270,8 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
     // access the force arrays
     ArrayHandle<Scalar4> h_force(this->m_force, access_location::host, access_mode::read);
 
-    uint3 dim = grid_data->getDimensions();
+    uint3 dim_int = grid_data->getDimensions();
+    Scalar3 dim = make_scalar3(dim_int.x, dim_int.y, dim_int.z); // Typecasting to ensure that division works later
 
     uint3 cell_dim = m_cl->getDim();
 
@@ -275,6 +286,7 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
     if (m_shift_mode == shift)
         energy_shift = true;
 
+    // begin by updating the CellList
     // now loop over the grid cells, and update them with pair energy values
     for (unsigned int ix = 0; ix < dim.x; ++ix)
         for (unsigned int iy = 0; iy < dim.y; ++iy)
@@ -286,7 +298,7 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
                 vec3<Scalar> f_lower(ix/dim.x, iy/dim.y, iz/dim.z);
                 vec3<Scalar> f_upper((ix+1)/dim.x, (iy+1)/dim.y, (iz+1)/dim.z);
 
-                vec3<Scalar> center(((Scalar)ix+0.5)/dim.x, ((Scalar)iy+0.5)/dim.y, ((Scalar)iz+0.5)/dim.z);
+                vec3<Scalar> center((ix+0.5)/dim.x, (iy+0.5)/dim.y, (iz+0.5)/dim.z);
 
                 // find the intersecting cells
                 int3 lower_idx, upper_idx;
@@ -297,10 +309,16 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
                 upper_idx.y = ceil(f_upper.y*cell_dim.y)+m_radius;
                 upper_idx.z = ceil(f_upper.z*cell_dim.z)+m_radius;
 
-                for (int jx = lower_idx.x; jx < upper_idx.x; ++jx)
-                    for (int jy = lower_idx.y; jy < upper_idx.y; ++jy)
-                        for (int jz = lower_idx.z; jz < upper_idx.z; ++jz)
+                for (int jxt = lower_idx.x; jxt < upper_idx.x; ++jxt)
+                    {
+                    // Create internal representations of the loop variables to avoid modifying them
+                    int jx = jxt;
+                    for (int jyt = lower_idx.y; jyt < upper_idx.y; ++jyt)
+                        {
+                        int jy = jyt;
+                        for (int jzt = lower_idx.z; jzt < upper_idx.z; ++jzt)
                             {
+                            int jz = jzt;
                             if (periodic.x && jx < 0)
                                 jx += cell_dim.x;
                             if (periodic.y && jy < 0)
@@ -308,13 +326,13 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
                             if (periodic.z && jz < 0)
                                 jz += cell_dim.z;
                             //NOTE: THESE CASTS ARE JUST TO GET RID OF WARNINGS
-                            //WE REQUIRE SIGNED INTS TO ALLOW NEGATIVE VALUES, BUT
+                            //WE REQUIRE THE INDICES TO ALLOW NEGATIVE VALUES, BUT
                             //THE CELL DIMENSIONS WILL BE UNSIGNED
-                            if (periodic.x && (unsigned int) jx >= cell_dim.x)
+                            if (periodic.x && jx >= (int) cell_dim.x)
                                 jx -= cell_dim.x;
-                            if (periodic.y && (unsigned int) jy >= cell_dim.y)
+                            if (periodic.y && jy >= (int) cell_dim.y)
                                 jy -= cell_dim.y;
-                            if (periodic.z && (unsigned int) jz >= cell_dim.z)
+                            if (periodic.z && jz >= (int) cell_dim.z)
                                 jz -= cell_dim.z;
 
                             unsigned int cell_idx = ci(jx,jy,jz);
@@ -390,6 +408,8 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
                                     }
                                 }
                             } // end loop over particles in cell
+                        }
+                    }
                 }
     }
 
@@ -403,6 +423,7 @@ template < class T > void export_GridPotentialPair(pybind11::module& m, const st
     potentialpair.def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<CellList>>())
         .def("setParams", &T::setParams)
         .def("setShiftMode", &T::setShiftMode)
+        .def("getSnapshot", &T::getSnapshot)
     ;
     }
 

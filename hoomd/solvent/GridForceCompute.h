@@ -89,6 +89,7 @@ void export_GridForceCompute(pybind11::module& m, const std::string& name)
     {
     pybind11::class_<GridForceCompute, std::shared_ptr<GridForceCompute> >(m, name.c_str(), pybind11::base<ForceCompute>())
         .def(pybind11::init< std::shared_ptr<SystemDefinition>>())
+        .def("compute", &GridForceCompute::compute)
     ;
     }
 

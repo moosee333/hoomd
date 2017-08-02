@@ -64,6 +64,7 @@ ENDMACRO(copy_file)
 
 set(files __init__.py
           grid_pair.py
+          grid_force.py
     )
 
 install(FILES ${files}

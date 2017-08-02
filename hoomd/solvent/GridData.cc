@@ -45,12 +45,35 @@ void GridData::computeDimensions()
         }
 
     Scalar3 L = box.getL();
+    //printf("The box dimensions are %f, %f, %f", L.x, L.y, L.z);
+    //printf("m_sigma = %f", m_sigma);
+    //printf("L.x/m_sigma = %f", ceil(L.x/m_sigma));
     m_dim = make_uint3(ceil(L.x/m_sigma),ceil(L.y/m_sigma),ceil(L.x/m_sigma));
+    //printf("The dimensions are %d, %d, %d", m_dim.x, m_dim.y, m_dim.z);
 
     m_indexer = Index3D(m_dim.x, m_dim.y, m_dim.z);
 
     m_exec_conf->msg->notice(6) << "hoomd.solvent: Initializing grid as "
         << m_dim.x << "x" << m_dim.y << "y" << m_dim.z << "z" << std::endl;
+    }
+
+void GridData::setGrid(unsigned int flags, double value)
+    {
+    // access the GPU arrays
+    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+    ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);
+
+    Index3D indexer = this->getIndexer();
+    for (unsigned int i = 0; i < m_dim.x; i++)
+        for (unsigned int j = 0; j < m_dim.y; j++)
+            for (unsigned int k = 0; k < m_dim.z; k++)
+                {
+                unsigned int idx = indexer(i, j, k);
+                if (flags & forces)
+                    h_fn.data[idx] = value;
+                if (flags & energies)
+                    h_phi.data[idx] = value;
+                }
     }
 
 void GridData::initializeGrid()

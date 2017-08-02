@@ -35,7 +35,7 @@ of the coefficients.
 
 from hoomd import _hoomd
 import hoomd
-from hoomd.md import force # NOTE: NOT SURE WE WANT TO DO THIS, BUT I DON'T WANT TO REIMPLEMENT force._force here right now
+from hoomd.solvent import grid_force
 from hoomd.solvent import _solvent
 
 import math
@@ -201,7 +201,7 @@ class coeff(object):
     # \param coeff_name Coefficient to get
     def get(self, type, coeff_name):
         if type not in self.values.keys():
-            hoomd.context.msg.error("Bug detected in force.coeff. Please report\n");
+            hoomd.context.msg.error("Bug detected in grid_force.coeff. Please report\n");
             raise RuntimeError("Error setting bond coeff");
 
         coeff_val = self.values[type].get(coeff_name)
@@ -224,7 +224,7 @@ class coeff(object):
 # potentials, including:
 #   1) The instance of the c++ bond force itself is tracked and added to the system 
 #   2) methods are provided for disabling the force from being added to the net force on each particle
-class _grid_pair(force._force):
+class _grid_pair(grid_force._grid_force):
     ## \internal
     # \brief Constructs the grid pair potential
     #
@@ -271,13 +271,36 @@ class _grid_pair(force._force):
     ## \internal
     # \brief Get metadata
     def get_metadata(self):
-        data = force._force.get_metadata(self)
+        data = grid_force._force.get_metadata(self)
 
         # make sure coefficients are up-to-date
         self.update_coeffs()
 
         data['grid_coeff'] = self.grid_coeff
         return data
+
+    def take_snapshot(self, dtype='float'):
+        R""" Take a snapshot of the current grid
+
+        Returns:
+            The snapshot object.
+
+        Examples::
+
+            snapshot = grid.take_snapshot()
+
+        """
+        hoomd.util.print_status_line();
+
+        # take the snapshot
+        if dtype == 'float':
+            cpp_snapshot = self.cpp_force.getSnapshot()
+        elif dtype == 'double':
+            cpp_snapshot = self.cpp_force.getSnapshot()
+        else:
+            raise ValueError("dtype must be float or double");
+
+        return cpp_snapshot
 
 class lj(_grid_pair):
     R""" Lennard-Jones grid pair potential.
@@ -335,12 +358,9 @@ class lj(_grid_pair):
         else:
             raise NotImplementedError("Grid pair potentials are not yet GPU enabled!")
 
-        hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
-
         # setup the coefficent options
         self.required_coeffs = ['epsilon', 'sigma', 'alpha'];
         self.grid_coeff.set_default_coeff('alpha', 1.0);
-
 
     def process_coeff(self, coeff):
         epsilon = coeff['epsilon'];

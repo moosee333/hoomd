@@ -124,6 +124,9 @@ class SimulationContext(object):
         ## Global variable that tracks the all of the force computes specified in the script so far
         self.forces = [];
 
+        ## Global variable that tracks the all of the grid force computes specified in the script so far
+        self.grid_forces = [];
+
         ## Global variable that tracks the all of the constraint force computes specified in the script so far
         self.constraint_forces = [];
 
