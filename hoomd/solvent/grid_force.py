@@ -51,8 +51,7 @@ class _grid_force(hoomd.meta._metadata):
 
         self.force_name = "grid_force%d" % (id);
         self.enabled = True;
-        self.log =True;
-        hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
+        self.log = True;
         hoomd.context.current.grid_forces.append(self);
 
         # base class constructor

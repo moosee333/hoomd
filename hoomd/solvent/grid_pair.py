@@ -38,6 +38,8 @@ import hoomd
 from hoomd.solvent import grid_force
 from hoomd.solvent import _solvent
 
+# NOTE: These class remain dependent on hoomd.md through the use of the neighbor lists.
+
 import math
 import sys
 
@@ -72,14 +74,6 @@ class coeff(object):
     def __init__(self):
         self.values = {};
         self.default_coeff = {}
-
-    ## \var values
-    # \internal
-    # \brief Contains the vector of set values in a dictionary
-
-    ## \var default_coeff
-    # \internal
-    # \brief default_coeff['coeff'] lists the default value for \a coeff, if it is set
 
     ## \internal
     # \brief Sets a default value for a given coefficient
@@ -233,37 +227,39 @@ class _grid_pair(grid_force._grid_force):
     # Initializes the cpp_force to None.
     # If specified, assigns a name to the instance
     # Assigns a name to the force in force_name;
-    def __init__(self, nlist):
+    def __init__(self, r_cut, nlist):
         # initialize the base class
         super(_grid_pair, self).__init__();
 
-        self.cpp_force = None;
-        self.nlist = nlist;
-        #self.nlist.subscribe(lambda:self.get_rcut())
-        #self.nlist.update_rcut()
+        # convert r_cut False to a floating point type
+        if r_cut is False:
+            r_cut = -1.0
+        self.global_r_cut = r_cut;
 
         # setup the coefficient vector
         self.grid_coeff = coeff();
+        self.grid_coeff.set_default_coeff('r_cut', self.global_r_cut)
 
-        self.enabled = True;
+        # Save the nlist (for grid potentials we won't need the actual neighbors, but we will need the cell list)
+        self.nlist = nlist
 
     def update_coeffs(self):
-        coeff_list = self.required_coeffs
+        coeff_list = self.required_coeffs + ['r_cut']
         # check that the force coefficients are valid
         if not self.grid_coeff.verify(coeff_list):
            hoomd.context.msg.error("Not all force coefficients are set\n");
            raise RuntimeError("Error updating force coefficients");
 
         # set all the params
-        ntypes = hoomd.context.current.system_definition.getParticleData().getNTypes();
-        type_list = [];
-        for i in range(0,ntypes):
-            coeff_dict = {};
+        ntypes = hoomd.context.current.system_definition.getParticleData().getNTypes()
+        for i in range(0, ntypes):
+            coeff_dict = {}
             typ = hoomd.context.current.system_definition.getParticleData().getNameByType(i)
             for name in coeff_list:
-                coeff_dict[name] = self.grid_coeff.get(typ, name);
-            param = self.process_coeff(coeff_dict);
-            self.cpp_force.setParams(i, param);
+                coeff_dict[name] = self.grid_coeff.get(typ, name)
+            param = self.process_coeff(coeff_dict)
+            self.cpp_force.setParams(i, param)
+            self.cpp_force.setRcut(i, coeff_dict['r_cut'])
 
     def process_coeff(coeffs):
         raise NotImplementedError("The process_coeff function must be implemented in each grid pair potential")
@@ -349,7 +345,7 @@ class lj(_grid_pair):
         hoomd.util.print_status_line();
 
         # initialize the base class
-        super(lj, self).__init__(nlist);
+        super(lj, self).__init__(r_cut, nlist);
 
         # create the c++ mirror class
         if not hoomd.context.exec_conf.isCUDAEnabled():

@@ -11,8 +11,6 @@
 #error This header cannot be compiled by nvcc
 #endif
 
-#include <chrono>
-#include <thread>
 #include <memory>
 
 #include "GridData.h"
@@ -270,8 +268,9 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
     // access the force arrays
     ArrayHandle<Scalar4> h_force(this->m_force, access_location::host, access_mode::read);
 
+    // dimensions must be floating types to generate fractional coordinates
     uint3 dim_int = grid_data->getDimensions();
-    Scalar3 dim = make_scalar3(dim_int.x, dim_int.y, dim_int.z); // Typecasting to ensure that division works later
+    Scalar3 dim = make_scalar3(dim_int.x, dim_int.y, dim_int.z);
 
     uint3 cell_dim = m_cl->getDim();
 
@@ -422,6 +421,7 @@ template < class T > void export_GridPotentialPair(pybind11::module& m, const st
     pybind11::class_<T, std::shared_ptr<T> > potentialpair(m, name.c_str(), pybind11::base<GridForceCompute>());
     potentialpair.def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<CellList>>())
         .def("setParams", &T::setParams)
+        .def("setRcut", &T::setRcut)
         .def("setShiftMode", &T::setShiftMode)
         .def("getSnapshot", &T::getSnapshot)
     ;

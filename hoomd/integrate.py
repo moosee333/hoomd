@@ -116,6 +116,15 @@ class _integrator(hoomd.meta._metadata):
             if f.enabled:
                 self.cpp_integrator.addForceCompute(f.cpp_force);
 
+        # set the grid forces (note that we do not add these as ForceComputes)
+        for f in hoomd.context.current.grid_forces:
+            if f.cpp_force is None:
+                hoomd.context.msg.error('Bug in hoomd_script: cpp_force not set, please report\n');
+                raise RuntimeError('Error updating grid forces');
+
+            if f.log or f.enabled:
+                f.update_coeffs();
+
         # set the constraint forces
         for f in hoomd.context.current.constraint_forces:
             if f.cpp_force is None:
