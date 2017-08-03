@@ -163,7 +163,6 @@ class GridData
         void computeDimensions();
 
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
-        //std::shared_ptr<ExecutionConfiguration> m_exec_conf; //!< HOOMD execution configuration
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data (required for box)
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
 

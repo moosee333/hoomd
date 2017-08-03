@@ -14,11 +14,11 @@ import hoomd;
 ## \internal
 # \brief Base class for grid forces
 #
-# A force in hoomd_script reflects a ForceCompute in c++. It is responsible
-# for all high-level management that happens behind the scenes for hoomd_script
-# writers. 1) The instance of the c++ analyzer itself is tracked and added to the
-# System 2) methods are provided for disabling the force from being added to the
-# net force on each particle
+# A grid_force in hoomd reflects a GridForceCompute in c++. It is responsible
+# for all high-level management that happens behind the scenes for tracking
+# potentials applied to a solvent grid. 1) The instance of the c++ analyzer
+# itself is tracked and added to the system, and 2) methods are provided for
+#disabling the force from being added to the net force on each particle
 class _grid_force(hoomd.meta._metadata):
     # set default counter
     cur_id = 0;
@@ -57,24 +57,12 @@ class _grid_force(hoomd.meta._metadata):
         # base class constructor
         hoomd.meta._metadata.__init__(self)
 
-    ## \var enabled
-    # \internal
-    # \brief True if the force is enabled
-
-    ## \var cpp_force
-    # \internal
-    # \brief Stores the C++ side ForceCompute managed by this class
-
-    ## \var force_name
-    # \internal
-    # \brief The Force's name as it is assigned to the System
-
     ## \internal
     # \brief Checks that proper initialization has completed
     def check_initialization(self):
         # check that we have been initialized properly
         if self.cpp_force is None:
-            hoomd.context.msg.error('Bug in hoomd_script: cpp_force not set, please report\n');
+            hoomd.context.msg.error('Bug in solvent.grid_force: cpp_force not set, please report\n');
             raise RuntimeError();
 
     def disable(self, log=False):
@@ -100,13 +88,13 @@ class _grid_force(hoomd.meta._metadata):
         available for logging.
 
         """
-        hoomd.util.print_status_line();
-        self.check_initialization();
+        hoomd.util.print_status_line()
+        self.check_initialization()
 
         # check if we are already disabled
         if not self.enabled:
-            hoomd.context.msg.warning("Ignoring command to disable a force that is already disabled");
-            return;
+            hoomd.context.msg.warning("Ignoring command to disable a force that is already disabled")
+            return
 
         self.enabled = False;
         self.log = log;
@@ -117,7 +105,7 @@ class _grid_force(hoomd.meta._metadata):
             hoomd.context.current.grid_forces.remove(self)
 
     def enable(self):
-        R""" Enable the force.
+        R""" Enable the grid force.
 
         Examples::
 
@@ -125,52 +113,26 @@ class _grid_force(hoomd.meta._metadata):
 
         See :py:meth:`disable()`.
         """
-        hoomd.util.print_status_line();
-        self.check_initialization();
+        hoomd.util.print_status_line()
+        self.check_initialization()
 
         # check if we are already disabled
         if self.enabled:
-            hoomd.context.msg.warning("Ignoring command to enable a force that is already enabled");
-            return;
+            hoomd.context.msg.warning("Ignoring command to enable a force that is already enabled")
+            return
 
         # add the compute back to the system if it was removed
         if not self.log:
-            hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
+            hoomd.context.current.system.addCompute(self.cpp_force, self.force_name)
             hoomd.context.current.grid_forces.append(self)
 
-        self.enabled = True;
-        self.log = True;
-
-    def get_energy(self,group):
-        R""" Get the energy of a particle group.
-
-        Args:
-            group (:py:mod:`hoomd.group`): The particle group to query the energy for.
-
-        Returns:
-            The last computed energy for the members in the group.
-
-        Examples::
-
-            g = group.all()
-            energy = force.get_energy(g)
-        """
-        return self.cpp_force.calcEnergyGroup(group.cpp_group)
+        self.enabled = True
+        self.log = True
 
     ## \internal
     # \brief updates force coefficients
     def update_coeffs(self):
-        pass
-        raise RuntimeError("_force.update_coeffs should not be called");
-        # does nothing: this is for derived classes to implement
-
-    ## \internal
-    # \brief Returns the force data
-    #
-    def __forces(self):
-        return hoomd.data.force_data(self);
-
-    forces = property(__forces);
+        raise RuntimeError("_grid_force.update_coeffs should be implemented by subclasses");
 
     ## \internal
     # \brief Get metadata
