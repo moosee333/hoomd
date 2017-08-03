@@ -9,6 +9,8 @@
 #include "GridForceCompute.h"
 #include "AllGridPairPotentials.h"
 
+#include "LevelSetSolver.h"
+
 //! Create the python module
 /*! each class setup their own python exports in a function export_ClassName
     create the hoomd python module and define the exports here.
@@ -28,5 +30,6 @@ PYBIND11_PLUGIN(_solvent)
     export_GridPotentialPair<GridPotentialPairForceShiftedLJ>(m, "GridPotentialPairForceShiftedLJ");
     export_SnapshotGridData(m);
 
+    export_LevelSetSolver(m);
     return m.ptr();
     }

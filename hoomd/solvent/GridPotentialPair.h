@@ -143,7 +143,7 @@ GridPotentialPair<evaluator>::GridPotentialPair(std::shared_ptr<SystemDefinition
     //assert(this->m_solver);
     grid_data = std::shared_ptr<GridData>(new GridData(sysdef, 0.1)); // TESTING only
     // Initialize grid with zeros; MUST BE MOVED TO LEVELSETSOLVER
-    grid_data->setGrid(grid_data->energies & grid_data->forces);
+    grid_data->setGridValues(grid_data->energies & grid_data->forces);
 
     // create a default cell list if none was specified
     if (!m_cl)

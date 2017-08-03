@@ -102,7 +102,7 @@ class GridData
         /*! \param flags Bits indicating which grid to update (1 for energies, 2 for forces, 3 for both)
             \param value The value to set the grid to
          */
-        void setGrid(unsigned int flags = 0, double value = 0.0);
+        void setGridValues(unsigned int flags = 0, double value = 0.0);
 
         //! Return the grid spacing along every dimension
         Scalar3 getSpacing()
@@ -164,7 +164,7 @@ class GridData
 
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
         //std::shared_ptr<ExecutionConfiguration> m_exec_conf; //!< HOOMD execution configuration
-        std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data
+        std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data (required for box)
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
 
         Scalar m_sigma;     //!< The maximum grid spacing along each axis

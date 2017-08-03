@@ -57,7 +57,7 @@ void GridData::computeDimensions()
         << m_dim.x << "x" << m_dim.y << "y" << m_dim.z << "z" << std::endl;
     }
 
-void GridData::setGrid(unsigned int flags, double value)
+void GridData::setGridValues(unsigned int flags, double value)
     {
     // access the GPU arrays
     ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
@@ -151,10 +151,11 @@ void export_SnapshotGridData(py::module& m)
 
 void export_GridData(py::module& m)
     {
-    pybind11::class_<GridData, std::shared_ptr<GridData> >(m)
+    pybind11::class_<GridData, std::shared_ptr<GridData> >(m, "GridData")
         .def(py::init<std::shared_ptr<SystemDefinition>, Scalar>())
         .def("takeSnapshot_double", &GridData::takeSnapshot<double>)
-        .def("takeSnapshot_float", &GridData::takeSnapshot<float>);
+        .def("takeSnapshot_float", &GridData::takeSnapshot<float>)
+        .def("setSigma", &GridData::setSigma);
     }
 
 } // end namespace solvent

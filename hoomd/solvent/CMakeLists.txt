@@ -2,9 +2,13 @@
 
 set(_solvent_sources module-solvent.cc
     GridData.cc
+    LevelSetSolver.cc
     )
 
 set(_solvent_headers GridData.h
+    LevelSetSolver.h
+    AllGridPairPotentials.h
+    GridForceCompute.h
     )
 
 if (ENABLE_CUDA)
@@ -63,6 +67,7 @@ MACRO(copy_file file)
 ENDMACRO(copy_file)
 
 set(files __init__.py
+          grid.py
           grid_pair.py
           grid_force.py
     )

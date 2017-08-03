@@ -28,6 +28,5 @@ will not require any modifications.
 """
 
 # need to import all submodules defined in this directory
-from hoomd.solvent import grid_pair
-
-import hoomd
+from . import grid
+from . import grid_pair
