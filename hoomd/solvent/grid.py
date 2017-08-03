@@ -51,3 +51,36 @@ class grid(hoomd.meta._metadata):
         """
         self.sigma = sigma
         self.cpp_grid.setSigma(self.sigma)
+
+    def take_snapshot(self, dtype='float'):
+        R""" Take a snapshot of the current grid data.
+
+        Args:
+            dtype (str): Datatype for the snapshot numpy arrays. Must be either 'float' or 'double'.
+
+        Returns:
+            The snapshot object.
+
+        This functions returns a snapshot object. It contains the current
+        state of the grid, in particular providing access to the phi and fn
+        arrays.
+
+        Examples::
+
+            from hoomd.solvent import grid
+            grid = grid.grid(sigma = 0.01)
+            ...
+            snapshot = grid.take_snapshot()
+
+        """
+        hoomd.util.print_status_line();
+
+        # take the snapshot
+        if dtype == 'float':
+            cpp_snapshot = self.cpp_grid.takeSnapshot_float()
+        elif dtype == 'double':
+            cpp_snapshot = self.cpp_grid.takeSnapshot_double()
+        else:
+            raise ValueError("dtype must be float or double");
+
+        return cpp_snapshot
