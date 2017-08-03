@@ -16,6 +16,12 @@
 #include "DEM3DForceCompute.h"
 #include "DEM3DForceComputeGPU.h"
 
+#include "COMPForceCompute.h"
+#include "COMPForceComputeGPU.h"
+#include "hoomd/md/EvaluatorPairGauss.h"
+#include "hoomd/md/EvaluatorPairLJ.h"
+#include "hoomd/md/EvaluatorPairShiftedGauss.h"
+
 #include <iterator>
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
