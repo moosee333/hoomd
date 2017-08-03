@@ -30,3 +30,4 @@ will not require any modifications.
 # need to import all submodules defined in this directory
 from . import grid
 from . import grid_pair
+from . import solve

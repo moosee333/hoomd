@@ -70,6 +70,7 @@ set(files __init__.py
           grid.py
           grid_pair.py
           grid_force.py
+          solve.py
     )
 
 install(FILES ${files}

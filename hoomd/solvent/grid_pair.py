@@ -60,7 +60,7 @@ class coeff(object):
 
     Example::
 
-        my_coeffs = hoomd.md.bond.coeff();
+        my_coeffs = hoomd.md.bond.coeff()
         my_force.grid_coeff.set('polymer', k=330.0, r=0.84)
         my_force.grid_coeff.set('backbone', k=330.0, r=0.84)
 
@@ -72,7 +72,7 @@ class coeff(object):
     # The main task to be performed during initialization is just to init some variables
     # \param self Python required class instance variable
     def __init__(self):
-        self.values = {};
+        self.values = {}
         self.default_coeff = {}
 
     ## \internal
@@ -84,7 +84,7 @@ class coeff(object):
     # Some coefficients have reasonable default values and the user should not be burdened with typing them in
     # all the time. set_default_coeff() sets
     def set_default_coeff(self, name, value):
-        self.default_coeff[name] = value;
+        self.default_coeff[name] = value
 
     def set(self, type, **coeffs):
         R""" Sets parameters for bond types.
@@ -114,35 +114,35 @@ class coeff(object):
             parameters as they were previously set.
 
         """
-        hoomd.util.print_status_line();
+        hoomd.util.print_status_line()
 
         # listify the input
         if isinstance(type, str):
-            type = [type];
+            type = [type]
 
         for typei in type:
-            self.set_single(typei, coeffs);
+            self.set_single(typei, coeffs)
 
     ## \internal
     # \brief Sets a single parameter
     def set_single(self, type, coeffs):
-        type = str(type);
+        type = str(type)
 
         # create the type identifier if it hasn't been created yet
         if (not type in self.values):
-            self.values[type] = {};
+            self.values[type] = {}
 
         # update each of the values provided
         if not coeffs:
-            hoomd.context.msg.error("No coefficents specified\n");
+            hoomd.context.msg.error("No coefficents specified\n")
         for name, val in coeffs.items():
-            self.values[type][name] = val;
+            self.values[type][name] = val
 
         # set the default values
         for name, val in self.default_coeff.items():
             # don't override a coeff if it is already set
             if not name in self.values[type]:
-                self.values[type][name] = val;
+                self.values[type][name] = val
 
     ## \internal
     # \brief Verifies that all values are set
@@ -154,39 +154,39 @@ class coeff(object):
     def verify(self, required_coeffs):
         # first, check that the system has been initialized
         if not hoomd.init.is_initialized():
-            hoomd.context.msg.error("Cannot verify bond coefficients before initialization\n");
-            raise RuntimeError('Error verifying force coefficients');
+            hoomd.context.msg.error("Cannot verify bond coefficients before initialization\n")
+            raise RuntimeError('Error verifying force coefficients')
 
         # get a list of types from the particle data
-        ntypes = hoomd.context.current.system_definition.getParticleData().getNTypes();
-        type_list = [];
+        ntypes = hoomd.context.current.system_definition.getParticleData().getNTypes()
+        type_list = []
         for i in range(0,ntypes):
-            type_list.append(hoomd.context.current.system_definition.getParticleData().getNameByType(i));
+            type_list.append(hoomd.context.current.system_definition.getParticleData().getNameByType(i))
 
-        valid = True;
+        valid = True
         # loop over all possible types and verify that all required variables are set
         for i in range(0,ntypes):
-            type = type_list[i];
+            type = type_list[i]
 
             if type not in self.values.keys():
-                hoomd.context.msg.error("No coeffs found for particle type " + str(type) + "\n");
-                valid = False;
-                continue;
+                hoomd.context.msg.error("No coeffs found for particle type " + str(type) + "\n")
+                valid = False
+                continue
 
             # verify that all required values are set by counting the matches
             coeffs_missing = required_coeffs.copy()
             for coeff_name in self.values[type].keys():
                 if not coeff_name in required_coeffs:
                     hoomd.context.msg.notice(2, "Notice: Possible typo? Coefficient " + str(coeff_name) + " is specified for particle type " + str(type) + \
-                          ", but is not used by the force.\n");
+                          ", but is not used by the force.\n")
                 else:
                     coeffs_missing.remove(coeff_name)
 
             if coeffs_missing:
                 hoomd.context.msg.error("Particle type " + str(type) + " is missing the following coefficients: {}\n".format(", ".join(coeffs_missing)))
-                valid = False;
+                valid = False
 
-        return valid;
+        return valid
 
     ## \internal
     # \brief Gets the value of a single %bond %force coefficient
@@ -195,8 +195,8 @@ class coeff(object):
     # \param coeff_name Coefficient to get
     def get(self, type, coeff_name):
         if type not in self.values.keys():
-            hoomd.context.msg.error("Bug detected in grid_force.coeff. Please report\n");
-            raise RuntimeError("Error setting bond coeff");
+            hoomd.context.msg.error("Bug detected in grid_force.coeff. Please report\n")
+            raise RuntimeError("Error setting bond coeff")
 
         coeff_val = self.values[type].get(coeff_name)
 
@@ -226,18 +226,18 @@ class _grid_pair(grid_force._grid_force):
     #
     # Initializes the cpp_force to None.
     # If specified, assigns a name to the instance
-    # Assigns a name to the force in force_name;
+    # Assigns a name to the force in force_name
     def __init__(self, r_cut, nlist):
         # initialize the base class
-        super(_grid_pair, self).__init__();
+        super(_grid_pair, self).__init__()
 
         # convert r_cut False to a floating point type
         if r_cut is False:
             r_cut = -1.0
-        self.global_r_cut = r_cut;
+        self.global_r_cut = r_cut
 
         # setup the coefficient vector
-        self.grid_coeff = coeff();
+        self.grid_coeff = coeff()
         self.grid_coeff.set_default_coeff('r_cut', self.global_r_cut)
 
         # Save the nlist (for grid potentials we won't need the actual neighbors, but we will need the cell list)
@@ -247,8 +247,8 @@ class _grid_pair(grid_force._grid_force):
         coeff_list = self.required_coeffs + ['r_cut']
         # check that the force coefficients are valid
         if not self.grid_coeff.verify(coeff_list):
-           hoomd.context.msg.error("Not all force coefficients are set\n");
-           raise RuntimeError("Error updating force coefficients");
+           hoomd.context.msg.error("Not all force coefficients are set\n")
+           raise RuntimeError("Error updating force coefficients")
 
         # set all the params
         ntypes = hoomd.context.current.system_definition.getParticleData().getNTypes()
@@ -286,7 +286,7 @@ class _grid_pair(grid_force._grid_force):
             snapshot = grid.take_snapshot()
 
         """
-        hoomd.util.print_status_line();
+        hoomd.util.print_status_line()
 
         # take the snapshot
         if dtype == 'float':
@@ -294,7 +294,7 @@ class _grid_pair(grid_force._grid_force):
         elif dtype == 'double':
             cpp_snapshot = self.cpp_force.getSnapshot()
         else:
-            raise ValueError("dtype must be float or double");
+            raise ValueError("dtype must be float or double")
 
         return cpp_snapshot
 
@@ -336,35 +336,35 @@ class lj(_grid_pair):
         nl = nlist.cell()
         lj = grid_pair.lj(r_cut=3.0, nlist=nl)
         lj.pair_coeff.set('A', 'A', epsilon=1.0, sigma=1.0)
-        lj.pair_coeff.set('A', 'B', epsilon=2.0, sigma=1.0, alpha=0.5, r_cut=3.0, r_on=2.0);
-        lj.pair_coeff.set('B', 'B', epsilon=1.0, sigma=1.0, r_cut=2**(1.0/6.0), r_on=2.0);
+        lj.pair_coeff.set('A', 'B', epsilon=2.0, sigma=1.0, alpha=0.5, r_cut=3.0, r_on=2.0)
+        lj.pair_coeff.set('B', 'B', epsilon=1.0, sigma=1.0, r_cut=2**(1.0/6.0), r_on=2.0)
         lj.pair_coeff.set(['A', 'B'], ['C', 'D'], epsilon=1.5, sigma=2.0)
 
     """
     def __init__(self, r_cut, nlist):
-        hoomd.util.print_status_line();
+        hoomd.util.print_status_line()
 
         # initialize the base class
-        super(lj, self).__init__(r_cut, nlist);
+        super(lj, self).__init__(r_cut, nlist)
 
         # create the c++ mirror class
         if not hoomd.context.exec_conf.isCUDAEnabled():
-            self.cpp_force = _solvent.GridPotentialPairLJ(hoomd.context.current.system_definition, self.nlist.cpp_cl);
-            self.cpp_class = _solvent.GridPotentialPairLJ;
+            self.cpp_force = _solvent.GridPotentialPairLJ(hoomd.context.current.system_definition, self.nlist.cpp_cl)
+            self.cpp_class = _solvent.GridPotentialPairLJ
         else:
             raise NotImplementedError("Grid pair potentials are not yet GPU enabled!")
 
-        hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
+        hoomd.context.current.system.addCompute(self.cpp_force, self.force_name)
 
         # setup the coefficent options
-        self.required_coeffs = ['epsilon', 'sigma', 'alpha'];
-        self.grid_coeff.set_default_coeff('alpha', 1.0);
+        self.required_coeffs = ['epsilon', 'sigma', 'alpha']
+        self.grid_coeff.set_default_coeff('alpha', 1.0)
 
     def process_coeff(self, coeff):
-        epsilon = coeff['epsilon'];
-        sigma = coeff['sigma'];
-        alpha = coeff['alpha'];
+        epsilon = coeff['epsilon']
+        sigma = coeff['sigma']
+        alpha = coeff['alpha']
 
-        lj1 = 4.0 * epsilon * math.pow(sigma, 12.0);
-        lj2 = alpha * 4.0 * epsilon * math.pow(sigma, 6.0);
-        return _hoomd.make_scalar2(lj1, lj2);
+        lj1 = 4.0 * epsilon * math.pow(sigma, 12.0)
+        lj2 = alpha * 4.0 * epsilon * math.pow(sigma, 6.0)
+        return _hoomd.make_scalar2(lj1, lj2)

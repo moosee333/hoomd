@@ -3,7 +3,7 @@
 
 # Maintainer: vramasub / All Developers are free to add commands for new features
 
-R""" Apply forces to particles.
+R""" Level set solver for solvent potential
 """
 
 from hoomd import _hoomd
@@ -12,52 +12,41 @@ import sys
 import hoomd
 
 ## \internal
-# \brief Base class for grid forces
+# \brief Level set solver class 
 #
-# A grid_force in hoomd reflects a GridForceCompute in c++. It is responsible
-# for all high-level management that happens behind the scenes for tracking
-# potentials applied to a solvent grid. 1) The instance of the c++ analyzer
-# itself is tracked and added to the system, and 2) methods are provided for
-# disabling the force from being added to the net force on each particle.
-# Note that while the implementation here is similar to md._force, the use
-# of the context's grid_forces list instead of the forces list ensures that
-# these forces are not managed by the integrator; instead, they will be summed
-# by an instance of the solvent.ls_solver class, which represents a true
-# ForceCompute
-class _grid_force(hoomd.meta._metadata):
-    # set default counter
+# An instance of ls_solver reflect a LevelSetSolver in C++. It is responsible
+# for using grid information and applying the requisite algorithms for
+# computing the resulting solvent interface. Note that the underlying
+# implementation is as a ForceCompute, because ultimately the solver serves
+# to compute the interfacial forces on the system. As a result, the
+# implementation here closely parallels that of md._force
+class ls_solver(hoomd.meta._metadata):
+    # default counter
     cur_id = 0
 
-    ## \internal
-    # \brief Constructs the force
-    #
-    # \param name name of the force instance
-    #
-    # Initializes the cpp_analyzer to None.
-    # If specified, assigns a name to the instance
-    # Assigns a name to the force in force_name
-    def __init__(self, name=None):
-        # check if initialization has occured
+    def __init__(self, grid, name = None):
         if not hoomd.init.is_initialized():
-            hoomd.context.msg.error("Cannot create force before initialization\n")
-            raise RuntimeError('Error creating force')
+            hoomd.context.msg.error("Cannot create ls_solver before initialization\n")
+            raise RuntimeError('Error creating ls_solver')
+
+        # Instantiate underlying objects
+        self.grid = grid
+        self.cpp_force = _solvent.LevelSetSolver(hoomd.context.current.system_definition, self.grid.cpp_grid)
+        self.cpp_class = _solvent.LevelSetSolver
 
         # Allow force to store a name.  Used for discombobulation in the logger
         if name is None:
             self.name = ""
         else:
-            self.name="_" + name
+            self.name = "_" + name
 
-        self.cpp_force = None
+        obj_id = ls_solver.cur_id
+        ls_solver.cur_id += 1
 
-        # increment the id counter
-        id = _grid_force.cur_id
-        _grid_force.cur_id += 1
-
-        self.force_name = "grid_force%d" % (id)
+        self.force_name = "grid_force%d" % (obj_id)
         self.enabled = True
         self.log = True
-        hoomd.context.current.grid_forces.append(self)
+        hoomd.context.current.forces.append(self)
 
         # base class constructor
         hoomd.meta._metadata.__init__(self)
@@ -98,7 +87,7 @@ class _grid_force(hoomd.meta._metadata):
 
         # check if we are already disabled
         if not self.enabled:
-            hoomd.context.msg.warning("Ignoring command to disable a grid force that is already disabled")
+            hoomd.context.msg.warning("Ignoring command to disable a force that is already disabled")
             return
 
         self.enabled = False
@@ -107,7 +96,7 @@ class _grid_force(hoomd.meta._metadata):
         # remove the compute from the system if it is not going to be logged
         if not log:
             hoomd.context.current.system.removeCompute(self.cpp_force, self.force_name)
-            hoomd.context.current.grid_forces.remove(self)
+            hoomd.context.current.forces.remove(self)
 
     def enable(self):
         R""" Enable the grid force.
@@ -123,21 +112,24 @@ class _grid_force(hoomd.meta._metadata):
 
         # check if we are already disabled
         if self.enabled:
-            hoomd.context.msg.warning("Ignoring command to enable a grid force that is already enabled")
+            hoomd.context.msg.warning("Ignoring command to enable a force that is already enabled")
             return
 
         # add the compute back to the system if it was removed
         if not self.log:
             hoomd.context.current.system.addCompute(self.cpp_force, self.force_name)
-            hoomd.context.current.grid_forces.append(self)
+            hoomd.context.current.forces.append(self)
 
         self.enabled = True
         self.log = True
 
     ## \internal
     # \brief updates force coefficients
+    # This is a dummy function required to allow the level set solver to coexist
+    # with other HOOMD forces; the underlying grid forces have coefficients, but
+    # the solver itself does not
     def update_coeffs(self):
-        raise RuntimeError("_grid_force.update_coeffs should be implemented by subclasses")
+        pass
 
     ## \internal
     # \brief Get metadata
