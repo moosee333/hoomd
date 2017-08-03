@@ -10,6 +10,7 @@
 #include "PotentialPair.h"
 #include "EvaluatorPairLJ.h"
 #include "EvaluatorPairGauss.h"
+#include "EvaluatorPairShiftedGauss.h"
 #include "EvaluatorPairYukawa.h"
 #include "EvaluatorPairEwald.h"
 #include "EvaluatorPairSLJ.h"

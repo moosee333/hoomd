@@ -20,6 +20,7 @@
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
 void export_params(pybind11::module& m);
+void export_composite(pybind11::module& m);
 
 void export_NF_WCA_2D(pybind11::module& m);
 void export_NF_WCA_3D(pybind11::module& m);
@@ -35,6 +36,8 @@ PYBIND11_PLUGIN(_dem)
     export_NF_WCA_3D(m);
     export_NF_SWCA_2D(m);
     export_NF_SWCA_3D(m);
+
+    export_composite(m);
 
     return m.ptr();
     }
@@ -52,4 +55,19 @@ void export_params(pybind11::module& m)
         .def(pybind11::init<Scalar, NoFriction<Scalar> >());
     pybind11::class_<SWCA>(m, "SWCAPotential")
         .def(pybind11::init<Scalar, NoFriction<Scalar> >());
+    }
+
+void export_composite(pybind11::module& m)
+    {
+    export_COMPForceCompute<COMPForceCompute<EvaluatorPairLJ> >(m, "COMPPairLJ");
+    export_COMPForceCompute<COMPForceCompute<EvaluatorPairGauss> >(m, "COMPPairGauss");
+    export_COMPForceCompute<COMPForceCompute<EvaluatorPairShiftedGauss> >(m, "COMPPairShiftedGauss");
+#ifdef ENABLE_CUDA
+    export_COMPForceComputeGPU<COMPForceComputeGPU<EvaluatorPairLJ>,
+                               COMPForceCompute<EvaluatorPairLJ> >(m, "COMPPairLJGPU");
+    export_COMPForceComputeGPU<COMPForceComputeGPU<EvaluatorPairGauss>,
+                               COMPForceCompute<EvaluatorPairGauss> >(m, "COMPPairGaussGPU");
+    export_COMPForceComputeGPU<COMPForceComputeGPU<EvaluatorPairShiftedGauss>,
+                               COMPForceCompute<EvaluatorPairShiftedGauss> >(m, "COMPPairShiftedGaussGPU");
+#endif
     }

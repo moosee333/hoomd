@@ -212,6 +212,7 @@ PYBIND11_PLUGIN(_md)
     export_PotentialPair<PotentialPairLJ>(m, "PotentialPairLJ");
     export_PotentialPair<PotentialPairLJ1208>(m, "PotentialPairLJ1208");
     export_PotentialPair<PotentialPairGauss>(m, "PotentialPairGauss");
+    export_PotentialPair<PotentialPairShiftedGauss>(m, "PotentialPairShiftedGauss")
     export_PotentialPair<PotentialPairSLJ>(m, "PotentialPairSLJ");
     export_PotentialPair<PotentialPairYukawa>(m, "PotentialPairYukawa");
     export_PotentialPair<PotentialPairEwald>(m, "PotentialPairEwald");

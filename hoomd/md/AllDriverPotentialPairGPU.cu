@@ -10,6 +10,7 @@
 
 #include "EvaluatorPairLJ.h"
 #include "EvaluatorPairGauss.h"
+#include "EvaluatorPairShiftedGauss.h"
 #include "EvaluatorPairSLJ.h"
 #include "EvaluatorPairYukawa.h"
 #include "EvaluatorPairMorse.h"
@@ -41,6 +42,20 @@ cudaError_t gpu_compute_gauss_forces(const pair_args_t& pair_args,
                                                        d_params);
     }
 
+cudaError_t gpu_compute_gauss_forces(const pair_args_t& pair_args,
+                                     const Scalar2 *d_params)
+    {
+    return gpu_compute_pair_forces<EvaluatorPairGauss>(pair_args,
+                                                       d_params);
+    }
+
+cudaError_t gpu_compute_shiftedgauss_forces(const pair_args_t& pair_args,
+                                     const Scalar2 *d_params)
+    {
+    return gpu_compute_pair_forces<EvaluatorPairShiftedGauss>(pair_args,
+                                                       d_params);
+    }
+
 cudaError_t gpu_compute_slj_forces(const pair_args_t& pair_args,
                                    const Scalar2 *d_params)
     {
@@ -54,7 +69,6 @@ cudaError_t gpu_compute_yukawa_forces(const pair_args_t& pair_args,
     return gpu_compute_pair_forces<EvaluatorPairYukawa>(pair_args,
                                                         d_params);
     }
-
 
 cudaError_t gpu_compute_morse_forces(const pair_args_t& pair_args,
                                       const Scalar4 *d_params)
