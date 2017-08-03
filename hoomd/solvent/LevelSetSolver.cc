@@ -4,7 +4,6 @@
 // Maintainer: vramasub
 
 #include "LevelSetSolver.h"
-#include "hoomd/extern/num_util.h"
 
 using namespace std;
 namespace py = pybind11;
@@ -23,30 +22,38 @@ LevelSetSolver::LevelSetSolver(std::shared_ptr<SystemDefinition> sysdef, std::sh
       m_pdata(sysdef->getParticleData()),
       m_exec_conf(m_pdata->getExecConf()),
       m_grid(grid)
-    { }
+    {
+    // Zero out grid values initially
+    m_grid->setGridValues(m_grid->energies & m_grid->forces);
+    }
 
 //! Destructor
 LevelSetSolver::~LevelSetSolver()
     { }
 
-void LevelSetSolver::initializeGrid()
+/*! \param gfc GridForceCompute to add
+*/
+void LevelSetSolver::addGridForceCompute(std::shared_ptr<GridForceCompute> gfc)
     {
-    if (m_need_init_grid)
-        {
-        unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
-        GPUArray<Scalar> phi(n_elements, m_exec_conf);
-        m_phi.swap(phi);
-
-        GPUArray<Scalar> fn(n_elements, m_exec_conf);
-        m_fn.swap(fn);
-        m_need_init_grid = false;
-        }
+    assert(gfc);
+    m_grid_forces.push_back(gfc);
     }
 
 void export_LevelSetSolver(py::module& m)
     {
-    pybind11::class_<LevelSetSolver, std::shared_ptr<LevelSetSolver> >(m, "LevelSetSolver")
-        .def(py::init<std::shared_ptr<SystemDefinition>, std::shared_ptr<GridData>>());
+    pybind11::class_<LevelSetSolver, std::shared_ptr<LevelSetSolver> >(m, "LevelSetSolver", pybind11::base<ForceCompute>())
+        .def(py::init<std::shared_ptr<SystemDefinition>, std::shared_ptr<GridData>>())
+        .def("addGridForceCompute", &LevelSetSolver::addGridForceCompute)
+    ;
+    }
+
+void LevelSetSolver::computeForces(unsigned int timestep)
+    {
+    // We need to precompute the energy for each of grid forces before performing any level set operations
+	for(std::vector<std::shared_ptr<GridForceCompute> >::iterator grid_force = m_grid_forces.begin(); grid_force != m_grid_forces.end(); ++grid_force) 
+        {
+		(*grid_force)->precomputeEnergyTerms(timestep);
+        }
     }
 
 } // end namespace solvent

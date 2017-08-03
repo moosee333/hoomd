@@ -275,29 +275,6 @@ class _grid_pair(grid_force._grid_force):
         data['grid_coeff'] = self.grid_coeff
         return data
 
-    def take_snapshot(self, dtype='float'):
-        R""" Take a snapshot of the current grid
-
-        Returns:
-            The snapshot object.
-
-        Examples::
-
-            snapshot = grid.take_snapshot()
-
-        """
-        hoomd.util.print_status_line()
-
-        # take the snapshot
-        if dtype == 'float':
-            cpp_snapshot = self.cpp_force.getSnapshot()
-        elif dtype == 'double':
-            cpp_snapshot = self.cpp_force.getSnapshot()
-        else:
-            raise ValueError("dtype must be float or double")
-
-        return cpp_snapshot
-
 class lj(_grid_pair):
     R""" Lennard-Jones grid pair potential.
 

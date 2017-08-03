@@ -51,6 +51,9 @@ class GridForceCompute : public ForceCompute
         */
         virtual void compute(unsigned int timestep)
             {
+            // fails if no grid set yet
+            assert(m_grid);
+
             // skip if we shouldn't compute this step
             if (!m_particles_sorted && !shouldCompute(timestep))
                 return;
@@ -59,11 +62,25 @@ class GridForceCompute : public ForceCompute
             m_particles_sorted = false;
             }
 
+        //! Set the grid to be used
+        /*! \param grid Shared pointer to grid object
+        */
+        void setGrid(std::shared_ptr<GridData> grid)
+            {
+            m_grid = grid;
+            }
+
         //! Abstract method that performs the computation of forces from the grid
         /*! \param timestep Current time step
             Derived classes will implement this method to calculate their results
         */
         virtual void computeGridForces(unsigned int timestep){}
+
+        //! Abstract method that interpolates the energy term onto the grid
+        /*! \param timestep Current time step
+            Derived classes will implement this method to calculate their results
+        */
+        virtual void precomputeEnergyTerms(unsigned int timestep){}
 
         //! Not implemented
         virtual void computeForces(unsigned int timestep)
@@ -72,11 +89,7 @@ class GridForceCompute : public ForceCompute
             }
 
     protected:
-        //! Abstract method that interpolates the energy term onto the grid
-        /*! \param timestep Current time step
-            Derived classes will implement this method to calculate their results
-        */
-        virtual void precomputeEnergyTerms(unsigned int timestep){}
+        std::shared_ptr<GridData> m_grid; //!< The grid on which we compute
 
     };
 
@@ -85,13 +98,7 @@ class GridForceCompute : public ForceCompute
 /*! \param name Name of the class in the exported python module
     \tparam T Class type to export. \b Must be an instantiated GridPotentialPair class template.
 */
-void export_GridForceCompute(pybind11::module& m, const std::string& name)
-    {
-    pybind11::class_<GridForceCompute, std::shared_ptr<GridForceCompute> >(m, name.c_str(), pybind11::base<ForceCompute>())
-        .def(pybind11::init< std::shared_ptr<SystemDefinition>>())
-        .def("compute", &GridForceCompute::compute)
-    ;
-    }
+void export_GridForceCompute(pybind11::module& m, const std::string& name);
 
 } // end namespace
 #endif // __GRID_FORCE_COMPUTE_H__

@@ -136,6 +136,9 @@ class SimulationContext(object):
         ## Global variable tracking the last _integrator set
         self.integrator = None;
 
+        ## Global variable tracking the last solver set
+        self.solver = None;
+
         ## Global variable tracking all neighbor lists that have been created
         self.neighbor_lists = []
 

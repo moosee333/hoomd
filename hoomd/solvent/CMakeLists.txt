@@ -3,6 +3,7 @@
 set(_solvent_sources module-solvent.cc
     GridData.cc
     LevelSetSolver.cc
+    GridForceCompute.cc
     )
 
 set(_solvent_headers GridData.h

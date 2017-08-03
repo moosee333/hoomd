@@ -23,6 +23,7 @@
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
 #include "GridData.h"
+#include "GridForceCompute.h"
 #include "hoomd/ForceCompute.h"
 
 #ifndef __LEVEL_SET_SOLVER_H__
@@ -54,46 +55,27 @@ class LevelSetSolver : public ForceCompute
         //! Destructor
         virtual ~LevelSetSolver();
 
-        //! Return the grid spacing along every dimension
-        Scalar3 getSpacing()
-            {
-            initializeGrid(); // initialize grid if necessary
+        //! Add a GridForceCompute to the list
+        virtual void addGridForceCompute(std::shared_ptr<GridForceCompute> gfc);
 
-            Scalar3 L = m_pdata->getBox().getL();
-            return make_scalar3(L.x/m_dim.x, L.y/m_dim.y, L.z/m_dim.z);
-            }
+        //! Actually compute the forces
+        /*! In this class, the forces are computed by simply summing the forces due
+            to each of the GridForceComputes that are added to the class
+         */
+        virtual void computeForces(unsigned int timestep);
 
-        //! Set the maximum grid spacing
-        void setSigma(Scalar sigma)
+        //! Return the grid instance associated with this class
+        std::shared_ptr<GridData> getGridData() const
             {
-            m_sigma = sigma;
-            m_need_init_grid = true;
-            }
-
-        //! Get the current sigma
-        Scalar getSigma() const
-            {
-            return m_sigma;
+            return m_grid;
             }
 
     protected:
-        //! Helper function to re-initialize the grid when necessary
-        void initializeGrid();
-
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
 
-        Scalar m_sigma;     //!< The maximum grid spacing along each axis
-        uint3 m_dim;         //!< The current grid dimensions
-
-        bool m_need_init_grid;  //!< True if we need to re-initialize the grid
-
-        GPUArray<Scalar> m_phi; //!< The phi grid, of dimensions m_dim
-        GPUArray<Scalar> m_fn;  //!< The velocity grid
-
-        Index3D m_indexer;      //!< The grid indexer
-
+        std::vector< std::shared_ptr<GridForceCompute> > m_grid_forces;    //!< List of all the grid force computes
         std::shared_ptr<GridData> m_grid; //!< The grid data object
 
     };

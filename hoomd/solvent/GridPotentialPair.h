@@ -24,12 +24,6 @@
 #ifndef __GRID_POTENTIAL_PAIR_H__
 #define __GRID_POTENTIAL_PAIR_H__
 
-/*
- * Notes
- * Temporarily commenting out m_solver entirely, just instantiating a GridData object directly (just to get compilation to work)
- *
- */
-
 namespace solvent
 {
 
@@ -43,9 +37,6 @@ class GridPotentialPair : public GridForceCompute
         //! Constructor
         GridPotentialPair(std::shared_ptr<SystemDefinition>,
             std::shared_ptr<CellList> cl);
-        //NOTE: TEMPORARILY COMMENTED OUT
-            //std::shared_ptr<CellList> cl,
-            //std::shared_ptr<LevelSetSolver> solver);
 
         //! Destructor
         virtual ~GridPotentialPair();
@@ -86,16 +77,8 @@ class GridPotentialPair : public GridForceCompute
             m_shift_mode = mode;
             }
         
-        //TEST FUNCTION ONLY: Return grid object
-        std::shared_ptr<SnapshotGridData<float> > getSnapshot() const 
-            {
-            return grid_data->takeSnapshot<float>();
-            }
-
     protected:
         std::shared_ptr<CellList> m_cl; //!< The solute cell list
-        //std::shared_ptr<LevelSetSolver> m_solver; //!< The level set solver
-        std::shared_ptr<GridData> grid_data; //TESTING ONLY
 
         energyShiftMode m_shift_mode;               //!< Store the mode with which to handle the energy shift at r_cut
 
@@ -131,19 +114,11 @@ class GridPotentialPair : public GridForceCompute
 template<class evaluator>
 GridPotentialPair<evaluator>::GridPotentialPair(std::shared_ptr<SystemDefinition> sysdef,
     std::shared_ptr<CellList> cl)
-//NOTE: TEMPORARY removal of LevelSetSolver
-    //std::shared_ptr<CellList> cl,
-    //std::shared_ptr<LevelSetSolver> solver)
-    //: GridForceCompute<evaluator>(sysdef), m_cl(cl), m_solver(solver),
     : GridForceCompute(sysdef), m_cl(cl),
       m_shift_mode(no_shift),
       m_radius(1), m_diameter_shift(false), m_d(1.0), m_q(0.0)
     {
     assert(this->m_sysdef);
-    //assert(this->m_solver);
-    grid_data = std::shared_ptr<GridData>(new GridData(sysdef, 0.1)); // TESTING only
-    // Initialize grid with zeros; MUST BE MOVED TO LEVELSETSOLVER
-    grid_data->setGridValues(grid_data->energies & grid_data->forces);
 
     // create a default cell list if none was specified
     if (!m_cl)
@@ -171,9 +146,7 @@ GridPotentialPair<evaluator>::GridPotentialPair(std::shared_ptr<SystemDefinition
 //! Destructor
 template<class evaluator>
 GridPotentialPair<evaluator>::~GridPotentialPair()
-    {
-    grid_data.reset();
-    }
+    { } 
 
 //! Set the parameters for a single type
 template<class evaluator>
@@ -243,14 +216,11 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
     // begin by updating the CellList
     m_cl->compute(timestep);
 
-    //NOTE: JUST FOR DEBUGGING COMPILATION BEFORE WRITING LEVELSETSOLVER
-    //auto grid_data = this->m_solver->getGridData();
-
     // get the velocity grid to precompute the energy on
-    ArrayHandle<Scalar> h_fn(grid_data->getVelocityGrid(), access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_phi(grid_data->getPhiGrid(), access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_fn(this->m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_phi(this->m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
 
-    Index3D gi = grid_data->getIndexer();
+    Index3D gi = this->m_grid->getIndexer();
 
     // get the particle data arrays
     ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
@@ -269,7 +239,7 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
     ArrayHandle<Scalar4> h_force(this->m_force, access_location::host, access_mode::read);
 
     // dimensions must be floating types to generate fractional coordinates
-    uint3 dim_int = grid_data->getDimensions();
+    uint3 dim_int = this->m_grid->getDimensions();
     Scalar3 dim = make_scalar3(dim_int.x, dim_int.y, dim_int.z);
 
     uint3 cell_dim = m_cl->getDim();
@@ -419,11 +389,10 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
 template < class T > void export_GridPotentialPair(pybind11::module& m, const std::string& name)
     {
     pybind11::class_<T, std::shared_ptr<T> > potentialpair(m, name.c_str(), pybind11::base<GridForceCompute>());
-    potentialpair.def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<CellList>>())
+    potentialpair.def(pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<CellList> >())
         .def("setParams", &T::setParams)
         .def("setRcut", &T::setRcut)
         .def("setShiftMode", &T::setShiftMode)
-        .def("getSnapshot", &T::getSnapshot)
     ;
     }
 

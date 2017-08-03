@@ -10,6 +10,7 @@ from hoomd import _hoomd
 from hoomd.solvent import _solvent
 import sys
 import hoomd
+from hoomd.md import force
 
 ## \internal
 # \brief Level set solver class 
@@ -20,36 +21,31 @@ import hoomd
 # implementation is as a ForceCompute, because ultimately the solver serves
 # to compute the interfacial forces on the system. As a result, the
 # implementation here closely parallels that of md._force
-class ls_solver(hoomd.meta._metadata):
-    # default counter
-    cur_id = 0
-
+class ls_solver(force._force):
     def __init__(self, grid, name = None):
-        if not hoomd.init.is_initialized():
-            hoomd.context.msg.error("Cannot create ls_solver before initialization\n")
+        super(ls_solver, self).__init__(name)
+
+        if hoomd.context.current.solver is not None:
+            hoomd.context.msg.error("Cannot have multiple ls_solver instances\n")
             raise RuntimeError('Error creating ls_solver')
 
-        # Instantiate underlying objects
+        # Solver tracks its own grid
         self.grid = grid
-        self.cpp_force = _solvent.LevelSetSolver(hoomd.context.current.system_definition, self.grid.cpp_grid)
-        self.cpp_class = _solvent.LevelSetSolver
 
-        # Allow force to store a name.  Used for discombobulation in the logger
-        if name is None:
-            self.name = ""
+        # create the c++ mirror class
+        if not hoomd.context.exec_conf.isCUDAEnabled():
+            self.cpp_force = _solvent.LevelSetSolver(hoomd.context.current.system_definition, self.grid.cpp_grid)
+            self.cpp_class = _solvent.LevelSetSolver
         else:
-            self.name = "_" + name
+            raise NotImplementedError("Grid pair potentials are not yet GPU enabled!")
 
-        obj_id = ls_solver.cur_id
-        ls_solver.cur_id += 1
-
-        self.force_name = "grid_force%d" % (obj_id)
-        self.enabled = True
-        self.log = True
-        hoomd.context.current.forces.append(self)
-
-        # base class constructor
-        hoomd.meta._metadata.__init__(self)
+    ## \internal
+    # \brief Destructor for cleanup
+    # In order to keep track of the current solver, it is saved to the 
+    # context, so we must delete a solver when it is no longer in use
+    # by also unsetting the context variable
+    def __del__(self):
+        hoomd.context.current.solver = None
 
     ## \internal
     # \brief Checks that proper initialization has completed
@@ -125,11 +121,22 @@ class ls_solver(hoomd.meta._metadata):
 
     ## \internal
     # \brief updates force coefficients
-    # This is a dummy function required to allow the level set solver to coexist
-    # with other HOOMD forces; the underlying grid forces have coefficients, but
-    # the solver itself does not
+    # Unlike normal forces, which actually contain coefficients, this class does
+    # not have its own coefficients. Instead, it calls update coeffs for each of
+    # the grid force computes that are currently registered with the system
     def update_coeffs(self):
-        pass
+        # set the grid forces (note that we do not add these as ForceComputes)
+        for f in hoomd.context.current.grid_forces:
+            if f.cpp_force is None:
+                hoomd.context.msg.error('Bug in hoomd.integrate: cpp_force not set, please report\n')
+                raise RuntimeError('Error updating grid forces')
+
+            if f.log or f.enabled:
+                f.update_coeffs()
+
+            if f.enabled:
+                f.cpp_force.setGrid(self.grid.cpp_grid) # All existing grid forces get computed on the current grid
+                self.cpp_force.addGridForceCompute(f.cpp_force)
 
     ## \internal
     # \brief Get metadata
