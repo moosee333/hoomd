@@ -5,12 +5,16 @@ set(_dem_sources module.cc)
 set(_dem_cpu_sources DEM2DForce_NF_SWCA.cc
                      DEM2DForce_NF_WCA.cc
                      DEM3DForce_NF_SWCA.cc
-                     DEM3DForce_NF_WCA.cc)
+                     DEM3DForce_NF_WCA.cc
+                     COMPForceCompute.cc)
 
 set(_dem_cu_sources_raw DEM2DForce_NF_SWCA.cu
                         DEM2DForce_NF_WCA.cu
                         DEM3DForce_NF_SWCA.cu
-                        DEM3DForce_NF_WCA.cu)
+                        DEM3DForce_NF_WCA.cu
+                        COMPForceGauss.cu
+                        COMPForceLJ.cu
+                        COMPForceShiftedGauss.cu)
 
 set(_dem_headers
     atomics.cuh
@@ -25,6 +29,9 @@ set(_dem_headers
     SWCAPotential.h
     VectorMath.h
     WCAPotential.h
+    COMPForceCompute.h
+    COMPForceComputeGPU.cuh
+    COMPForceComputeGPU.h
     )
 
 foreach(src ${_dem_cpu_sources})

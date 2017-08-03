@@ -1,7 +1,7 @@
 
 #include "hoomd/hoomd_config.h"
 #include "hoomd/ForceCompute.h"
-#include "hoomd/NeighborList.h"
+#include "hoomd/md/NeighborList.h"
 #include "hoomd/VectorMath.h"
 
 #include <stdexcept>
@@ -11,7 +11,9 @@
 //#include <boost/python.hpp>
 //#include <boost/shared_ptr.hpp>
 
+#include <iterator>
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
+#include <memory>
 
 #ifdef NVCC
 #error This header cannot be compiled by nvcc
@@ -42,7 +44,7 @@ public:
     virtual void setRcut(unsigned int typ1, unsigned int typ2, Scalar rcut);
     //! Set ron for a single type pair
     virtual void setRon(unsigned int typ1, unsigned int typ2, Scalar ron);
-    virtual void setVertices(unsigned int typ, const boost::python::list &verts);
+    virtual void setVertices(unsigned int typ, const pybind11::list &verts);
 
     //! Returns a list of log quantities this compute calculates
     virtual std::vector<std::string> getProvidedLogQuantities();

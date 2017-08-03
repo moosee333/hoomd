@@ -66,7 +66,7 @@ void COMPForceComputeGPU<Potential>::rebuildGeometry()
 
 template<typename Potential>
 void COMPForceComputeGPU<Potential>::setVertices(unsigned int typ,
-                                                 const boost::python::list &verts)
+                                                 const pybind11::list &verts)
 {
     COMPForceCompute<Potential>::setVertices(typ, verts);
 
@@ -171,16 +171,27 @@ void COMPForceComputeGPU<Potential>::computeForces(unsigned int timestep)
     if (this->m_prof) this->m_prof->pop(this->exec_conf);
 }
 
+// Modified to work with pybind11
 //! Export this pair potential to python
 /*! \param name Name of the class in the exported python module
   \tparam T Class type to export. \b Must be an instantiated COMPForceComputeGPU class template.
   \tparam Base Base class of \a T. \b Must be COMPForceCompute<Potential> with the same Potential as used in \a T.
 */
+/*
 template <class T, class Base> void export_COMPForceComputeGPU(const std::string& name)
 {
     boost::python::class_<T, std::shared_ptr<T>, boost::python::bases<Base>, boost::noncopyable >
         (name.c_str(), boost::python::init< std::shared_ptr<SystemDefinition>,
          std::shared_ptr<NeighborList>, const std::string& >())
+        .def("setTuningParam",&T::setTuningParam)
+        ;
+}
+*/
+
+template <class T, class Base> void export_COMPForceComputeGPU(py::module& m, const std::string& name)
+{
+    pybind::class_<T, std::shared_ptr<T>, Base, std::shared_ptr<Base> >(m, name.c_str(), py::base<ForceCompute>())
+        .def(py::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<NeighborList>, const std::string& >())
         .def("setTuningParam",&T::setTuningParam)
         ;
 }

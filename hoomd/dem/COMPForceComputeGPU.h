@@ -1,7 +1,7 @@
 
 #include "COMPForceCompute.h"
 #include "COMPForceComputeGPU.cuh"
-#include "hoomd/PotentialPairGPU.cuh"
+#include "hoomd/md/PotentialPairGPU.cuh"
 
 #ifndef __COMPFORCECOMPUTEGPU_H__
 #define __COMPFORCECOMPUTEGPU_H__
@@ -17,7 +17,7 @@ public:
     //! Destructor
     virtual ~COMPForceComputeGPU() {}
 
-    virtual void setVertices(unsigned int typ, const boost::python::list &verts);
+    virtual void setVertices(unsigned int typ, const pybind11::list &verts);
 
     //! Set the number of threads per particle to execute on the GPU
     /*! \param threads_per_particl Number of threads per particle
@@ -56,7 +56,8 @@ public:
 #endif
 
 protected:
-    boost::scoped_ptr<Autotuner> m_tuner; //!< Autotuner for block size and threads per particle
+    //boost::scoped_ptr<Autotuner> m_tuner; //!< Autotuner for block size and threads per particle
+    pybind11::scoped_ptr<Autotuner> m_tuner; //!< Autotuner for block size and threads per particle
     unsigned int m_param;                 //!< Kernel tuning parameter
     bool m_precompute;                    //!< True if we are pre-computing the force
     bool m_has_been_precomputed;          //!< True if the forces have been precomputed
