@@ -77,6 +77,7 @@ will not require any modifications. **Maintainer:** Matthew Spellings.
 from hoomd.dem import pair
 from hoomd.dem import params
 from hoomd.dem import utils
+from hoomd.dem import patches
 
 # add DEM article citation notice
 import hoomd
