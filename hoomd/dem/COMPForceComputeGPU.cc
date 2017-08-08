@@ -1,4 +1,6 @@
 
+#ifdef ENABLE_CUDA
+
 template<typename Potential>
 COMPForceComputeGPU<Potential>::COMPForceComputeGPU(std::shared_ptr<SystemDefinition> sysdef,
                                                     std::shared_ptr<NeighborList> nlist,
@@ -195,3 +197,5 @@ template <class T, class Base> void export_COMPForceComputeGPU(py::module& m, co
         .def("setTuningParam",&T::setTuningParam)
         ;
 }
+
+#endif // ENABLE_CUDA

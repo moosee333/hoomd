@@ -1,5 +1,6 @@
 
-#include "COMPForceCompute.h"
+//#include "COMPForceCompute.h"
+#include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
 namespace py = pybind11;
 
@@ -51,7 +52,7 @@ void COMPForceCompute<Potential>::setVertices(
 
     for(size_t i(0); i < (size_t) len(vertices); i++)
     {
-        const py::tuple pyPoint = py::cast<tuple>(vertices[i]);
+        const py::tuple pyPoint = py::cast<py::tuple>(vertices[i]);
 
         if(py::len(pyPoint) != 3)
             throw std::runtime_error("Non-3D vertex given for COMPForceCompute::setVertices");
@@ -461,7 +462,7 @@ template<typename T> void export_COMPForceCompute(py::module& m, const std::stri
         .def("setShiftMode", &T::setShiftMode)
         ;
 
-    py::enum_<typename T::energyShiftMode>("energyShiftMode")
+    py::enum_<typename T::energyShiftMode>(m, "energyShiftMode")
         .value("no_shift", T::no_shift)
         .value("shift", T::shift)
         ;

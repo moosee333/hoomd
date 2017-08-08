@@ -1,5 +1,4 @@
 
-#include "hoomd/hoomd_config.h"
 #include "hoomd/md/PotentialPairGPU.cuh"
 #include "hoomd/VectorMath.h"
 #include "GeometryArgs.h"

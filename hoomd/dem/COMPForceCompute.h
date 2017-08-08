@@ -1,5 +1,4 @@
 
-#include "hoomd/hoomd_config.h"
 #include "hoomd/ForceCompute.h"
 #include "hoomd/md/NeighborList.h"
 #include "hoomd/VectorMath.h"

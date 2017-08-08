@@ -46,6 +46,8 @@
 typedef PotentialPair<EvaluatorPairLJ> PotentialPairLJ;
 //! Pair potential force compute for gaussian forces
 typedef PotentialPair<EvaluatorPairGauss> PotentialPairGauss;
+//! Pair potential force compute for shifted gaussian forces
+typedef PotentialPair<EvaluatorPairShiftedGauss> PotentialPairShiftedGauss;
 //! Pair potential force compute for slj forces
 typedef PotentialPair<EvaluatorPairSLJ> PotentialPairSLJ;
 //! Pair potential force compute for yukawa forces

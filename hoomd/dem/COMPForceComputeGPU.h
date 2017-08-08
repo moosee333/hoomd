@@ -1,10 +1,14 @@
 
+#include "hoomd/GPUArray.h"
 #include "COMPForceCompute.h"
-#include "COMPForceComputeGPU.cuh"
-#include "hoomd/md/PotentialPairGPU.cuh"
+#include "GeometryArgs.h"
+//#include "COMPForceComputeGPU.cuh"
+/* #include "hoomd/md/PotentialPairGPU.cuh" */
 
 #ifndef __COMPFORCECOMPUTEGPU_H__
 #define __COMPFORCECOMPUTEGPU_H__
+
+#ifdef ENABLE_CUDA
 
 template<typename Potential>
 class COMPForceComputeGPU: public COMPForceCompute<Potential>
@@ -56,8 +60,7 @@ public:
 #endif
 
 protected:
-    //boost::scoped_ptr<Autotuner> m_tuner; //!< Autotuner for block size and threads per particle
-    pybind11::scoped_ptr<Autotuner> m_tuner; //!< Autotuner for block size and threads per particle
+    std::unique_ptr<Autotuner> m_tuner; //!< Autotuner for block size and threads per particle
     unsigned int m_param;                 //!< Kernel tuning parameter
     bool m_precompute;                    //!< True if we are pre-computing the force
     bool m_has_been_precomputed;          //!< True if the forces have been precomputed
@@ -75,4 +78,6 @@ private:
 
 #include "COMPForceComputeGPU.cc"
 
-#endif
+#endif // ENABLE_CUDA
+
+#endif // __COMPFORCECOMPUTEGPU_H__

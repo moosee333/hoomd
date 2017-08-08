@@ -56,7 +56,7 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <string>
 #endif
 
-#include "HOOMDMath.h"
+#include "hoomd/HOOMDMath.h"
 
 /*! \file EvaluatorPairShiftedGauss.h
     \brief Defines the pair evaluator class for Gaussian potentials

@@ -1,6 +1,4 @@
 
-#include "hoomd/hoomd_config.h"
-
 #ifndef __GEOMETRYARGS_H__
 #define __GEOMETRYARGS_H__
 
