@@ -132,6 +132,13 @@ HOSTDEVICE inline bool operator== (const uint2 &a, const uint2 &b)
     }
 
 
+HOSTDEVICE inline bool operator== (const uint3 &a, const uint3 &b)
+    {
+    return (a.x == b.x &&
+            a.y == b.y &&
+            a.z == b.z);
+    }
+
 //! Comparison operator needed for export of std::vector<Scalar3>
 HOSTDEVICE inline bool operator== (const Scalar3 &a, const Scalar3 &b)
     {
