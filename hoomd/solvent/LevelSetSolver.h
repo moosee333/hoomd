@@ -12,6 +12,7 @@
 #endif
 
 #include <memory>
+#include <csignal>
 
 #include "hoomd/ExecutionConfiguration.h"
 #include "hoomd/SystemDefinition.h"
@@ -25,6 +26,7 @@
 #include "GridData.h"
 #include "GridForceCompute.h"
 #include "hoomd/ForceCompute.h"
+#include "SparseFieldUpdater.h"
 
 #ifndef __LEVEL_SET_SOLVER_H__
 #define __LEVEL_SET_SOLVER_H__
@@ -74,6 +76,7 @@ class LevelSetSolver : public ForceCompute
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
+        std::shared_ptr<SparseFieldUpdater> m_updater; //!< Maintains the sparse field on the grid
 
         std::vector< std::shared_ptr<GridForceCompute> > m_grid_forces;    //!< List of all the grid force computes
         std::shared_ptr<GridData> m_grid; //!< The grid data object

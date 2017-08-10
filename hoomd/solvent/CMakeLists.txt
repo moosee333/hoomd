@@ -4,12 +4,14 @@ set(_solvent_sources module-solvent.cc
     GridData.cc
     LevelSetSolver.cc
     GridForceCompute.cc
+    SparseFieldUpdater.cc
     )
 
 set(_solvent_headers GridData.h
     LevelSetSolver.h
     AllGridPairPotentials.h
     GridForceCompute.h
+    SparseFieldUpdater.h
     )
 
 if (ENABLE_CUDA)

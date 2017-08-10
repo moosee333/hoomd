@@ -4,6 +4,7 @@
 // Maintainer: vramasub
 
 #include "LevelSetSolver.h"
+#include "SparseFieldUpdater.h"
 
 using namespace std;
 namespace py = pybind11;
@@ -21,6 +22,7 @@ LevelSetSolver::LevelSetSolver(std::shared_ptr<SystemDefinition> sysdef, std::sh
       m_sysdef(sysdef), 
       m_pdata(sysdef->getParticleData()),
       m_exec_conf(m_pdata->getExecConf()),
+      m_updater(new SparseFieldUpdater(m_sysdef, grid)),
       m_grid(grid)
     {
     // Zero out grid values initially
@@ -52,8 +54,13 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     // We need to precompute the energy for each of grid forces before performing any level set operations
 	for(std::vector<std::shared_ptr<GridForceCompute> >::iterator grid_force = m_grid_forces.begin(); grid_force != m_grid_forces.end(); ++grid_force) 
         {
-		(*grid_force)->precomputeEnergyTerms(timestep);
+		// (*grid_force)->setGrid(m_grid); // Happens on the python side.
+		(*grid_force)->compute(timestep);
         }
+
+    // Utilize the SparseFieldUpdater to keep track of the level sets of interest
+    m_updater->clearField();
+    m_updater->computeInitialField();
     }
 
 } // end namespace solvent
