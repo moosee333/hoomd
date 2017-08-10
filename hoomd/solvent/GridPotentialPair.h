@@ -41,18 +41,6 @@ class GridPotentialPair : public GridForceCompute
         //! Destructor
         virtual ~GridPotentialPair();
 
-        //! Pre-compute the energy terms on the grid
-        virtual void precomputeEnergyTerms(unsigned int timestep)
-            {
-            computeGrid(timestep, false);
-            }
-
-        //! Actually compute the forces
-        virtual void computeGridForces(unsigned int timestep)
-            {
-            computeGrid(timestep, true);
-            }
-
         //! Set the parameters for a single type
         virtual void setParams(unsigned int type, const param_type& param);
 
@@ -78,6 +66,18 @@ class GridPotentialPair : public GridForceCompute
             }
         
     protected:
+        //! Pre-compute the energy terms on the grid
+        virtual void precomputeEnergyTerms(unsigned int timestep)
+            {
+            computeGrid(timestep, false);
+            }
+
+        //! Actually compute the forces
+        virtual void computeGridForces(unsigned int timestep)
+            {
+            computeGrid(timestep, true);
+            }
+
         std::shared_ptr<CellList> m_cl; //!< The solute cell list
 
         energyShiftMode m_shift_mode;               //!< Store the mode with which to handle the energy shift at r_cut
