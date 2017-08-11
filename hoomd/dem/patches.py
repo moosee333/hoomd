@@ -124,7 +124,7 @@ class lj(_compositeBase, hoomd.md.pair.lj):
         # tell the base class how we operate
 
         # initialize the base class
-        hoomd.md.pair.pair.__init__(self, r_cut, name);
+        hoomd.md.pair.pair.__init__(self, r_cut, nlist, name);
 
         self._get_point_max_rcut = hoomd.md.pair.lj.get_max_rcut
 
@@ -209,7 +209,7 @@ class gauss(_compositeBase, hoomd.md.pair.gauss):
         # tell the base class how we operate
 
         # initialize the base class
-        hoomd.md.pair.pair.__init__(self, r_cut, name);
+        hoomd.md.pair.pair.__init__(self, r_cut, nlist, name);
 
         self._get_point_max_rcut = hoomd.md.pair.gauss.get_max_rcut
 
@@ -293,7 +293,7 @@ class shifted_gauss(_compositeBase, hoomd.md.pair.pair):
         # tell the base class how we operate
 
         # initialize the base class
-        hoomd.md.pair.pair.__init__(self, r_cut, name);
+        hoomd.md.pair.pair.__init__(self, r_cut, nlist, name);
 
         self._get_point_max_rcut = hoomd.md.pair.gauss.get_max_rcut
 
