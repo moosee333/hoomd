@@ -6,6 +6,7 @@ import hoomd.md.nlist as nl;
 from math import sqrt;
 
 from hoomd.dem import _dem;
+from hoomd import util
 
 import math;
 import sys;
