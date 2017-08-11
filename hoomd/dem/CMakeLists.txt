@@ -98,6 +98,7 @@ set(files   __init__.py
             pair.py
             params.py
             utils.py
+	    patches.py
     )
 
 install(FILES ${files}
