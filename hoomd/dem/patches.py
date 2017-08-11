@@ -329,7 +329,7 @@ class shifted_gauss(_compositeBase, hoomd.md.pair.pair):
         if originalRcut is None:
             return None
 
-        r_cut = nlist.rcut()
+        r_cut = nl.rcut()
         r_cut.merge(originalRcut)
 
         for (i, j) in originalRcut.values:
