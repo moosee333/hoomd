@@ -2,7 +2,7 @@
 //#include "hoomd/hoomd_config.h"
 #include "../COMPForceComputeGPU.cuh"
 #include "../GeometryArgs.h"
-#include "../EvaluatorPairShiftedGauss.h"
+#include "hoomd/md/EvaluatorPairShiftedGauss.h"
 
 typedef EvaluatorPairShiftedGauss Potential;
 

@@ -2,7 +2,7 @@
 //#include "hoomd/hoomd_config.h"
 #include "../COMPForceComputeGPU.cuh"
 #include "../GeometryArgs.h"
-#include "EvaluatorPairLJ.h"
+#include "hoomd/md/EvaluatorPairLJ.h"
 
 typedef EvaluatorPairLJ Potential;
 

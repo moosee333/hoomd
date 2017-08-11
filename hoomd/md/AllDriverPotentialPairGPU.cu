@@ -42,15 +42,8 @@ cudaError_t gpu_compute_gauss_forces(const pair_args_t& pair_args,
                                                        d_params);
     }
 
-cudaError_t gpu_compute_gauss_forces(const pair_args_t& pair_args,
-                                     const Scalar2 *d_params)
-    {
-    return gpu_compute_pair_forces<EvaluatorPairGauss>(pair_args,
-                                                       d_params);
-    }
-
 cudaError_t gpu_compute_shiftedgauss_forces(const pair_args_t& pair_args,
-                                     const Scalar2 *d_params)
+                                     const Scalar3 *d_params)
     {
     return gpu_compute_pair_forces<EvaluatorPairShiftedGauss>(pair_args,
                                                        d_params);

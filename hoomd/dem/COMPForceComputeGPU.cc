@@ -1,6 +1,8 @@
 
 #ifdef ENABLE_CUDA
 
+#include "COMPForceComputeGPU.cuh"
+
 template<typename Potential>
 COMPForceComputeGPU<Potential>::COMPForceComputeGPU(std::shared_ptr<SystemDefinition> sysdef,
                                                     std::shared_ptr<NeighborList> nlist,
@@ -31,10 +33,6 @@ COMPForceComputeGPU<Potential>::COMPForceComputeGPU(std::shared_ptr<SystemDefini
     }
 
     m_tuner.reset(new Autotuner(valid_params, 5, 100000, "comp_" + Potential::getName(), this->m_exec_conf));
-#ifdef ENABLE_MPI
-    // synchronize autotuner results across ranks
-    m_tuner->setSync(this->m_pdata->getDomainDecomposition());
-#endif
 
     m_precompute = false;
     m_has_been_precomputed = false;
@@ -192,7 +190,7 @@ template <class T, class Base> void export_COMPForceComputeGPU(const std::string
 
 template <class T, class Base> void export_COMPForceComputeGPU(py::module& m, const std::string& name)
 {
-    pybind::class_<T, std::shared_ptr<T>, Base, std::shared_ptr<Base> >(m, name.c_str(), py::base<ForceCompute>())
+    py::class_<T, std::shared_ptr<T> >(m, name.c_str(), py::base<ForceCompute>())
         .def(py::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<NeighborList>, const std::string& >())
         .def("setTuningParam",&T::setTuningParam)
         ;
