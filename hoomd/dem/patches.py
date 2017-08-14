@@ -2,6 +2,7 @@
 import hoomd;
 import hoomd.md;
 import hoomd.md.nlist as nl;
+from hoomd import _hoomd;
 
 from math import sqrt;
 
@@ -319,7 +320,7 @@ class shifted_gauss(_compositeBase, hoomd.md.pair.pair):
         sigma = coeff['sigma'];
         r_0 = coeff['r_0'];
 
-        return hoomd.make_scalar3(epsilon, sigma, r_0);
+        return _hoomd.make_scalar3(epsilon, sigma, r_0);
 
     get_shifted_rcut = shiftRcut(hoomd.md.pair.pair.get_rcut)
 
