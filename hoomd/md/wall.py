@@ -672,7 +672,6 @@ class wallpotential(external._external_force):
     def update_wallobject(self):
         self.cpp_force.updateFieldPy(self.field_coeff)
 
-
 class lj(wallpotential):
     R""" Lennard-Jones wall potential.
 

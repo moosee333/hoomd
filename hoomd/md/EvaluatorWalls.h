@@ -19,7 +19,6 @@
 #include "hoomd/BoxDim.h"
 #include "WallData.h"
 
-
 #undef DEVICE
 #ifdef NVCC
 #define DEVICE __device__
@@ -41,7 +40,6 @@ struct wall_type
     CylinderWall     Cylinders[MAX_N_CWALLS];
     PlaneWall        Planes[MAX_N_PWALLS];
     };
-
 
 //! Applys a wall force from all walls in the field parameter
 /*! \ingroup computes
@@ -151,8 +149,6 @@ class EvaluatorWalls
                 }
             }
         #endif
-
-
 
         DEVICE inline void callEvaluator(Scalar3& F, Scalar& energy, const Scalar3 dr)
             {
@@ -374,8 +370,6 @@ class EvaluatorWalls
         param_type            m_params;
         Scalar                di;
         Scalar                qi;
-
-
     };
 
 template < class evaluator >

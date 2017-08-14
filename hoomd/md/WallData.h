@@ -233,12 +233,10 @@ inline void getTransMatrix(const BoxDim& old_box, const BoxDim& new_box, Scalar 
     A[1] = a_new.x*inv12 + b_new.x*inv22 + c_new.x*inv32;
     A[2] = a_new.x*inv13 + b_new.x*inv23 + c_new.x*inv33;
 
-
     //Second Row of elements
     A[3] = a_new.y*inv11 + b_new.y*inv21 + c_new.y*inv31;
     A[4] = a_new.y*inv12 + b_new.y*inv22 + c_new.y*inv32;
     A[5] = a_new.y*inv13 + b_new.y*inv23 + c_new.y*inv33;
-
 
     //Third Row of elements
     A[6] = a_new.z*inv11 + b_new.z*inv21 + c_new.z*inv31;

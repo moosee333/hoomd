@@ -16,7 +16,6 @@
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/BoxDim.h"
 
-
 /*! \file EvaluatorExternalPeriodic.h
     \brief Defines the external potential evaluator to induce a periodic ordered phase
 */

@@ -81,7 +81,6 @@ class PotentialExternal: public ForceCompute
             }
    };
 
-
 /*! Constructor
     \param sysdef system definition
     \param log_suffix Name given to this instance of the force
@@ -150,10 +149,6 @@ Scalar PotentialExternal<evaluator>::getLogValue(const std::string& quantity, un
 /*! Computes the specified constraint forces
     \param timestep Current timestep
 */
-
-
-
-
 template<class evaluator>
 void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
     {
