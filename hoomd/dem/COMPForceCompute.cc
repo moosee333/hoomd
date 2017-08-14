@@ -453,7 +453,9 @@ template<typename T> void export_COMPForceCompute(const std::string& name)
 */
 template<typename T> void export_COMPForceCompute(py::module& m, const std::string& name)
     {
-    py::class_<T, std::shared_ptr<T> >(m, name.c_str(), py::base<ForceCompute>())
+    py::class_<T, std::shared_ptr<T> > comp_pair(m, name.c_str(), py::base<ForceCompute>());
+
+    comp_pair
         .def(py::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<NeighborList>, const std::string& >())
         .def("setParams", &T::setParams)
         .def("setVertices", &T::setVertices)
@@ -462,7 +464,7 @@ template<typename T> void export_COMPForceCompute(py::module& m, const std::stri
         .def("setShiftMode", &T::setShiftMode)
         ;
 
-    py::enum_<typename T::energyShiftMode>(m, "energyShiftMode")
+    py::enum_<typename T::energyShiftMode>(comp_pair, "energyShiftMode")
         .value("no_shift", T::no_shift)
         .value("shift", T::shift)
         ;
