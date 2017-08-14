@@ -104,14 +104,11 @@ class EvaluatorWalls
 
         DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box  )
             {
-			//!Rescale and rotate geometries
-			//Transformation Matrix
+            //!Rescale and rotate geometries
+            //Transformation Matrix
             Scalar trans_matrix[9];
             //Calculate Transformation Matrix
             getTransMatrix(old_box, new_box, trans_matrix);
-
-
-
             //Rescale through wall planes
             if (field.numPlanes > 0)
                 {
@@ -122,20 +119,17 @@ class EvaluatorWalls
                     rescaleWall(field.Planes[k], trans_matrix, tranf_inv_trans);
                     }
                 }
-
             //Rescale through wall spheres
             for(unsigned int k = 0; k < field.numSpheres; k++)
                 {
                 rescaleWall(field.Spheres[k], trans_matrix);
                 }
-
             //Rescale through wall cylinders
             for(unsigned int k = 0; k < field.numCylinders; k++)
                 {
                 rescaleWall(field.Cylinders[k], trans_matrix);
                 }
             }
-
 
         #ifndef NVCC
         //! Update the python copy of the field

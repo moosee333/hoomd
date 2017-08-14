@@ -54,7 +54,7 @@ class PotentialExternal: public ForceCompute
         GPUArray<param_type>    m_params;       //!< Array of per-type parameters
         std::string             m_log_name;     //!< Cached log name
         GPUArray<field_type>    m_field;        //!< Array of field parameters
-		bool                    m_rescale;      //!< Flag to rescale the system for box changes
+        bool                    m_rescale;      //!< Flag to rescale the system for box changes
         BoxDim                  m_old_box;      //!< Stores previous BoxDim, used for rescaling
 
         //! Actually compute the forces
@@ -74,8 +74,8 @@ class PotentialExternal: public ForceCompute
             m_params.swap(params);
             }
 
-		//!Box Change update
-		virtual void slotBoxChange()
+        //!Box Change update
+        virtual void slotBoxChange()
             {
             m_rescale= true;
             }

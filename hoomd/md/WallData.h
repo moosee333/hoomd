@@ -274,7 +274,7 @@ inline void getInvMatrix(Scalar *A, Scalar *B)
 //!Rescale a Plane Wall using transformation matrix and transpose inverse of the transformation matrix
 inline void rescaleWall(PlaneWall& wall, const Scalar *transMatrix, const Scalar *invTransMatrix)
     {
-	//rescale origin
+    //rescale origin
     Scalar3 new_origin;
     new_origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
     new_origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
@@ -296,7 +296,7 @@ inline void rescaleWall(SphereWall& wall, const Scalar *transMatrix)
     //TODO: NPT_walls, consider if any of this would work with a 2D system
     Scalar k = (transMatrix[0] + transMatrix[4] + transMatrix[8])/3.0;
 
-	//rescale origin
+    //rescale origin
     wall.origin.x *= k;
     wall.origin.y *= k;
     wall.origin.z *= k;
@@ -317,34 +317,6 @@ inline void rescaleWall(CylinderWall& wall, const Scalar *transMatrix)
 
     // TODO: NPT_walls, decide if we can skew or not... seems like not, if confirmed can remove adative 0s in origin calc
 
-    // //rescale axis
-    // Scalar3 new_axis;
-    // new_axis.x = wall.axis.x * transMatrix[0] + wall.axis.y * transMatrix[1] +wall.axis.z * transMatrix[2];
-    // new_axis.y = wall.axis.x * transMatrix[3] + wall.axis.y * transMatrix[4] +wall.axis.z * transMatrix[5];
-    // new_axis.z = wall.axis.x * transMatrix[6] + wall.axis.y * transMatrix[7] +wall.axis.z * transMatrix[8];
-    // wall.axis = new_axis;
-    //
-    // //recalculate the rotation quaternion
-    // Scalar3 zNorm = make_scalar3(0.0,0.0,1.0);
-    // Scalar normVec=fast::sqrt(dot(wall.axis,wall.axis));
-    // Scalar realPart=normVec + dot(zNorm,wall.axis);
-    // Scalar3 w;
-    // if (realPart < Scalar(1.0e-6) * normVec)
-    //     {
-    //         realPart=Scalar(0.0);
-    //         w=make_scalar3(0.0, -1.0, 0.0);
-    //     }
-    // else
-    //     {
-    //         w=make_scalar3(zNorm.y * wall.axis.z - zNorm.z * wall.axis.y,
-    //                        zNorm.z * wall.axis.x - zNorm.x * wall.axis.z,
-    //                        zNorm.x * wall.axis.y - zNorm.y * wall.axis.x);
-    //         realPart=Scalar(realPart);
-    //     }
-    //     wall.quatAxisToZRot=quat<Scalar>(realPart,vec3<Scalar>(w));
-    //     Scalar norm=fast::rsqrt(norm2(wall.quatAxisToZRot));
-    //     wall.quatAxisToZRot=norm*wall.quatAxisToZRot;
-
     //figure out which directions are coupled and scale r
     Scalar k;
     if (transMatrix[0]==transMatrix[4])
@@ -354,11 +326,13 @@ inline void rescaleWall(CylinderWall& wall, const Scalar *transMatrix)
     else if (transMatrix[4]==transMatrix[8])
         {k=transMatrix[4];}
     else
-        {//you messed up? make it crash
+        {
+        //you messed up? make it crash...
         // TODO: NPT_walls, think this through fully, remove or change for numerical precision problems
-        k=0;}
+        k=0;
+        }
+    //rescale r
     wall.r *= k;
-
     };
 
 #endif

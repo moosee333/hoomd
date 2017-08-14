@@ -90,10 +90,10 @@ class EvaluatorExternalPeriodic
         */
         DEVICE void setCharge(Scalar qi) { }
 
-		// External Periodic does not need rescale
-		DEVICE static bool needsFieldRescale(){return false;}
+        // External Periodic does not need rescale
+        DEVICE static bool needsFieldRescale(){return false;}
 
-		DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box){}
+        DEVICE static void rescaleField(field_type& field, const BoxDim& new_box, const BoxDim& old_box){}
 
         #ifndef NVCC
         static void updateFieldPy(field_type& field, pybind11::object field_py){}
