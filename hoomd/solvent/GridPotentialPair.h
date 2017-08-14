@@ -246,6 +246,7 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
 
     Index3D ci = m_cl->getCellIndexer();
     Index2D cli = m_cl->getCellListIndexer();
+    Scalar3 cell_width = m_cl->getCellWidth();
 
     const BoxDim& box = this->m_pdata->getBox();
 
@@ -266,17 +267,16 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
                 // Lower left and upper right corners of grid cell in fractional coordinates
                 vec3<Scalar> f_lower(ix/dim.x, iy/dim.y, iz/dim.z);
                 vec3<Scalar> f_upper((ix+1)/dim.x, (iy+1)/dim.y, (iz+1)/dim.z);
-
                 vec3<Scalar> center((ix+0.5)/dim.x, (iy+0.5)/dim.y, (iz+0.5)/dim.z);
 
                 // find the intersecting cells
                 int3 lower_idx, upper_idx;
-                lower_idx.x = floor(f_lower.x*cell_dim.x-m_radius);
-                lower_idx.y = floor(f_lower.y*cell_dim.y-m_radius);
-                lower_idx.z = floor(f_lower.z*cell_dim.z-m_radius);
-                upper_idx.x = ceil(f_upper.x*cell_dim.x)+m_radius;
-                upper_idx.y = ceil(f_upper.y*cell_dim.y)+m_radius;
-                upper_idx.z = ceil(f_upper.z*cell_dim.z)+m_radius;
+                lower_idx.x = floor(f_lower.x*cell_dim.x - m_radius/cell_width.x);
+                lower_idx.y = floor(f_lower.y*cell_dim.y - m_radius/cell_width.y);
+                lower_idx.z = floor(f_lower.z*cell_dim.z - m_radius/cell_width.z);
+                upper_idx.x = ceil(f_upper.x*cell_dim.x + m_radius/cell_width.x);
+                upper_idx.y = ceil(f_upper.y*cell_dim.y + m_radius/cell_width.y);
+                upper_idx.z = ceil(f_upper.z*cell_dim.z + m_radius/cell_width.z);
 
                 for (int jxt = lower_idx.x; jxt < upper_idx.x; ++jxt)
                     {
@@ -314,7 +314,8 @@ void GridPotentialPair< evaluator >::computeGrid(unsigned int timestep, bool for
                                 unsigned int idx_i = h_cell_idx.data[cli(cur_ptl, cell_idx)];
 
                                 Scalar4 postype = h_postype.data[idx_i];
-                                vec3<Scalar> dr = vec3<Scalar>(postype) - center;
+                                vec3<Scalar> real_center = vec3<Scalar>(box.makeCoordinates(vec_to_scalar3(center)));
+                                vec3<Scalar> dr = vec3<Scalar>(postype) - real_center;
                                 unsigned int cur_type = __scalar_as_int(postype.w);
 
                                 // shift into minimum image

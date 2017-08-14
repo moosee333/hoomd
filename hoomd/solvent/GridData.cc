@@ -45,11 +45,7 @@ void GridData::computeDimensions()
         }
 
     Scalar3 L = box.getL();
-    //printf("The box dimensions are %f, %f, %f", L.x, L.y, L.z);
-    //printf("m_sigma = %f", m_sigma);
-    //printf("L.x/m_sigma = %f", ceil(L.x/m_sigma));
     m_dim = make_uint3(ceil(L.x/m_sigma),ceil(L.y/m_sigma),ceil(L.x/m_sigma));
-    //printf("The dimensions are %d, %d, %d", m_dim.x, m_dim.y, m_dim.z);
 
     m_indexer = Index3D(m_dim.x, m_dim.y, m_dim.z);
 
