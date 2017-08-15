@@ -39,6 +39,15 @@ class _compositeBase:
         self.nlist.subscribe(self.get_rcut);
         self.nlist.update_rcut();
 
+    def _initialize_types(self):
+        ntypes = hoomd.context.current.system_definition.getParticleData().getNTypes();
+        type_list = [];
+        for i in range(0,ntypes):
+            type_list.append(hoomd.context.current.system_definition.getParticleData().getNameByType(i));
+
+        for name in type_list:
+            self.setVertices(name, [[0, 0, 0]])
+
     def get_max_rcut(self):
         return (2*math.sqrt(max(max(x*x + y*y + z*z for (x, y, z) in shape) if shape else 0. for shape in self._shapes)) +
                 self._get_point_max_rcut(self))
@@ -140,6 +149,8 @@ class lj(_compositeBase, hoomd.md.pair.lj):
             self.nlist.cpp_nlist.setStorageMode(hoomd.NeighborList.storageMode.full);
             self.cpp_force = _dem.COMPPairLJGPU(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairLJGPU;
+        
+        self._initialize_types();
 
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
@@ -225,6 +236,8 @@ class gauss(_compositeBase, hoomd.md.pair.gauss):
             self.nlist.cpp_nlist.setStorageMode(hoomd.NeighborList.storageMode.full);
             self.cpp_force = _dem.COMPPairGaussGPU(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairGaussGPU;
+        
+        self._initialize_types();
 
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
@@ -309,6 +322,8 @@ class shifted_gauss(_compositeBase, hoomd.md.pair.pair):
             self.nlist.cpp_nlist.setStorageMode(hoomd.NeighborList.storageMode.full);
             self.cpp_force = _dem.COMPPairShiftedGaussGPU(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairShiftedGaussGPU;
+
+        self._initialize_types();
 
         hoomd.context.current.system.addCompute(self.cpp_force, self.force_name);
 
