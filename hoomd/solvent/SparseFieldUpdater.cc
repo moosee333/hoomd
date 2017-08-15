@@ -47,6 +47,30 @@ void SparseFieldUpdater::computeInitialField()
         initializeLayer(i);
         initializeLayer(-i);
         }
+
+    /*//DEBUGGING CODE
+    for (int i = -m_num_layers; i <= m_num_layers; i++)
+    {
+        std::vector<uint3> tmp = m_layers[get_layer_index(i)];
+        printf("The number of items in layer %d is %zu\n", i, tmp.size());
+        printf("The number of unique items in layer %d is %zu\n", i, std::distance(tmp.begin(), std::unique(tmp.begin(), tmp.end())));
+    }
+    ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+    Index3D indexer = this->m_grid->getIndexer();
+    this->m_grid->setGridValues(GridData::energies, -10);
+
+    for (int j = -m_num_layers; j <= m_num_layers; j++)
+        {
+        std::vector<uint3> L = m_layers[get_layer_index(j)];
+        unsigned int len_L = L.size();
+        for (unsigned int i = 0; i < len_L; i++)
+            {
+            unsigned int x = L[i].x;
+            unsigned int y = L[i].y;
+            unsigned int z = L[i].z;
+            h_phi.data[indexer(x, y, z)] = j;
+            }
+        }*/
     }
 
 void SparseFieldUpdater::initializeLz()
@@ -117,7 +141,6 @@ void SparseFieldUpdater::initializeLz()
                 }
             }
         } // End loop over grid
-
     }
 
 void SparseFieldUpdater::initializeL1()
@@ -139,11 +162,10 @@ void SparseFieldUpdater::initializeL1()
     int prev_layer = 0;
     unsigned int prev_layer_index = get_layer_index(prev_layer);
 
-    // Loop over previous layer and check all neighbors for addition
+    // Loop over previous layer
     for (std::vector<uint3>::iterator L_prev_element = m_layers[prev_layer_index].begin(); 
             L_prev_element != m_layers[prev_layer_index].end(); L_prev_element++)
         {
-        // Loop over each neighbor
         unsigned int i = L_prev_element->x;
         unsigned int j = L_prev_element->y;
         unsigned int k = L_prev_element->z;
@@ -158,7 +180,7 @@ void SparseFieldUpdater::initializeL1()
             make_int3(i, j, k-1),
             }; // The neighboring cells
 
-        // Check all directions for changes in the sign of the energy (h_fn)
+        // Loop over each neighbor
         for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
             {
             int3 neighbor_idx = neighbor_indices[idx];
@@ -180,17 +202,25 @@ void SparseFieldUpdater::initializeL1()
                 z -= dims.z;
             unsigned int neighbor_cell = indexer(x, y, z);
 
-            // Make sure that this cell is not in any of the previous layers. Have to test the "previous" two layers
+            // Make sure that this cell is not already in L0, Lp1, or Ln1
             // NOTE: Is there a way to make this efficient? Possibly better data structure than list?
             // May need to use some combination of vector and hashmap to get good add and removal speed
+            auto test_pos = std::find(std::begin(m_layers[pos_layer_index]), std::end(m_layers[pos_layer_index]), make_uint3(x, y, z));
+            if (test_pos != std::end(m_layers[pos_layer_index]))
+                continue;
+
+            auto test_neg = std::find(std::begin(m_layers[neg_layer_index]), std::end(m_layers[neg_layer_index]), make_uint3(x, y, z));
+            if (test_neg != std::end(m_layers[neg_layer_index]))
+                continue;
+
             auto test_prev = std::find(std::begin(m_layers[prev_layer_index]), std::end(m_layers[prev_layer_index]), make_uint3(x, y, z));
-            if (test_prev != std::end(m_layers[prev_layer_index])) 
-                break;
+            if (test_prev != std::end(m_layers[prev_layer_index]))
+                continue;
 
             if (h_fn.data[neighbor_cell] > 0)
-                m_layers[pos_layer_index].push_back(make_uint3(x, y, z));
-            else
                 m_layers[neg_layer_index].push_back(make_uint3(x, y, z));
+            else
+                m_layers[pos_layer_index].push_back(make_uint3(x, y, z));
             } // End loop over neighbors
         } // End m_layers[prev_layer_index] loop
     }
@@ -259,13 +289,17 @@ void SparseFieldUpdater::initializeLayer(int layer)
             // Make sure that this cell is not in any of the previous layers. Have to test the "previous" two layers
             // NOTE: Is there a way to make this efficient? Possibly better data structure than list?
             // May need to use some combination of vector and hashmap to get good add and removal speed
+            auto test_cur = std::find(std::begin(m_layers[cur_layer_index]), std::end(m_layers[cur_layer_index]), make_uint3(x, y, z));
+            if (test_cur != std::end(m_layers[cur_layer_index]))
+                continue;
+
             auto test_prev = std::find(std::begin(m_layers[prev_layer_index]), std::end(m_layers[prev_layer_index]), make_uint3(x, y, z));
-            if (test_prev != std::end(m_layers[prev_layer_index])) 
-                break;
+            if (test_prev != std::end(m_layers[prev_layer_index]))
+                continue;
 
             auto test_second = std::find(std::begin(m_layers[second_layer_index]), std::end(m_layers[second_layer_index]), make_uint3(x, y, z));
-            if (test_second != std::end(m_layers[second_layer_index])) 
-                break;
+            if (test_second != std::end(m_layers[second_layer_index]))
+                continue;
 
             m_layers[cur_layer_index].push_back(make_uint3(x, y, z));
             } // End loop over neighbors

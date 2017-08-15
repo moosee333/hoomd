@@ -80,7 +80,8 @@ class SparseFieldUpdater
         void initializeLz();
 
         //! Initialize Ln1 and Lp1
-        // Must be a special case as well to account for the sign
+        // Must be a special case from initializeLayer because the positive and negative first layers
+        // are initialized simultaneously with signs determined by the values of the energy.
         void initializeL1();
 
         //! Initialize the ith layer
@@ -103,7 +104,7 @@ class SparseFieldUpdater
 		template <class Real> 
 		inline int sgn(Real num) 
             {
-			return (Real(0) < num) - (num < Real(0));
+			return (num > Real(0)) - (num < Real(0));
             }
 
 		//! Index positive and negative layer numbers into the std::vector of layers
