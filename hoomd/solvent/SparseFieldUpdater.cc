@@ -306,11 +306,4 @@ void SparseFieldUpdater::initializeLayer(int layer)
         } // End m_layers[prev_layer_index] loop
     }
 
-void export_SparseFieldUpdater(py::module& m)
-    {
-    pybind11::class_<SparseFieldUpdater, std::shared_ptr<SparseFieldUpdater> >(m, "SparseFieldUpdater")
-        .def(py::init<std::shared_ptr<SystemDefinition>, std::shared_ptr<GridData>, Scalar>())
-    ;
-    }
-
 } // end namespace solvent

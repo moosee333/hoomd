@@ -14,8 +14,6 @@
 #endif
 
 #include <memory>
-#include <map>
-#include <algorithm>
 
 #include "hoomd/ExecutionConfiguration.h"
 #include "hoomd/SystemDefinition.h"
@@ -23,7 +21,6 @@
 
 #include "GridData.h"
 
-#include <hoomd/extern/nano-signal-slot/nano_signal_slot.hpp>
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 
 #ifndef __SPARSE_FIELD_UPDATER_H__
@@ -114,9 +111,6 @@ class SparseFieldUpdater
             }
 
     };
-
-//! Export SparseFieldUpdater to python
-void export_SparseFieldUpdater(pybind11::module& m);
 
 }
 #endif //__SPARSE_FIELD_UPDATER_H__
