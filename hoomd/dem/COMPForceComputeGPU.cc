@@ -190,7 +190,7 @@ template <class T, class Base> void export_COMPForceComputeGPU(const std::string
 
 template <class T, class Base> void export_COMPForceComputeGPU(py::module& m, const std::string& name)
 {
-    py::class_<T, std::shared_ptr<T> >(m, name.c_str(), py::base<ForceCompute>())
+    py::class_<T, std::shared_ptr<T> >(m, name.c_str(), py::base<Base>())
         .def(py::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<NeighborList>, const std::string& >())
         .def("setTuningParam",&T::setTuningParam)
         ;
