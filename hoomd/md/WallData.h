@@ -291,29 +291,21 @@ inline void rescaleWall(PlaneWall& wall, const Scalar *transMatrix, const Scalar
 //!Rescale a Spherical Wall using transformation matrix
 inline void rescaleWall(SphereWall& wall, const Scalar *transMatrix)
     {
-    //TODO: NPT_walls, consider if any of this would work with a 2D system
-    Scalar k = (transMatrix[0] + transMatrix[4] + transMatrix[8])/3.0;
-
     //rescale origin
-    wall.origin.x *= k;
-    wall.origin.y *= k;
-    wall.origin.z *= k;
-
+    wall.origin.x *= transMatrix[0];
+    wall.origin.y *= transMatrix[4];
+    wall.origin.z *= transMatrix[8]; //should work for 2D and 3D
     //rescale r
-    wall.r *= k;
+    wall.r *= transMatrix[0];
     };
 
 //!Rescale a Cylindrical Wall using transformation matrix
 inline void rescaleWall(CylinderWall& wall, const Scalar *transMatrix)
     {
     //rescale origin
-    Scalar3 new_origin;
-    new_origin.x = wall.origin.x * transMatrix[0] + wall.origin.y * transMatrix[1] +wall.origin.z * transMatrix[2];
-    new_origin.y = wall.origin.x * transMatrix[3] + wall.origin.y * transMatrix[4] +wall.origin.z * transMatrix[5];
-    new_origin.z = wall.origin.x * transMatrix[6] + wall.origin.y * transMatrix[7] +wall.origin.z * transMatrix[8];
-    wall.origin = new_origin;
-
-    // TODO: NPT_walls, decide if we can skew or not... seems like not, if confirmed can remove adative 0s in origin calc
+    wall.origin.x *= transMatrix[0];
+    wall.origin.y *= transMatrix[4];
+    wall.origin.z *= transMatrix[8];
 
     //figure out which directions are coupled and scale r
     Scalar k;
@@ -325,8 +317,7 @@ inline void rescaleWall(CylinderWall& wall, const Scalar *transMatrix)
         {k=transMatrix[4];}
     else
         {
-        //you messed up? make it crash...
-        // TODO: NPT_walls, think this through fully, remove or change for numerical precision problems
+        throw std::runtime_error(std::string("A box update was attempted without two coupled dimensions, this does not obey the cylinder wall constraints."));
         k=0;
         }
     //rescale r

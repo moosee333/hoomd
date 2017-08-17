@@ -669,8 +669,14 @@ class wallpotential(external._external_force):
         external._external_force.update_coeffs(self);
 
     # TODO: NPT_walls, documentation for this functionality, settle on nameing?
-    def update_wallobject(self):
+    # updates python obj using c++ obj
+    def wallobject_pull(self):
         self.cpp_force.updateFieldPy(self.field_coeff)
+        
+    # update c++ ojb using python obj
+    def wallobject_push(self):
+        fcoeff = self.process_field_coeff(self.field_coeff);
+        self.cpp_force.setField(fcoeff);
 
 class lj(wallpotential):
     R""" Lennard-Jones wall potential.
