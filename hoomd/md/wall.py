@@ -602,7 +602,59 @@ class wallpotential(external._external_force):
     A specific example can be found in :py:class:`lj`
 
     .. attention::
-        The current wall force implementation does not support NPT integrators.
+        The current wall force implementation has limited support for NPT integration.
+        Use with caution and please read all NPT specific notes.
+
+    NPT Integrator Settings
+    +----------------+------------+-------------------------+-------------------------------------+
+    | Geometry       | Plane      | Sphere                  | Cylinder                            |
+    +================+============+=========================+=====================================+
+    | Required       | *None*     | couple=’xyz’            | couple=’xy',’xz','yz', or 'xyz'[*]_ |
+    +----------------+------------+-------------------------+-------------------------------------+
+    | Forbidden      | *None*     | Tilt Degrees of Freedom | Tilt Degrees of Freedom             |
+    +----------------+------------+-------------------------+-------------------------------------+
+
+    .. [*] For any anisotropic couplings, the coupled directions must be perpendicular to all cylinder axes in the system.
+
+    Additional calls to update the python and c++ definitions will be required for all but very simple runs. The following
+    examples will demonstrate several cases of proper usage of the :py:func:wallobject_pull and  :py:func:wallobject_push functions.
+
+    Examples::
+
+        # setup system
+        ...
+        # setup walls
+        walls=wall.group(wall.sphere(r=3,origin=(0,0,0)),wall.cylinder(r=2.5,axis=(0,0,1),inside=True), wall.plane(normal=(1,0,0)))
+        # setup forces using walls
+        my_force=wall.pairpotential(walls)
+        my_force.force_coeff.set('A', all required arguments)
+        # use NPT integration method
+        ...
+        integrate.npt(group=group.all(),kT=...,P=...,couple='xyz') # setting according to restrictions and requirements above
+        run(1e4)
+        # stopping here things would just work without any issue
+
+        # update the python object before running again or it will overwrite the modified c++ object at run time
+        my_force.wallobject_pull()
+        run(1e4)
+
+        # multiple forces can reference the same python object but the c++ objects are always independent
+        my_force2=wall.pairpotential(walls)
+        my_force2.force_coeff.set('A', all required arguments)
+        # because my_force2 hasn't had it's walls modified during a run it needs to use my_force to update properly here
+        my_force.wallobject_pull()
+        # only one pull is required per python object, it will be pushed to all forces which use it at runtime
+        run(1e4)
+
+        # if changes are to be made during a run, it will also be required to push (which normally is handled by the run command)
+        def shrink_sphere(timestep):
+            # only need to pull once
+            my_force2.wallobject_pull()
+            walls.spheres[0].r*=0.999
+            # must push to each force which uses the modified values
+            my_force.wallobject_push()
+            my_force2.wallobject_push()
+        run(1e4,callback_period=10,callback=shrink_sphere)
 
     Note:
         The virial due to walls is computed, but the pressure and reported by :py:class:`hoomd.analyze.log`
@@ -672,7 +724,7 @@ class wallpotential(external._external_force):
     # updates python obj using c++ obj
     def wallobject_pull(self):
         self.cpp_force.updateFieldPy(self.field_coeff)
-        
+
     # update c++ ojb using python obj
     def wallobject_push(self):
         fcoeff = self.process_field_coeff(self.field_coeff);
