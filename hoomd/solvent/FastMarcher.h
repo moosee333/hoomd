@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <limits>
+#include <queue>
 
 #include "hoomd/ExecutionConfiguration.h"
 #include "hoomd/SystemDefinition.h"
@@ -30,10 +31,10 @@
 namespace solvent
 {
 
-/*! This class implements the fast marching method for calculating distances from an 
-    interface defined via a level set. It is used in the computations of the variational 
-    implicit solvent model. The class operates directly on a sparse field (maintained 
-    by the SparseFieldUpdater), computing distances based on the sparse field's grid 
+/*! This class implements the fast marching method for calculating distances from an
+    interface defined via a level set. It is used in the computations of the variational
+    implicit solvent model. The class operates directly on a sparse field (maintained
+    by the SparseFieldUpdater), computing distances based on the sparse field's grid
     and marching according to the cells in the layers built by the sparse field.
 
     The logic encapsulated in this class is based on the fast marching method, which
@@ -67,22 +68,89 @@ class FastMarcher
 
     protected:
 
+        //! Compute distances for Lz using linear interpolation
+        void estimateLzDistances();
+
+        //! Compute tentative distances for cell
+        /* \param cell The grid cell to calculate tentative distances for
+         * \param positive Whether the grid cell is positive or negative
+         */
+        Scalar calculateTentativeDistance(uint3 cell, bool positive);
+
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data (required for box)
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
         std::shared_ptr<SparseFieldUpdater> m_field; //!< Sparse field
         std::shared_ptr<solvent::GridData> m_grid; //!< The grid that layers are maintained on
 
-        //! Compute distances
-        void estimateL0Distances();
-
     private:
 		//! Simple helper function to compute the sign
-		template <class Real> 
-		inline int sgn(Real num) 
+		template <class Real>
+		inline int sgn(Real num)
             {
 			return (num > Real(0)) - (num < Real(0));
             }
+
+        //! The helper functions to compute the roots of the quadratic Lagrange multiplier solution for the tentative distance calculation
+        std::pair<Scalar, Scalar> lagrange1D(Scalar delta_x1, Scalar phi1);
+        std::pair<Scalar, Scalar> lagrange2D(Scalar delta_x1, Scalar phi1, Scalar delta_x2, Scalar phi2);
+        std::pair<Scalar, Scalar> lagrange3D(Scalar delta_x1, Scalar phi1, Scalar delta_x2, Scalar phi2, Scalar delta_x3, Scalar phi3);
+
+        //! The helper functions used to test validity of specific Lagrange solutions
+        Scalar lagrangeP2(Scalar phi, Scalar delta_x1, Scalar phi1, Scalar delta_x2, Scalar phi2);
+        Scalar lagrangeP3(Scalar phi, Scalar delta_x1, Scalar phi1, Scalar delta_x2, Scalar phi2, Scalar delta_x3, Scalar phi3);
+
+        //! The greater than comparator to use for the PQ
+		class CompareScalarLess
+			{
+			public:
+				bool operator()(std::pair<uint3, Scalar> element1, std::pair<uint3, Scalar> element2)
+                    {
+					return element1.second < element2.second;
+                    }
+			};
+
+        //! The greater than comparator to use for the PQ
+		class CompareScalarGreater
+			{
+			public:
+				bool operator()(std::pair<uint3, Scalar> element1, std::pair<uint3, Scalar> element2)
+                    {
+					return element1.second > element2.second;
+                    }
+			};
+
+        //! The greater than comparator to use for the map
+        // Need to provide ordering on int3 for hashing purposes.
+        // Order is based on the components in order; first check x,
+        // then check y, and finally check z. Note that this is not
+        // a meaningful ordering; however it is sufficient to provide
+        // a strict weak ordering as required for sorting
+		class CompareInt
+			{
+			public:
+				bool operator()(uint3 first, uint3 second)
+                    {
+                    if (first.x < second.x)
+                        return true;
+                    else if (first.x > second.x)
+                        return false;
+                    else
+                        {
+                        if (first.y < second.y)
+                            return true;
+                        else if (first.y > second.y)
+                            return false;
+                        else
+                            {
+                            if (first.z < second.z)
+                                return true;
+                            else
+                                return false;
+                            }
+                        }
+                    }
+			};
 
     };
 

@@ -99,7 +99,7 @@ class GridData
         std::shared_ptr<SnapshotGridData<Real> > takeSnapshot();
 
         //! Function to set grid values, primarily useful for initialization
-        /*! \param flags Bits indicating which grid to update (1 for energies, 2 for forces, 3 for both)
+        /*! \param flags Bits indicating which grid to update (1 for energies, 2 for distances, 3 for both)
             \param value The value to set the grid to
          */
         void setGridValues(unsigned int flags = 0, double value = 0.0);
@@ -142,11 +142,11 @@ class GridData
         //! \name Enumerations
         //@{
 
-        //! Simple enumeration of flags to employ for working with forces, energies, or both
+        //! Simple enumeration of flags to employ to identify the grids
         enum flags
             {
-            energies = 1,
-            forces = 2
+            ENERGIES = 1,
+            DISTANCES = 2
             };
 
     protected:

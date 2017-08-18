@@ -9,7 +9,6 @@
 #include "GridForceCompute.h"
 #include "AllGridPairPotentials.h"
 #include "LevelSetSolver.h"
-#include "SparseFieldUpdater.h"
 
 //! Create the python module
 /*! each class setup their own python exports in a function export_ClassName

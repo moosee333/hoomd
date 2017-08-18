@@ -65,9 +65,9 @@ void GridData::setGridValues(unsigned int flags, double value)
             for (unsigned int k = 0; k < m_dim.z; k++)
                 {
                 unsigned int idx = indexer(i, j, k);
-                if (flags & forces)
+                if (flags & ENERGIES)
                     h_fn.data[idx] = value;
-                if (flags & energies)
+                if (flags & DISTANCES)
                     h_phi.data[idx] = value;
                 }
     }

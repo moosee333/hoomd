@@ -42,13 +42,13 @@ namespace solvent
     generally require two layers.
 
     This class operates on a GridData object owned by a LevelSetSolver; it should never be
-    instantiated independently of a LevelSetSolver. The interface position is determined by 
-    looking for sign flips in the energies on grid, and additional layers are added by simply 
+    instantiated independently of a LevelSetSolver. The interface position is determined by
+    looking for sign flips in the energies on grid, and additional layers are added by simply
     adding neighbors of the zero level set. These data structures are then made accessible for
     other classes (e.g. the FastMarcher) to adapt.
 
     */
-class SparseFieldUpdater 
+class SparseFieldUpdater
     {
     public:
         //! Constructor
@@ -56,7 +56,7 @@ class SparseFieldUpdater
          * \param sysdef The HOOMD system definition
          * \param num_layers The number of layers to track
          */
-        SparseFieldUpdater(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, char num_layers = 2);
+        SparseFieldUpdater(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, bool ignore_zero, char num_layers = 2);
 
         //! Destructor
         virtual ~SparseFieldUpdater();
@@ -65,10 +65,34 @@ class SparseFieldUpdater
         void computeInitialField();
 
 		//! Clear the layers; required at each timestep
-        void clearField() 
+        void clearField()
             {
             for (unsigned char i = 0; i < (2*m_num_layers+1); i++)
                 m_layers[i].clear();
+            }
+
+		//! Return the grid this field operates on
+        std::shared_ptr<GridData> getGrid()
+            {
+            return m_grid;
+            }
+
+		//! Return the number of layers maintained
+        unsigned char getNumLayers() const
+            {
+            return m_num_layers;
+            }
+
+        //! Return the layers
+        const std::vector<std::vector<uint3>> getLayers() const
+            {
+            return m_layers;
+            }
+
+        //! Return the index into the layers
+        const std::map<char, char> getIndex() const
+            {
+            return m_index;
             }
 
     protected:
@@ -94,18 +118,20 @@ class SparseFieldUpdater
 
         unsigned char m_num_layers; //!< The number of layers to include (e.g. two for Lz, Lp1, Ln1, Lp2, Ln2)
         std::vector<std::vector<uint3> > m_layers; //!< Sparse field layers
-        
+        std::map<char, char> m_index; //!< Mapping from layer number (e.g. -2) to index in the m_layers vector
+
+        bool m_ignore_zero; //!< Whether to include cells with energy values of exactly 0 in Lz
     private:
 
 		//! Simple helper function to compute the sign
-		template <class Real> 
-		inline int sgn(Real num) 
+		template <class Real>
+		inline int sgn(Real num)
             {
 			return (num > Real(0)) - (num < Real(0));
             }
 
 		//! Index positive and negative layer numbers into the std::vector of layers
-		inline int get_layer_index(char num) 
+		inline int get_layer_index(char num)
             {
             return num + (char) m_num_layers;
             }
@@ -114,4 +140,3 @@ class SparseFieldUpdater
 
 }
 #endif //__SPARSE_FIELD_UPDATER_H__
-

@@ -22,7 +22,7 @@ from hoomd.md import force
 # to compute the interfacial forces on the system. As a result, the
 # implementation here closely parallels that of md._force
 class ls_solver(force._force):
-    def __init__(self, grid, name = None):
+    def __init__(self, grid, ignore_zero = False, name = None):
         super(ls_solver, self).__init__(name)
 
         if hoomd.context.current.solver is not None:
@@ -34,7 +34,7 @@ class ls_solver(force._force):
 
         # create the c++ mirror class
         if not hoomd.context.exec_conf.isCUDAEnabled():
-            self.cpp_force = _solvent.LevelSetSolver(hoomd.context.current.system_definition, self.grid.cpp_grid)
+            self.cpp_force = _solvent.LevelSetSolver(hoomd.context.current.system_definition, self.grid.cpp_grid, ignore_zero)
             self.cpp_class = _solvent.LevelSetSolver
         else:
             raise NotImplementedError("Grid pair potentials are not yet GPU enabled!")
