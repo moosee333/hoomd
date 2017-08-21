@@ -123,7 +123,7 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
         Scalar m_max_step;                  //!< largest permitted step size
         Scalar m_scale;                     //!< factor to decrease the step size by on an energy increase
         unsigned int m_updates;             //!< number of previous steps to consider when calculating the step direction
-        Scalar m_wtol;                      //!< stopping tolerance based on total torque
+//      Scalar m_wtol;                      //!< stopping tolerance based on total torque
 
         // State of the minimiser
         bool m_converged;                   //!< whether the minimisation has converged
@@ -135,7 +135,7 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
         bool m_was_reset;                   //!< whether or not the minimizer was reset
         GPUArray<Scalar4> m_pos_history;    //!< history of positions
         GPUArray<Scalar3> m_grad_history;   //!< history of gradients
-        GPUArray<Scala> m_rho_history;      //!< rho history, intermediate value in step calculation
+        GPUArray<Scalar> m_rho_history;      //!< rho history, intermediate value in step calculation
         GPUArray<Scalar3> m_step;           //!< calculated step direction
 
     private:

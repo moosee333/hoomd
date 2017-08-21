@@ -23,13 +23,12 @@ LBFGSEnergyMinimizer::LBFGSEnergyMinimizer(std::shared_ptr<SystemDefinition> sys
         m_dguess(0.1),
         m_etol(1e-3),
         m_ftol(1e-1),
+        m_max_decrease(10),
         m_max_erise(1e-4),
         m_max_fails(5),
         m_max_step(0.1),
-        m_max_decrease(10),
         m_scale(0.1),
-        m_updates(4),
-        m_wtol(1e-1)
+        m_updates(4)
     {
     m_exec_conf->msg->notice(5) << "Constructing LBFGSEnergyMinimizer" << endl;
 
@@ -86,7 +85,7 @@ void LBFGSEnergyMinimizer::setScale(Scalar scale)
     {
     if (!(scale > 0.0 && scale < 1.0))
         {
-        m_exec_conf->msg->error() << "integrate.mode_minimize_lbfgs: scaling of the step size shouldbe beteeen 0 and 1" << endl;
+        m_exec_conf->msg->error() << "integrate.mode_minimize_lbfgs: scaling of the step size should be beteeen 0 and 1" << endl;
         throw runtime_error("Error setting parameters for LBFGSEnergyMinimizer");
         }
     m_scale = scale;

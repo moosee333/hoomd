@@ -1384,6 +1384,151 @@ class mode_minimize_fire(_integrator):
         self.check_initialization();
         return self.cpp_integrator.reset()
 
+class mode_minimize_lbfgs(_integrator):
+    R""" Energy Minimizer (LBFGS).
+
+    Args:
+        group (:py:mod:`hoomd.group`): Particle group to apply minimization to.
+        * .. deprecated:: 2.2
+            py:class:`integrate.mode_minimize_lbfgs()` now accepts integration methods, such as :py:class:`integrate.nve()`
+            and py:class:`integrate.nph()`. The functions operate on user-defined groups. If **group** is defined here,
+            automatically :py:class:`integrate.nve()` will be used for integration
+        dt (float): the maximum time step the minimizer is permitted to use. This has no meaning for LBFGS.
+        dguess (float): the initial guess for the diagonal elements of the inverse Hessian
+        etol (float): energy convergence criteria (in energy units)
+        ftol (float): force convergence criteria (in force units)
+        max_decrease (int): the number of times to scale down the step size before giving up on a search direction
+        max_erise (float): the largest energy rise permitted in the search direction
+        max_fails (int): the maximum number of failed search directions before the minimizer declares failure
+        max_step (float): the largest permitted step size
+        scale (float): scale factor to apply to the step length if the energy increases in the search direction
+        updates (int): number of previous steps to consider when calculating the step direction
+        * ..versionadded:: 2.2
+
+    :py:class:`mode_minimize_lbgfs` uses the Limited Memory Broyden Fletcher Goldfarb Shanno algorithm to minimize the energy
+    for a group of particles while keeping all other particles fixed.  This method is published in
+    `J. Nocedal, Math. Comp., 1980 <https://doi.org/10.1090/S0025-5718-1980-0572855-7>`_.
+
+    At each time step, the algorithm uses the specified integrator to generate x and F, and then adjusts
+    x according to a step calculated from an estimate of the inverse Hessian matrix and the positions
+    and gradients of the previous updates steps.
+
+    It is possible for the minimizer to get stuck, usually indicating a discontinuity in the potential or
+    gradients. In this case, has_failed() will return true;
+
+    Example:
+
+        lbfgs=integrate.mode_minimize_lbfgs(dt=0.1, ftol=1e-2, Etol=1e-7)
+        nve=integrate.nve(group=group.all())
+        while not(lbfgs.has_converged() or lbfgs.has_failed()):
+           run(100)
+
+    Note:
+        The algorithm requires a base integrator to update the particle positions and forces.
+        Usually this will be either NVE (to minimize energy).
+
+    .. versionadded:: v2.2
+
+    Warning:
+        All other integration methods must be disabled before using the LBFGS energy minimizer.
+
+    .. attention::
+        :py:class:`mode_minimize_lbfgs` does not function with MPI parallel simulations.
+
+    """
+    def __init__(self, dt=1.0, dguess=0.1, etol=1e-3, ftol=1e-5, max_decrease=10, max_erise=1e-4, max_step=0.1, scale=0.1, updates=4, group=None):
+        hoomd.util.print_status_line();
+
+        # Error out in MPI simulations
+        if (_hoomd.is_MPI_available()):
+            if hoomd.context.current.system_definition.getParticleData().getDomainDecomposition():
+                hoomd.context.msg.error("mode_minimize_lbfgs is not supported in multi-processor simulations.\n\n")
+                raise RuntimeError("Error setting up integration mode.")
+
+        # initialize base class
+        _integrator.__init__(self);
+
+        # initialize the reflected c++ class
+        if not hoomd.context.exec_conf.isCUDAEnabled():
+            self.cpp_integrator = _md.LBFGSEnergyMinimizer(hoomd.context.current.system_definition, dt);
+        else:
+            self.cpp_integrator = _md.LBFGSEnergyMinimizerGPU(hoomd.context.current.system_definition, dt);
+
+        self.supports_methods = True;
+
+        hoomd.context.current.system.setIntegrator(self.cpp_integrator);
+
+        if group is not None:
+            hoomd.context.msg.warning("group is deprecated. Creating default integrate.nve().\n")
+            nve = integrate.nve(group=group)
+
+        # change the set parameters if not None
+        self.dt = dt
+        self.metadata_fields = ['dt']
+
+        self.cpp_integrator.setDguess(dguess);
+        self.dguess = dguess
+        self.metadata_fields.append(dguess)
+
+        self.cpp_integrator.setEtol(etol);
+        self.etol = etol
+        self.metadata_fields.append(etol)
+
+        self.cpp_integrator.setFtol(ftol);
+        self.ftol = ftol
+        self.metadata_fields.append(ftol)
+
+        self.cpp_integrator.setMaxDecrease(max_decrease);
+        self.max_decrease = max_decrease
+        self.metadata_fields.append(max_decrease)
+
+        self.cpp_integrator.setMaxErise(max_erise);
+        self.max_erise = max_erise
+        self.metadata_fields.append(max_erise)
+
+        self.cpp_integrator.setMaxStep(max_step);
+        self.max_step = max_step
+        self.metadata_fields.append(max_step)
+
+        self.cpp_integrator.setScale(scale);
+        self.scale = scale
+        self.metadata_fields.append(scale)
+
+        self.cpp_integrator.setUpdates(updates);
+        self.updates = updates
+        self.metadata_fields.append(updates)
+
+    def get_energy(self):
+        R""" Returns the energy after the last iteration of the minimizer
+        """
+        hoomd.util.print_status_line()
+        self.check_initialization();
+        return self.cpp_integrator.getEnergy()
+
+    def has_converged(self):
+        R""" Test if the energy minimizer has converged.
+
+        Returns:
+            True when the minimizer has converged. Otherwise, return False.
+        """
+        self.check_initialization();
+        return self.cpp_integrator.hasConverged()
+
+    def has_failed(self):
+        R""" Test if the energy minimizer has failed.
+
+        Returns:
+            True when the minimizer has failed to converge. Otherwise, return False.
+        """
+        self.check_initialization();
+        return self.cpp_integrator.hasFailed()
+
+    def reset(self):
+        R""" Reset the minimizer to its initial state.
+        """
+        self.check_initialization();
+        return self.cpp_integrator.reset()
+
 class berendsen(_integration_method):
     R""" Applies the Berendsen thermostat.
 
