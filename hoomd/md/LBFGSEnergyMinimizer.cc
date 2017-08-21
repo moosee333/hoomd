@@ -105,13 +105,13 @@ void LBFGSEnergyMinimizer::reset()
     GPUArray<Scalar3> grad_history(n*m_updates, m_exec_conf);
     GPUArray<Scalar> rho_history(m_updates, m_exec_conf);
     m_pos_history.swap(pos_history);
-    m_grad_history.swap(grad_hisory);
+    m_grad_history.swap(grad_history);
 
     }
 
 /*! \param timesteps is the current timestep
 */
-void LBFGSEnergyMinimizer::update(unsigned int timesteps)
+void LBFGSEnergyMinimizer::update(unsigned int timestep)
     {
 
     if (m_converged || m_failed)
@@ -161,7 +161,7 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
 
     // Calculate total energy and RMS force
     Scalar pe_total(0.0);
-    Scalar rms_force(0.0)
+    Scalar rms_force(0.0);
     for (auto method = m_methods.begin(); method != m_methods.end(); ++method)
         {
         std::shared_ptr<ParticleGroup> current_group = (*method)->getGroup();
@@ -181,11 +181,11 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
     if (m_was_reset)
         {
         m_was_reset = false;
-        m_total_energy = pe_total + Scalar(100000)*m_etol;
+        m_energy_total = pe_total + Scalar(100000)*m_etol;
         }
     unsigned int ndof = m_sysdef->getNDimensions()*total_group_size;
     rms_force = sqrt(rms_force / ndof);
-    if (rms_force < m_ftol && fabs(pe_total/total_group_size - m_energy_total) < m_etol))
+    if (rms_force < m_ftol && fabs(pe_total/total_group_size - m_energy_total) < m_etol)
         {
         m_converged = true;
         m_energy_total = pe_total;
@@ -196,7 +196,6 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
         {
         // The energy has increased: undo the step
         ArrayHandle<Scalar4> h_pos_history(m_pos_history, access_location::host, access_mode::read);
-        Scalar pe_total = 0.0;
         for (auto method = m_methods.begin(); method != m_methods.end(); ++method)
             {
             std::shared_ptr<ParticleGroup> current_group = (*method)->getGroup();
@@ -240,7 +239,6 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
         // The previous step was successful, generate a new step direction
         ArrayHandle<Scalar4> h_pos_history(m_pos_history, access_location::host, access_mode::read);
         ArrayHandle<Scalar3> h_grad_history(m_grad_history, access_location::host, access_mode::read);
-        ArrayHandle<Scalar> h_rho_history(m_rho_history, access_location::host, access_mode::read);
 
         // Update energy
         m_energy_total = pe_total;
@@ -351,10 +349,10 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
 
         // First loop of the two loop update scheme
         // Described on the LBFGS Wikipedia page
-        ArrayHandle<Scalar> h_rho(m_rho, access_location::host, access_mode::read);
+        ArrayHandle<Scalar> h_rho(m_rho_history, access_location::host, access_mode::read);
         GPUArray<Scalar3> alpha(m_iter, m_exec_conf);
         ArrayHandle<Scalar3> h_alpha(alpha, access_location::host, access_mode::readwrite);
-        for (unsigned int i = m_iter - 1; i >= 0; --i)
+        for (int i = m_iter - 1; i >= 0; --i)
             {
             for (auto method = m_methods.begin(); method != m_methods.end(); ++method)
                 {
@@ -363,12 +361,12 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
                 for (unsigned int group_idx = 0; group_idx < group_size; group_idx++)
                     {
                     unsigned int j = current_group->getMemberIndex(group_idx);
-                    h_alpha.data[i] += h_s.data[no_particles * i + j].x * h_q.data[j].x;
-                    h_alpha.data[i] += h_s.data[no_particles * i + j].y * h_q.data[j].y;
-                    h_alpha.data[i] += h_s.data[no_particles * i + j].z * h_q.data[j].z;
+                    h_alpha.data[i].x += h_s.data[no_particles * i + j].x * h_q.data[j].x;
+                    h_alpha.data[i].y += h_s.data[no_particles * i + j].y * h_q.data[j].y;
+                    h_alpha.data[i].z += h_s.data[no_particles * i + j].z * h_q.data[j].z;
                     }
                 }
-            h_alpha[i] *= h_rho[i];
+            h_alpha.data[i] *= h_rho.data[i];
             for (auto method = m_methods.begin(); method != m_methods.end(); ++method)
                 {
                 std::shared_ptr<ParticleGroup> current_group = (*method)->getGroup();
@@ -376,9 +374,9 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
                 for (unsigned int group_idx = 0; group_idx < group_size; group_idx++)
                     {
                     unsigned int j = current_group->getMemberIndex(group_idx);
-                    h_q.data[j].x -= h_y.data[no_particles * i + j].x * h_alpha.data[i];
-                    h_q.data[j].y -= h_y.data[no_particles * i + j].y * h_alpha.data[i];
-                    h_q.data[j].z -= h_y.data[no_particles * i + j].z * h_alpha.data[i];
+                    h_q.data[j].x -= h_y.data[no_particles * i + j].x * h_alpha.data[i].x;
+                    h_q.data[j].y -= h_y.data[no_particles * i + j].y * h_alpha.data[i].y;
+                    h_q.data[j].z -= h_y.data[no_particles * i + j].z * h_alpha.data[i].z;
                     }
                 }
             }
@@ -413,7 +411,7 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
                     beta += h_y.data[no_particles * i + j].z * h_step.data[j].z;
                     }
                 }
-            beta *= h_rho[];
+            beta *= h_rho.data[i];
             for (auto method = m_methods.begin(); method != m_methods.end(); ++method)
                 {
                 std::shared_ptr<ParticleGroup> current_group = (*method)->getGroup();
@@ -421,9 +419,9 @@ void LBFGSEnergyMinimizer::update(unsigned int timesteps)
                 for (unsigned int group_idx = 0; group_idx < group_size; group_idx++)
                     {
                     unsigned int j = current_group->getMemberIndex(group_idx);
-                    h_step.data[j].x += h_s.data[no_particles * i + j].x * (h_alpha.data[i] - beta);
-                    h_step.data[j].y += h_s.data[no_particles * i + j].y * (h_alpha.data[i] - beta);
-                    h_step.data[j].z += h_s.data[no_particles * i + j].z * (h_alpha.data[i] - beta);
+                    h_step.data[j].x += h_s.data[no_particles * i + j].x * (h_alpha.data[i].x - beta);
+                    h_step.data[j].y += h_s.data[no_particles * i + j].y * (h_alpha.data[i].y - beta);
+                    h_step.data[j].z += h_s.data[no_particles * i + j].z * (h_alpha.data[i].z - beta);
                     }
                 }
             }
@@ -529,6 +527,6 @@ void export_LBFGSEnergyMinimizer(py::module& m)
         .def("setMaxStep", &LBFGSEnergyMinimizer::setMaxStep)
         .def("setScale", &LBFGSEnergyMinimizer::setScale)
         .def("setUpdates", &LBFGSEnergyMinimizer::setUpdates)
-        .def("setWtol", &LBFGSEnergyMinimizer::setWtol)
+        //.def("setWtol", &LBFGSEnergyMinimizer::setWtol)
         ;
     }

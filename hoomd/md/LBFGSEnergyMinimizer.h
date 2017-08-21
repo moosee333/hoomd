@@ -77,6 +77,7 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
         void setMaxDecrease(unsigned int decrease) {m_max_decrease = decrease;}
 
         //! Set the maximum energy rise permitted in the step direction
+        /*! \param erise is the new maximum energy rise
         */
         void setMaxErise(Scalar erise);
 
@@ -99,7 +100,7 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
         //! Set the stopping criterion based on the total torque on all particles in the system
         /*! \param wtol is the new torque tolerance to set
         */
-        void setWtol(Scalar wtol) {m_wtol = wtol;}
+        //void setWtol(Scalar wtol) {m_wtol = wtol;}
 
         //! Get needed pdata flags
         /*! LBFGSEnergyMinimzer needs the potential energy, so its flag is set
@@ -123,7 +124,7 @@ class LBFGSEnergyMinimizer : public IntegratorTwoStep
         Scalar m_max_step;                  //!< largest permitted step size
         Scalar m_scale;                     //!< factor to decrease the step size by on an energy increase
         unsigned int m_updates;             //!< number of previous steps to consider when calculating the step direction
-//      Scalar m_wtol;                      //!< stopping tolerance based on total torque
+        //Scalar m_wtol;                    //!< stopping tolerance based on total torque
 
         // State of the minimiser
         bool m_converged;                   //!< whether the minimisation has converged
