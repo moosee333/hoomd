@@ -6,9 +6,11 @@
 
 #include "TwoStepBD.h"
 #include "hoomd/VectorMath.h"
-#include "hoomd/extern/saruprng.h"
 #include "QuaternionMath.h"
 #include "hoomd/HOOMDMath.h"
+
+#include "hoomd/Saru.h"
+using namespace hoomd;
 
 
 #ifdef ENABLE_MPI
@@ -97,7 +99,7 @@ void TwoStepBD::integrateStepOne(unsigned int timestep)
         unsigned int ptag = h_tag.data[j];
 
         // Initialize the RNG
-        Saru saru(ptag, timestep + m_seed);
+        detail::Saru saru(ptag, timestep, m_seed);
 
         // compute the random force
         Scalar rx = saru.s<Scalar>(-1,1);
@@ -187,7 +189,11 @@ void TwoStepBD::integrateStepOne(unsigned int timestep)
                     }
 
                 // do the integration for quaternion
-                q += Scalar(0.5) * m_deltaT * ((t + bf_torque) / gamma_r) * q ;
+                vec3<Scalar> t_tot = t+bf_torque;
+                Scalar norm = sqrt(dot(t_tot,t_tot));
+                q = quat<Scalar>::fromAxisAngle(t_tot/norm, m_deltaT * norm/ gamma_r) * q ;
+
+                // renormalize just in case
                 q = q * (Scalar(1.0) / slow::sqrt(norm2(q)));
                 h_orientation.data[j] = quat_to_scalar4(q);
 

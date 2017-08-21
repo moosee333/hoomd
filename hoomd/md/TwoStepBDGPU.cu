@@ -5,9 +5,11 @@
 // Maintainer: joaander
 
 #include "TwoStepBDGPU.cuh"
-#include "hoomd/extern/saruprngCUDA.h"
 #include "hoomd/VectorMath.h"
 #include "hoomd/HOOMDMath.h"
+
+#include "hoomd/Saru.h"
+using namespace hoomd;
 
 #include <assert.h>
 
@@ -118,7 +120,7 @@ void gpu_brownian_step_one_kernel(Scalar4 *d_pos,
         unsigned int ptag = d_tag[idx];
 
         // compute the random force
-        SaruGPU saru(ptag, timestep + seed, 0x9977665);
+        detail::Saru saru(ptag, timestep, seed);
         Scalar rx = saru.s<Scalar>(-1,1);
         Scalar ry = saru.s<Scalar>(-1,1);
         Scalar rz =  saru.s<Scalar>(-1,1);
@@ -217,8 +219,13 @@ void gpu_brownian_step_one_kernel(Scalar4 *d_pos,
                     }
 
                 // do the integration for quaternion
-                q += Scalar(0.5) * deltaT * ((t + bf_torque) / gamma_r) * q ;
+                vec3<Scalar> t_tot = t+bf_torque;
+                Scalar norm = sqrt(dot(t_tot,t_tot));
+                q = quat<Scalar>::fromAxisAngle(t_tot/norm, deltaT * norm/ gamma_r) * q ;
+
+                // renormalize just in case
                 q = q * (Scalar(1.0) / slow::sqrt(norm2(q)));
+
                 d_orientation[idx] = quat_to_scalar4(q);
 
                 // draw a new random ang_mom for particle j in body frame
