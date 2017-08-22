@@ -98,6 +98,20 @@ class GridData
         template<class Real>
         std::shared_ptr<SnapshotGridData<Real> > takeSnapshot();
 
+        //! Simple enumeration of flags to employ to identify the grids
+        typedef enum deriv_direction
+            {
+            FORWARD = 1,
+            REVERSE,
+            CENTRAL
+            } deriv_direction;
+
+        //! Returns the gradient of the phi grid
+        std::tuple<GPUArray<Scalar>, GPUArray<Scalar>, GPUArray<Scalar> > grad(GridData::deriv_direction dir = FORWARD);
+
+        //! Returns a heaviside function of the desired order on the phi grid
+        GPUArray<Scalar> heaviside(unsigned int order = 0);
+
         //! Function to set grid values, primarily useful for initialization
         /*! \param flags Bits indicating which grid to update (1 for energies, 2 for distances, 3 for both)
             \param value The value to set the grid to
@@ -139,6 +153,24 @@ class GridData
             return m_indexer;
             }
 
+        //! Wrap grid indices in the x direction
+        inline int wrapx(int index)
+            {
+            return this->wrap(index, m_dim.x);
+            }
+
+        //! Wrap grid indices in the y direction
+        inline int wrapy(int index)
+            {
+            return this->wrap(index, m_dim.y);
+            }
+
+        //! Wrap grid indices in the z direction
+        inline int wrapz(int index)
+            {
+            return this->wrap(index, m_dim.z);
+            }
+
         //! \name Enumerations
         //@{
 
@@ -175,6 +207,18 @@ class GridData
         GPUArray<Scalar> m_fn;  //!< The velocity grid
 
         Index3D m_indexer;      //!< The grid indexer
+
+    private:
+        //! Core function to wrap grid indices
+        inline int wrap(int index, unsigned int dim);
+
+        // The various helper functions to compute mathematical functions at different orders
+
+        //! Zeroth order heaviside function on the phi grid
+        inline GPUArray<Scalar> heaviside0();
+
+        //! Second order heaviside function on the phi grid
+        inline GPUArray<Scalar> heaviside2();
 
     };
 

@@ -61,6 +61,8 @@ void LevelSetSolver::computeForces(unsigned int timestep)
 
     // Now use the fast marcher to compute the distances
     m_marcher->march();
+
+    // Once the initial grid is established we compute the numerical derivatives
     }
 
 } // end namespace solvent

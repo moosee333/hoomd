@@ -108,6 +108,153 @@ std::shared_ptr<SnapshotGridData<Real> > GridData::takeSnapshot()
     return snap;
     }
 
+GPUArray<Scalar> GridData::heaviside(unsigned int order)
+    {
+    // Call helper functions for different order heaviside functions
+    switch(order)
+        {
+        case 0:
+            return this->heaviside0();
+            break;
+        default:
+            throw std::runtime_error("The heaviside function order you have requested is not available.");
+        }
+    }
+
+inline GPUArray<Scalar> GridData::heaviside0()
+    {
+    // Create the GPUArray to return and access it
+    unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
+    GPUArray<Scalar> heavi(n_elements, m_exec_conf);
+    ArrayHandle<Scalar> h_heavi(heavi, access_location::host, access_mode::read); //NOTE: Is this the right access location?
+
+    // access the GPU arrays
+    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+    ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);
+
+    Index3D indexer = this->getIndexer();
+    for (unsigned int i = 0; i < m_dim.x; i++)
+        for (unsigned int j = 0; j < m_dim.y; j++)
+            for (unsigned int k = 0; k < m_dim.z; k++)
+                {
+                unsigned int idx = indexer(i, j, k);
+                if(h_phi.data[idx] > 0)
+                    h_heavi.data[idx] = 1;
+                }
+    return heavi;
+    }
+
+//NOTE: NOT YET WRITTEN, JUST A COPY OF ZEROTH ORDER FOR NOW
+inline GPUArray<Scalar> GridData::heaviside2()
+    {
+    // Create the GPUArray to return and access it
+    unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
+    GPUArray<Scalar> heavi(n_elements, m_exec_conf);
+    ArrayHandle<Scalar> h_heavi(heavi, access_location::host, access_mode::read); //NOTE: Is this the right access location?
+
+    // access the GPU arrays
+    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+    ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);
+
+    Index3D indexer = this->getIndexer();
+    for (unsigned int i = 0; i < m_dim.x; i++)
+        for (unsigned int j = 0; j < m_dim.y; j++)
+            for (unsigned int k = 0; k < m_dim.z; k++)
+                {
+                unsigned int idx = indexer(i, j, k);
+                if(h_phi.data[idx] > 0)
+                    h_heavi.data[idx] = 1;
+                }
+    return heavi;
+    }
+
+inline int GridData::wrap(int index, unsigned int dim)
+    {
+    // Use periodic flags
+    const BoxDim& box = this->m_pdata->getBox();
+    uchar3 periodic = box.getPeriodic();
+
+    if (periodic.x && index < 0)
+        index += dim;
+    if (periodic.x && index >= (int) dim)
+        index -= dim;
+    
+    return index;
+    }
+
+std::tuple<GPUArray<Scalar>, GPUArray<Scalar>, GPUArray<Scalar> > GridData::grad(GridData::deriv_direction dir)
+	{
+    // access the GPU arrays
+    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+    Index3D indexer = this->getIndexer();
+
+    // Create GPUArrays to return and access them
+    unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
+    Scalar3 spacing = this->getSpacing();
+
+    GPUArray<Scalar> divx(n_elements, m_exec_conf);
+    GPUArray<Scalar> divy(n_elements, m_exec_conf);
+    GPUArray<Scalar> divz(n_elements, m_exec_conf);
+
+    ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::read); //NOTE: Is this the right access location?
+    ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::read); //NOTE: Is this the right access location?
+    ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::read); //NOTE: Is this the right access location?
+
+    for (unsigned int i = 0; i < m_dim.x; i++)
+        for (unsigned int j = 0; j < m_dim.y; j++)
+            for (unsigned int k = 0; k < m_dim.z; k++)
+                {
+                unsigned int cur_idx = indexer(i, j, k);
+                if(dir == GridData::FORWARD)
+                    {
+                    int x = this->wrapx(i+1);
+                    int y = this->wrapy(j+1);
+                    int z = this->wrapz(k+1);
+
+                    unsigned int x_idx = indexer(x, j, k);
+                    unsigned int y_idx = indexer(i, y, k);
+                    unsigned int z_idx = indexer(i, j, z);
+                    h_divx.data[cur_idx] = (h_phi.data[x_idx] - h_phi.data[cur_idx])/spacing.x;
+                    h_divy.data[cur_idx] = (h_phi.data[y_idx] - h_phi.data[cur_idx])/spacing.y;
+                    h_divz.data[cur_idx] = (h_phi.data[z_idx] - h_phi.data[cur_idx])/spacing.z;
+                    }
+                else if(dir == GridData::REVERSE)
+                    {
+                    int x = this->wrapx(i-1);
+                    int y = this->wrapy(j-1);
+                    int z = this->wrapz(k-1);
+
+                    unsigned int x_idx = indexer(x, j, k);
+                    unsigned int y_idx = indexer(i, y, k);
+                    unsigned int z_idx = indexer(i, j, z);
+                    h_divx.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[x_idx])/spacing.x;
+                    h_divy.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[y_idx])/spacing.y;
+                    h_divz.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[z_idx])/spacing.z;
+                    }
+                else if(dir == GridData::CENTRAL)
+                    {
+                    int x_forward = this->wrapx(i+1);
+                    int y_forward = this->wrapy(j+1);
+                    int z_forward = this->wrapz(k+1);
+                    int x_reverse = this->wrapx(i-1);
+                    int y_reverse = this->wrapy(j-1);
+                    int z_reverse = this->wrapz(k-1);
+
+                    unsigned int x_forward_idx = indexer(x_forward, j, k);
+                    unsigned int y_forward_idx = indexer(i, y_forward, k);
+                    unsigned int z_forward_idx = indexer(i, j, z_forward);
+                    unsigned int x_reverse_idx = indexer(x_reverse, j, k);
+                    unsigned int y_reverse_idx = indexer(i, y_reverse, k);
+                    unsigned int z_reverse_idx = indexer(i, j, z_reverse);
+
+                    h_divx.data[cur_idx] = (h_phi.data[x_forward_idx] - h_phi.data[x_reverse_idx])/spacing.x/2;
+                    h_divy.data[cur_idx] = (h_phi.data[y_forward_idx] - h_phi.data[y_reverse_idx])/spacing.y/2;
+                    h_divz.data[cur_idx] = (h_phi.data[z_forward_idx] - h_phi.data[z_reverse_idx])/spacing.z/2;
+                    }
+                }
+    return std::tuple<GPUArray<Scalar>, GPUArray<Scalar>, GPUArray<Scalar> >(divx, divy, divz);
+	}
+
 template<class Real>
 pybind11::object SnapshotGridData<Real>::getPhiGridNP() const
     {
