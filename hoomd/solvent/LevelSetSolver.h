@@ -60,6 +60,8 @@ class LevelSetSolver : public ForceCompute
         virtual ~LevelSetSolver();
 
         //! Add a GridForceCompute to the list
+        /*! \param gfc GridForceCompute to add
+        */
         virtual void addGridForceCompute(std::shared_ptr<GridForceCompute> gfc);
 
         //! Actually compute the forces

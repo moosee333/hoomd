@@ -30,8 +30,6 @@ LevelSetSolver::LevelSetSolver(std::shared_ptr<SystemDefinition> sysdef, std::sh
 LevelSetSolver::~LevelSetSolver()
     { }
 
-/*! \param gfc GridForceCompute to add
-*/
 void LevelSetSolver::addGridForceCompute(std::shared_ptr<GridForceCompute> gfc)
     {
     assert(gfc);

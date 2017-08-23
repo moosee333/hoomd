@@ -157,6 +157,7 @@ void SparseFieldUpdater::initializeLz()
 
                         if(cur_sign != sgn(h_fn.data[neighbor_cell]))
                             {
+                            // If the sign change is 1 instead of 2, we are on a zero cell and react accordingly.
                             if (std::abs(cur_sign - sgn(h_fn.data[neighbor_cell])) == 1)
                                 {
                                 if (!m_ignore_zero)
