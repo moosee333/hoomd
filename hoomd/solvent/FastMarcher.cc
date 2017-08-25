@@ -8,6 +8,8 @@
 using namespace std;
 namespace py = pybind11;
 
+//NOTE:NEED TO STANDARDIZE THE WAY I USE THE MISSING_VALUE, BOTH THROUGHOUT THIS CLASS AND ALSO WITH RESPECT TO THE GRID
+//IT SHOULD PROBABLY BE A GRIDDATA CLASS LEVEL CONSTANT
 /*! \file FastMarcher.cc
     \brief Contains code for the FastMarcher class
 */
@@ -275,6 +277,84 @@ void FastMarcher::estimateLzDistances()
         /*NOTE:
          * It may be worth adding a little logic here that removes L0 cells when the distance is clearly too far; currently, it will find both cells adjacent to the interface, so being more specific would help reduce the load.
          */
+        }
+    }
+
+//NOTE: CURRENTLY THIS FUNCTION IS USING THE PHI GRID, IT SHOULD BE GETTING
+//SOME ENERGY VALUES ON THE ZERO CONTOUR AS THE ARGUMENT THOUGH.
+void FastMarcher::calculateBoundaryVelocities()
+    {
+    // Access field data
+    const std::vector<std::vector<uint3> > layers = m_field->getLayers();
+    const std::map<char, char> layer_indexer = m_field->getIndex();
+    Index3D indexer = this->m_grid->getIndexer();
+    Scalar3 spacing = m_grid->getSpacing();
+
+    const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
+    std::vector<Scalar3> vectors_to_boundary = m_grid->vecToBoundary(Lz);
+    Scalar missing_value = 0; // The grid value that indicates that a cell's distance has not yet been finalized
+
+    ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+    for (unsigned int i = 0; i < Lz.size(); i++)
+        {
+        Scalar3 vector_to_boundary = vectors_to_boundary[i];
+        int3 point = make_int3(Lz[i].x, Lz[i].y, Lz[i].z);
+        Scalar3 boundary_locations = make_scalar3(Lz[i].x, Lz[i].y, Lz[i].z)*spacing + spacing/2 + vectors_to_boundary[i];
+
+        // For a consistent mathematical formulation of the interpolation,
+        // we determine whether to use the current cell or the previous one
+        // in each direction as the basis of the interpolation depending on
+        // where the boundary is determined to be relative to the current cell 
+        vec3<bool> use_previous = vec3<bool>(vector_to_boundary.x < 0, vector_to_boundary.y < 0, vector_to_boundary.z < 0);
+        int3 index_shifter = make_int3(use_previous.x * (-1), use_previous.y * (-1), use_previous.z * (-1)); 
+        
+        uint3 point_to_use = m_grid->wrap(point + index_shifter);
+        Scalar3 epsilon_unsigned = vector_to_boundary/spacing;
+        Scalar epsilon1  = use_previous.x ? 1 + epsilon_unsigned.x : epsilon_unsigned.x;
+        Scalar epsilon2  = use_previous.y ? 1 + epsilon_unsigned.y : epsilon_unsigned.y;
+        Scalar epsilon3  = use_previous.z ? 1 + epsilon_unsigned.z : epsilon_unsigned.z;
+        
+        // For clarity, the full interpolation formula is constructed very
+        // explicitly term-by-term. This can be changed later if it is too
+        // verbose.
+        Scalar eps000 = (1-epsilon1)*(1-epsilon2)*(1-epsilon3);
+        Scalar eps001 = (1-epsilon1)*(1-epsilon2)*epsilon3;
+        Scalar eps010 = (1-epsilon1)*epsilon2*(1-epsilon3);
+        Scalar eps011 = (1-epsilon1)*epsilon2*epsilon3;
+        Scalar eps100 = epsilon1*(1-epsilon2)*(1-epsilon3);
+        Scalar eps101 = epsilon1*(1-epsilon2)*epsilon3;
+        Scalar eps110 = epsilon1*epsilon2*(1-epsilon3);
+        Scalar eps111 = epsilon1*epsilon2*epsilon3;
+
+        uint3 index000 = point_to_use;
+        uint3 index001 = make_uint3(point_to_use.x, point_to_use.y, point_to_use.z + 1);
+        uint3 index010 = make_uint3(point_to_use.x, point_to_use.y + 1, point_to_use.z);
+        uint3 index011 = make_uint3(point_to_use.x, point_to_use.y + 1, point_to_use.z + 1);
+        uint3 index100 = make_uint3(point_to_use.x + 1, point_to_use.y, point_to_use.z);
+        uint3 index101 = make_uint3(point_to_use.x + 1, point_to_use.y, point_to_use.z + 1);
+        uint3 index110 = make_uint3(point_to_use.x + 1, point_to_use.y + 1, point_to_use.z);
+        uint3 index111 = make_uint3(point_to_use.x + 1, point_to_use.y + 1, point_to_use.z + 1);
+
+        // As a best guess, for cells that don't have well defined energies (e.g. anything not on
+        //NOTE: THIS SHOULDN'T BE USING H_PHI, IT NEEDS ACTUAL ENERGIES ON L0
+        Scalar energy000 = h_phi.data[indexer(index000.x, index000.y, index000.z)];
+        Scalar energy001 = h_phi.data[indexer(index001.x, index001.y, index001.z)];
+        energy001 = (energy001 == missing_value) ? energy000 : energy001;
+        Scalar energy010 = h_phi.data[indexer(index010.x, index010.y, index010.z)];
+        energy010 = (energy010 == missing_value) ? energy000 : energy010;
+        Scalar energy011 = h_phi.data[indexer(index011.x, index011.y, index011.z)];
+        energy011 = (energy011 == missing_value) ? energy000 : energy011;
+        Scalar energy100 = h_phi.data[indexer(index100.x, index100.y, index100.z)];
+        energy100 = (energy100 == missing_value) ? energy000 : energy100;
+        Scalar energy101 = h_phi.data[indexer(index101.x, index101.y, index101.z)];
+        energy101 = (energy101 == missing_value) ? energy000 : energy101;
+        Scalar energy110 = h_phi.data[indexer(index110.x, index110.y, index110.z)];
+        energy110 = (energy110 == missing_value) ? energy000 : energy110;
+        Scalar energy111 = h_phi.data[indexer(index111.x, index111.y, index111.z)];
+        energy111 = (energy111 == missing_value) ? energy000 : energy111;
+
+        Scalar boundary_value = eps000*energy000 + eps001*energy001 + eps010*energy010 + eps011*energy011
+            + eps100*energy100 + eps101*energy101 + eps110*energy110 + eps111*energy111;
         }
     }
 

@@ -133,8 +133,10 @@ class GridData
                             GPUArray<Scalar>& dxdy, GPUArray<Scalar>& dxdz, GPUArray<Scalar>& dydz, 
                             GridData::deriv_direction dir);
 
-        //! Find the exact location of the boundary on the phi grid
-        std::vector<vec3<Scalar> > findBoundary(std::vector<uint3> points);
+        //! Find the vector from the each of the input points to the exact location of the boundary on the phi grid
+        /*! \param points A vector of points for which to compute the derivative; the remainder of the input grids will be untouched
+        */
+        std::vector<Scalar3> vecToBoundary(std::vector<uint3> points);
 
         //! Returns a heaviside function of the desired order on the phi grid
         GPUArray<Scalar> heaviside(unsigned int order = 0);

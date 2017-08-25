@@ -426,11 +426,11 @@ GPUArray<Scalar> GridData::delta(std::vector<uint3> points)
     return delta;
     }
 
-std::vector<vec3<Scalar> > GridData::findBoundary(std::vector<uint3> points)
+std::vector<Scalar3> GridData::vecToBoundary(std::vector<uint3> points)
     {
     // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
     GPUArray<Scalar> divx(points.size(), m_exec_conf), divy(points.size(), m_exec_conf), divz(points.size(), m_exec_conf); 
-    std::vector<vec3<Scalar> > boundary_vecs;
+    std::vector<Scalar3> boundary_vecs;
     grad(divx, divy, divz, points, this->CENTRAL);
 
         {
@@ -449,7 +449,7 @@ std::vector<vec3<Scalar> > GridData::findBoundary(std::vector<uint3> points)
 
             Scalar dist = h_phi.data[m_indexer(points[i].x, points[i].y, points[i].z)];
 
-            boundary_vecs[i] = vec3<Scalar>(h_divx.data[i]*dist, h_divy.data[i]*dist, h_divz.data[i]*dist); 
+            boundary_vecs[i] = make_scalar3(h_divx.data[i]*dist, h_divy.data[i]*dist, h_divz.data[i]*dist); 
             }
         }
 
