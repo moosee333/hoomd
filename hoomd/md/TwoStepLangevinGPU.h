@@ -39,6 +39,12 @@ class TwoStepLangevinGPU : public TwoStepLangevin
                            const std::string& suffix = std::string(""));
         virtual ~TwoStepLangevinGPU() {};
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 5;
+            }
+
         //! Performs the first step of the integration
         virtual void integrateStepOne(unsigned int timestep);
 

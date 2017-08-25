@@ -448,62 +448,37 @@ void IntegratorTwoStep::setAutotunerParams(bool enable, unsigned int period)
             (*method)->setAutotunerParams(enable, period);
     }
 
+void IntegratorTwoStep::TestF()
+    {
+    std::vector< std::shared_ptr<IntegrationMethodTwoStep> >::iterator method;
+    for (method = m_methods.begin(); method != m_methods.end(); ++method)
+        {
+            IntegratorVariables v = (*method)->getIntegratorVariables();
+        }
+
+    }
+
 ///////////////////////////////////////begin frankencode
-//from hpmc/GSDHPMCSchema.h
-int gwrite(gsd_handle& handle, const std::string& name, unsigned int Ntypes, const param_array<hpmc::sph_params>& shape)
-    {
-    if(!m_exec_conf->isRoot())
-        return 0;
-    int retval = 0;
-    std::string path = name + "radius";
-    std::vector<float> data(Ntypes);
-    std::transform(shape.begin(), shape.end(), data.begin(), [](const hpmc::sph_params& s)->float{return s.radius;});
-    retval |= gsd_write_chunk(&handle, path.c_str(), GSD_TYPE_FLOAT, Ntypes, 1, 0, (void *)&data[0]);
-    return retval;
-    }
-
-bool read(  std::shared_ptr<GSDReader> reader,
-            uint64_t frame,
-            const std::string& name,
-            unsigned int Ntypes,
-            param_array<hpmc::sph_params>& shape
-        )
-    {
-    bool success = true;
-    std::string path = name + "radius";
-    std::vector<float> data;
-    if(m_exec_conf->isRoot()){
-        data.resize(Ntypes, 0.0);
-        success = reader->readChunk((void *) &data[0], frame, path.c_str(), Ntypes*gsd_sizeof_type(GSD_TYPE_FLOAT), Ntypes) && success;
-    }
-
-#ifdef ENABLE_MPI
-    if(m_mpi)
-        {
-        bcast(data, 0, m_exec_conf->getMPICommunicator()); // broadcast the data
-        }
-#endif
-    if(!data.size()) // adding this sanity check but can remove.
-        throw std::runtime_error("Error occured while attempting to restore from gsd file.");
-    for(unsigned int i = 0; i < Ntypes; i++)
-        {
-        shape[i].radius = data[i];
-        }
-    return success;
-    }
-
 
 //from IntegrationHPMCMono.h
 void IntegratorTwoStep::connectGSDSignal(std::shared_ptr<GSDDumpWriter> writer,
                                          std::string name)
     {
     typedef ::detail::SharedSignalSlot<int(gsd_handle&)> SlotType;
-    auto func = std::bind(&IntegrationMethodTwoStep::slotWriteGSD, this, std::placeholders::_1, name);
+    auto func = std::bind(&IntegratorTwoStep::slotWriteGSD, this, std::placeholders::_1, name);
     std::shared_ptr<::detail::SignalSlot> pslot( new SlotType(writer->getWriteSignal(), func));
     addSlot(pslot);
     }
 
-int IntegratorTwoStep::slotWriteGSD( gsd_handle& handle, std::string name ) const
+// Integrator type will be indicated with an int.
+// Types are mapped:
+// 0 - NVE
+// 1 - NVT
+// 2 - NPT
+// 3 - BD
+// 4 - Berendsen
+// 5 - Langevin
+int IntegratorTwoStep::slotWriteGSD(gsd_handle& handle, const std::string name) const
     {
     m_exec_conf->msg->notice(10) << "Writing to GSD File to name: "<< name << std::endl;
     int retval = 0;
@@ -521,31 +496,34 @@ int IntegratorTwoStep::slotWriteGSD( gsd_handle& handle, std::string name ) cons
     std::vector<int> method_ids;
     // This vector holds the integrator variables themselves
     std::vector<float> method_variables;
+
+    std::vector< std::shared_ptr<IntegrationMethodTwoStep> >::iterator method;
     for (method = m_methods.begin(); method != m_methods.end(); ++method)
         {
-            IntegratorVariables v = method.getIntegratorVariables();
+            IntegratorVariables v = (*method)->getIntegratorVariables();
             for (unsigned int i = 0; i < v.variable.size(); i++)
                 {
                 method_variables.push_back(v.variable[i]);
                 }
             method_N.push_back(v.variable.size());
-            method_ids.push_back(method.getGSDID()); // Not implemented yet
-
-    gwrite(handle, "state/md/integrator/N", m_pdata->getNTypes(), h_d.data, GSD_TYPE_DOUBLE);
-    if(m_hasOrientation)
-        {
-        gwrite(handle, "state/hpmc/integrate/a", m_pdata->getNTypes(), h_a.data, GSD_TYPE_DOUBLE);
+            method_ids.push_back((*method)->getGSDID());
         }
-    retval |= gwrite(handle, name, m_pdata->getNTypes(), m_params);
+
+    const std::string id_path = name + "state/md/integrator/id";
+    const std::string num_path = name + "state/md/integrator/Nvars";
+    const std::string var_path = name + "state/md/integrator/vars";
+
+    retval |= gsd_write_chunk(&handle, id_path.c_str(), GSD_TYPE_INT8, method_ids.size(), 1, 0, &method_ids);
+    retval |= gsd_write_chunk(&handle, num_path.c_str(), GSD_TYPE_INT8, method_N.size(), 1, 0, &method_N);
+    retval |= gsd_write_chunk(&handle, var_path.c_str(), GSD_TYPE_FLOAT, method_variables.size(), 1, 0, &method_variables);
 
     return retval;
     }
 
-template <class Shape>
-bool IntegratorHPMCMono<Shape>::restoreStateGSD( std::shared_ptr<GSDReader> reader, std::string name)
+bool IntegratorTwoStep::restoreStateGSD(std::shared_ptr<GSDReader> reader, std::string name)
     {
     bool success = true;
-    m_exec_conf->msg->notice(10) << "IntegratorHPMCMono from GSD File to name: "<< name << std::endl;
+    m_exec_conf->msg->notice(10) << "Restoring from GSD File to name: "<< name << std::endl;
     uint64_t frame = reader->getFrame();
     // create schemas
     #ifdef ENABLE_MPI
@@ -553,22 +531,17 @@ bool IntegratorHPMCMono<Shape>::restoreStateGSD( std::shared_ptr<GSDReader> read
     #else
     bool mpi=false;
     #endif
-    gsd_schema_hpmc schema(m_exec_conf, mpi);
-    gsd_shape_schema<typename Shape::param_type> schema_shape(m_exec_conf, mpi);
+    gsd_schema schema(m_exec_conf, mpi);
 
-    ArrayHandle<Scalar> h_d(m_d, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_a(m_a, access_location::host, access_mode::readwrite);
-    schema.read(reader, frame, "state/hpmc/integrate/d", m_pdata->getNTypes(), h_d.data, GSD_TYPE_DOUBLE);
-    if(m_hasOrientation)
-        {
-        schema.read(reader, frame, "state/hpmc/integrate/a", m_pdata->getNTypes(), h_a.data, GSD_TYPE_DOUBLE);
-        }
-    schema_shape.read(reader, frame, name, m_pdata->getNTypes(), m_params);
+    ArrayHandle<Scalar> h_method_ids(m_d, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_method_Nvars(m_d, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_method_vars(m_d, access_location::host, access_mode::readwrite);
+    schema.read(reader, frame, "state/md/integrator/id", m_pdata->getNTypes(), h_method_ids.data GSD_TYPE_DOUBLE);
+    schema.read(reader, frame, "state/md/integrator/Nvars", m_pdata->getNTypes(), h_method_Nvars.data, GSD_TYPE_DOUBLE);
+    schema.read(reader, frame, "state/md/integrator/vars", m_pdata->getNTypes(), h_method_vars.data, GSD_TYPE_DOUBLE);
     return success;
     }
 
-
-////////////////////////////////////////End frankencode
 
 
 void export_IntegratorTwoStep(py::module& m)
@@ -581,6 +554,10 @@ void export_IntegratorTwoStep(py::module& m)
         .def("addForceComposite", &IntegratorTwoStep::addForceComposite)
         .def("removeForceComputes", &IntegratorTwoStep::removeForceComputes)
         .def("initializeIntegrationMethods", &IntegratorTwoStep::initializeIntegrationMethods)
+        .def("connectGSDSignal", &IntegratorTwoStep::connectGSDSignal)
+        .def("slotWriteGSD", &IntegratorTwoStep::slotWriteGSD)
+        .def("restoreStateGSD", &IntegratorTwoStep::restoreStateGSD)
+        .def("TestF", &IntegratorTwoStep::TestF)
         ;
 
     py::enum_<IntegratorTwoStep::AnisotropicMode>(m,"IntegratorAnisotropicMode")

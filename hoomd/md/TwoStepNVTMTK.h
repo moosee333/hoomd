@@ -109,6 +109,12 @@ class TwoStepNVTMTK : public IntegrationMethodTwoStep
             setIntegratorVariables(v);
             }
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 1;
+            }
+
     protected:
         std::shared_ptr<ComputeThermo> m_thermo;    //!< compute for thermodynamic quantities
 

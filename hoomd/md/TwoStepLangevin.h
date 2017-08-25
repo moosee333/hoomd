@@ -56,6 +56,12 @@ class TwoStepLangevin : public TwoStepLangevinBase
         //! Returns logged values
         Scalar getLogValue(const std::string& quantity, unsigned int timestep, bool &my_quantity_flag);
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 5;
+            }
+
         //! Performs the second step of the integration
         virtual void integrateStepOne(unsigned int timestep);
 

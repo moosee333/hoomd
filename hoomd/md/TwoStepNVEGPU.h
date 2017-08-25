@@ -39,6 +39,12 @@ class TwoStepNVEGPU : public TwoStepNVE
         //! Performs the second step of the integration
         virtual void integrateStepTwo(unsigned int timestep);
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 0;
+            }
+
         //! Set autotuner parameters
         /*! \param enable Enable/disable autotuning
             \param period period (approximate) in time steps when returning occurs

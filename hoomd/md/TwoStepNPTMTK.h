@@ -142,6 +142,12 @@ class TwoStepNPTMTK : public IntegrationMethodTwoStep
             m_gamma = gamma;
             }
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 2;
+            }
+
         //! Performs the first step of the integration
         virtual void integrateStepOne(unsigned int timestep);
 

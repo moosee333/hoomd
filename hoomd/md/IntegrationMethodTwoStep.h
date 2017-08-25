@@ -185,6 +185,13 @@ class IntegrationMethodTwoStep
         //! Validate that all members in the particle group are valid (throw an exception if they are not)
         virtual void validateGroup();
 
+        //! Return an ID value that is used for GSD restarting
+        int getGSDID()
+            {
+            return 0;
+            }
+
+
 #ifdef ENABLE_MPI
         //! Set the communicator to use
         /*! \param comm MPI communication class
@@ -224,6 +231,13 @@ class IntegrationMethodTwoStep
         //! Reinitialize the integration variables if needed (implemented in the actual subclasses)
         virtual void initializeIntegratorVariables() {}
 
+        //! helper function to get the integrator variables from the particle data
+        //! this used to be protected
+        const IntegratorVariables& getIntegratorVariables()
+            {
+            return m_sysdef->getIntegratorData()->getIntegratorVariables(m_integrator_id);
+            }
+
     protected:
         const std::shared_ptr<SystemDefinition> m_sysdef; //!< The system definition this method is associated with
         const std::shared_ptr<ParticleGroup> m_group;     //!< The group of particles this method works on
@@ -234,11 +248,6 @@ class IntegrationMethodTwoStep
 
         Scalar m_deltaT;                                    //!< The time step
 
-        //! helper function to get the integrator variables from the particle data
-        const IntegratorVariables& getIntegratorVariables()
-            {
-            return m_sysdef->getIntegratorData()->getIntegratorVariables(m_integrator_id);
-            }
 
         //! helper function to store the integrator variables in the particle data
         void setIntegratorVariables(const IntegratorVariables& variables)

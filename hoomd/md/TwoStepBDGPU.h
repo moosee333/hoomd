@@ -39,6 +39,12 @@ class TwoStepBDGPU : public TwoStepBD
 
         virtual ~TwoStepBDGPU() {};
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 3;
+            }
+
         //! Performs the first step of the integration
         virtual void integrateStepOne(unsigned int timestep);
 

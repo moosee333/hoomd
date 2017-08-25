@@ -38,6 +38,12 @@ class TwoStepBerendsenGPU : public TwoStepBerendsen
         //! Performs the second step of the integration
         virtual void integrateStepTwo(unsigned int timestep);
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 4;
+            }
+
     protected:
         unsigned int m_block_size; //!< Block size to launch on the GPU
     };

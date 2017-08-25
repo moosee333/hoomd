@@ -48,6 +48,12 @@ class TwoStepNVE : public IntegrationMethodTwoStep
             m_zero_force = zero_force;
             }
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 0;
+            }
+
         //! Performs the first step of the integration
         virtual void integrateStepOne(unsigned int timestep);
 

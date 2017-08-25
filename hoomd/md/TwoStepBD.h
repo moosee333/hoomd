@@ -43,6 +43,12 @@ class TwoStepBD : public TwoStepLangevinBase
 
         virtual ~TwoStepBD();
 
+        //! Returns an ID value used for GSD restartable jobs
+        int getGSDID()
+            {
+            return 3;
+            }
+
         //! Performs the second step of the integration
         virtual void integrateStepOne(unsigned int timestep);
 
