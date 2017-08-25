@@ -85,10 +85,6 @@ void SparseFieldUpdater::initializeLz()
     uint3 dims = m_grid->getDimensions();
     Index3D indexer = this->m_grid->getIndexer();
 
-    // Use periodic flags
-    const BoxDim& box = this->m_pdata->getBox();
-    uchar3 periodic = box.getPeriodic();
-
     unsigned int zero_index = m_index[0];
 
     // Loop over all cells, and compute neighbors
@@ -135,24 +131,9 @@ void SparseFieldUpdater::initializeLz()
                 for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
                     {
                         int3 neighbor_idx = neighbor_indices[idx];
-                        int x = neighbor_idx.x;
-                        int y = neighbor_idx.y;
-                        int z = neighbor_idx.z;
+                        uint3 periodic_neighbor = m_grid->wrap(neighbor_idx);
 
-                        if (periodic.x && x < 0)
-                            x += dims.x;
-                        if (periodic.y && y < 0)
-                            y += dims.y;
-                        if (periodic.z && z < 0)
-                            z += dims.z;
-                        if (periodic.x && x >= (int) dims.x)
-                            x -= dims.x;
-                        if (periodic.y && y >= (int) dims.y)
-                            y -= dims.y;
-                        if (periodic.z && z >= (int) dims.z)
-                            z -= dims.z;
-
-                        unsigned int neighbor_cell = indexer(x, y, z);
+                        unsigned int neighbor_cell = indexer(periodic_neighbor.x, periodic_neighbor.y, periodic_neighbor.z);
 
                         if(cur_sign != sgn(h_fn.data[neighbor_cell]))
                             {
@@ -185,12 +166,6 @@ void SparseFieldUpdater::initializeL1()
     // Access grid data
     ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
-
-    // Use periodic flags
-    const BoxDim& box = this->m_pdata->getBox();
-    uchar3 periodic = box.getPeriodic();
-
-    uint3 dims = m_grid->getDimensions();
     Index3D indexer = this->m_grid->getIndexer();
 
     int layer = 1;
@@ -221,43 +196,28 @@ void SparseFieldUpdater::initializeL1()
         for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
             {
             int3 neighbor_idx = neighbor_indices[idx];
-            int x = neighbor_idx.x;
-            int y = neighbor_idx.y;
-            int z = neighbor_idx.z;
-
-            if (periodic.x && x < 0)
-                x += dims.x;
-            if (periodic.y && neighbor_idx.y < 0)
-                y += dims.y;
-            if (periodic.z && neighbor_idx.z < 0)
-                z += dims.z;
-            if (periodic.x && x >= (int) dims.x)
-                x -= dims.x;
-            if (periodic.y && y >= (int) dims.y)
-                y -= dims.y;
-            if (periodic.z && z >= (int) dims.z)
-                z -= dims.z;
-            unsigned int neighbor_cell = indexer(x, y, z);
+            uint3 periodic_neighbor = m_grid->wrap(neighbor_idx);
+            unsigned int neighbor_cell = indexer(periodic_neighbor.x, periodic_neighbor.y, periodic_neighbor.z);
 
             // Make sure that this cell is not already in Lz, Lp1, or Ln1
             // NOTE: Is there a way to make this efficient? Possibly better data structure than list?
             // May need to use some combination of vector and hashmap to get good add and removal speed
-            auto test_pos = std::find(std::begin(m_layers[pos_layer_index]), std::end(m_layers[pos_layer_index]), make_uint3(x, y, z));
+            auto test_pos = std::find(std::begin(m_layers[pos_layer_index]), std::end(m_layers[pos_layer_index]), periodic_neighbor);
             if (test_pos != std::end(m_layers[pos_layer_index]))
                 continue;
 
-            auto test_neg = std::find(std::begin(m_layers[neg_layer_index]), std::end(m_layers[neg_layer_index]), make_uint3(x, y, z));
+            auto test_neg = std::find(std::begin(m_layers[neg_layer_index]), std::end(m_layers[neg_layer_index]), periodic_neighbor);
             if (test_neg != std::end(m_layers[neg_layer_index]))
                 continue;
 
-            auto test_prev = std::find(std::begin(m_layers[prev_layer_index]), std::end(m_layers[prev_layer_index]), make_uint3(x, y, z));
+            auto test_prev = std::find(std::begin(m_layers[prev_layer_index]), std::end(m_layers[prev_layer_index]), periodic_neighbor);
             if (test_prev != std::end(m_layers[prev_layer_index]))
                 continue;
 
             if (h_fn.data[neighbor_cell] > 0)
-                m_layers[neg_layer_index].push_back(make_uint3(x, y, z));
+                m_layers[neg_layer_index].push_back(periodic_neighbor);
             else
-                m_layers[pos_layer_index].push_back(make_uint3(x, y, z));
+                m_layers[pos_layer_index].push_back(periodic_neighbor);
             } // End loop over neighbors
         } // End m_layers[prev_layer_index] loop
     }
@@ -269,12 +229,6 @@ void SparseFieldUpdater::initializeLayer(int layer)
     // Access grid data
     ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
-
-    // Use periodic flags
-    const BoxDim& box = this->m_pdata->getBox();
-    uchar3 periodic = box.getPeriodic();
-
-    uint3 dims = m_grid->getDimensions();
 
     unsigned int cur_layer_index = m_index[layer];
     int prev_layer = layer > 0 ? layer - 1 : layer + 1;
@@ -306,39 +260,24 @@ void SparseFieldUpdater::initializeLayer(int layer)
         for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
             {
             int3 neighbor_idx = neighbor_indices[idx];
-            int x = neighbor_idx.x;
-            int y = neighbor_idx.y;
-            int z = neighbor_idx.z;
-
-            if (periodic.x && x < 0)
-                x += dims.x;
-            if (periodic.y && neighbor_idx.y < 0)
-                y += dims.y;
-            if (periodic.z && neighbor_idx.z < 0)
-                z += dims.z;
-            if (periodic.x && x >= (int) dims.x)
-                x -= dims.x;
-            if (periodic.y && y >= (int) dims.y)
-                y -= dims.y;
-            if (periodic.z && z >= (int) dims.z)
-                z -= dims.z;
+            uint3 periodic_neighbor = m_grid->wrap(neighbor_idx);
 
             // Make sure that this cell is not in any of the previous layers. Have to test the "previous" two layers
             // NOTE: Is there a way to make this efficient? Possibly better data structure than list?
             // May need to use some combination of vector and hashmap to get good add and removal speed
-            auto test_cur = std::find(std::begin(m_layers[cur_layer_index]), std::end(m_layers[cur_layer_index]), make_uint3(x, y, z));
+            auto test_cur = std::find(std::begin(m_layers[cur_layer_index]), std::end(m_layers[cur_layer_index]), periodic_neighbor);
             if (test_cur != std::end(m_layers[cur_layer_index]))
                 continue;
 
-            auto test_prev = std::find(std::begin(m_layers[prev_layer_index]), std::end(m_layers[prev_layer_index]), make_uint3(x, y, z));
+            auto test_prev = std::find(std::begin(m_layers[prev_layer_index]), std::end(m_layers[prev_layer_index]), periodic_neighbor);
             if (test_prev != std::end(m_layers[prev_layer_index]))
                 continue;
 
-            auto test_second = std::find(std::begin(m_layers[second_layer_index]), std::end(m_layers[second_layer_index]), make_uint3(x, y, z));
+            auto test_second = std::find(std::begin(m_layers[second_layer_index]), std::end(m_layers[second_layer_index]), periodic_neighbor);
             if (test_second != std::end(m_layers[second_layer_index]))
                 continue;
 
-            m_layers[cur_layer_index].push_back(make_uint3(x, y, z));
+            m_layers[cur_layer_index].push_back(periodic_neighbor);
             } // End loop over neighbors
         } // End m_layers[prev_layer_index] loop
     }

@@ -117,11 +117,16 @@ GPUArray<Scalar> GridData::heaviside(unsigned int order)
         case 0:
             return this->heaviside0();
             break;
+        case 1:
+            return this->heaviside1();
+            break;
         default:
             throw std::runtime_error("The heaviside function order you have requested is not available.");
         }
     }
 
+//NOTE: Fix this using Jens's new version (check i+1 and i-1 instead of i+2 and i-2)
+//NOTE: Adapt this to take the list of points that we want to use
 void GridData::hessian(GPUArray<Scalar>& dx_square, GPUArray<Scalar>& dy_square, GPUArray<Scalar>& dz_square, 
                     GPUArray<Scalar>& dxdy, GPUArray<Scalar>& dxdz, GPUArray<Scalar>& dydz, 
                     GridData::deriv_direction dir)
@@ -267,72 +272,6 @@ void GridData::grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Sca
             h_divz.data[cur_idx] = (h_phi.data[z_forward_idx] - h_phi.data[z_reverse_idx])/spacing.z/2;
             }
         }
-	}
-
-void GridData::grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, GridData::deriv_direction dir)
-	{
-    // access the GPU arrays
-    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
-    Index3D indexer = this->getIndexer();
-
-    // Access GPUArrays
-    ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-
-    Scalar3 spacing = this->getSpacing();
-    for (unsigned int i = 0; i < m_dim.x; i++)
-        for (unsigned int j = 0; j < m_dim.y; j++)
-            for (unsigned int k = 0; k < m_dim.z; k++)
-                {
-                unsigned int cur_idx = indexer(i, j, k);
-                if(dir == GridData::FORWARD)
-                    {
-                    int x = this->wrapx(i+1);
-                    int y = this->wrapy(j+1);
-                    int z = this->wrapz(k+1);
-
-                    unsigned int x_idx = indexer(x, j, k);
-                    unsigned int y_idx = indexer(i, y, k);
-                    unsigned int z_idx = indexer(i, j, z);
-                    h_divx.data[cur_idx] = (h_phi.data[x_idx] - h_phi.data[cur_idx])/spacing.x;
-                    h_divy.data[cur_idx] = (h_phi.data[y_idx] - h_phi.data[cur_idx])/spacing.y;
-                    h_divz.data[cur_idx] = (h_phi.data[z_idx] - h_phi.data[cur_idx])/spacing.z;
-                    }
-                else if(dir == GridData::REVERSE)
-                    {
-                    int x = this->wrapx(i-1);
-                    int y = this->wrapy(j-1);
-                    int z = this->wrapz(k-1);
-
-                    unsigned int x_idx = indexer(x, j, k);
-                    unsigned int y_idx = indexer(i, y, k);
-                    unsigned int z_idx = indexer(i, j, z);
-                    h_divx.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[x_idx])/spacing.x;
-                    h_divy.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[y_idx])/spacing.y;
-                    h_divz.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[z_idx])/spacing.z;
-                    }
-                else if(dir == GridData::CENTRAL)
-                    {
-                    int x_forward = this->wrapx(i+1);
-                    int y_forward = this->wrapy(j+1);
-                    int z_forward = this->wrapz(k+1);
-                    int x_reverse = this->wrapx(i-1);
-                    int y_reverse = this->wrapy(j-1);
-                    int z_reverse = this->wrapz(k-1);
-
-                    unsigned int x_forward_idx = indexer(x_forward, j, k);
-                    unsigned int y_forward_idx = indexer(i, y_forward, k);
-                    unsigned int z_forward_idx = indexer(i, j, z_forward);
-                    unsigned int x_reverse_idx = indexer(x_reverse, j, k);
-                    unsigned int y_reverse_idx = indexer(i, y_reverse, k);
-                    unsigned int z_reverse_idx = indexer(i, j, z_reverse);
-
-                    h_divx.data[cur_idx] = (h_phi.data[x_forward_idx] - h_phi.data[x_reverse_idx])/spacing.x/2;
-                    h_divy.data[cur_idx] = (h_phi.data[y_forward_idx] - h_phi.data[y_reverse_idx])/spacing.y/2;
-                    h_divz.data[cur_idx] = (h_phi.data[z_forward_idx] - h_phi.data[z_reverse_idx])/spacing.z/2;
-                    }
-                }
 	}
 
 GPUArray<Scalar> GridData::delta(std::vector<uint3> points)
@@ -485,6 +424,36 @@ GPUArray<Scalar> GridData::delta(std::vector<uint3> points)
             }
         }
     return delta;
+    }
+
+std::vector<vec3<Scalar> > GridData::findBoundary(std::vector<uint3> points)
+    {
+    // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
+    GPUArray<Scalar> divx(points.size(), m_exec_conf), divy(points.size(), m_exec_conf), divz(points.size(), m_exec_conf); 
+    std::vector<vec3<Scalar> > boundary_vecs;
+    grad(divx, divy, divz, points, this->CENTRAL);
+
+        {
+        ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+
+        ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::read);
+        ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::read);
+        ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::read);
+        
+        for (unsigned int i = 0; i < points.size(); i++)
+            {
+            Scalar norm_grad = sqrt(h_divx.data[i]*h_divx.data[i] + h_divy.data[i]*h_divy.data[i] + h_divz.data[i]*h_divz.data[i]);
+            h_divx.data[i] /= norm_grad;
+            h_divy.data[i] /= norm_grad;
+            h_divz.data[i] /= norm_grad;
+
+            Scalar dist = h_phi.data[m_indexer(points[i].x, points[i].y, points[i].z)];
+
+            boundary_vecs[i] = vec3<Scalar>(h_divx.data[i]*dist, h_divy.data[i]*dist, h_divz.data[i]*dist); 
+            }
+        }
+
+    return boundary_vecs;
     }
 
 template<class Real>

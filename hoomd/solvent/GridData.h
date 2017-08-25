@@ -121,15 +121,6 @@ class GridData
         */
         void grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, std::vector<uint3> points, GridData::deriv_direction dir = FORWARD);
 
-        //! Returns the gradient of the phi grid
-        /*! \param dx GPUArray to insert x derivatives into of same dimension as underlying grid
-            \param dy GPUArray to insert y derivatives into of same dimension as underlying grid
-            \param dz GPUArray to insert z derivatives into of same dimension as underlying grid
-            \param dir The type of finite-differencing to use to compute the derivative
-        */
-        //NOTE: I SHOULD REMOVE THIS
-        void grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, GridData::deriv_direction dir = FORWARD);
-
         //! Returns the hessian of the phi grid
         /*! \param dx_square GPUArray to insert x derivatives into
             \param dy_square GPUArray to insert y derivatives into
@@ -141,6 +132,9 @@ class GridData
         void hessian(GPUArray<Scalar>& dx_square, GPUArray<Scalar>& dy_square, GPUArray<Scalar>& dz_square, 
                             GPUArray<Scalar>& dxdy, GPUArray<Scalar>& dxdz, GPUArray<Scalar>& dydz, 
                             GridData::deriv_direction dir);
+
+        //! Find the exact location of the boundary on the phi grid
+        std::vector<vec3<Scalar> > findBoundary(std::vector<uint3> points);
 
         //! Returns a heaviside function of the desired order on the phi grid
         GPUArray<Scalar> heaviside(unsigned int order = 0);
@@ -320,8 +314,8 @@ class GridData
             return heavi;
             }
 
-        //! Second order heaviside function on the phi grid
-        inline GPUArray<Scalar> heaviside2()
+        //! First order heaviside function on the phi grid
+        inline GPUArray<Scalar> heaviside1()
             {
             // Create the GPUArray to return and access it
             unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
