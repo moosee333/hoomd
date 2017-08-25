@@ -56,7 +56,7 @@ class SparseFieldUpdater
          * \param sysdef The HOOMD system definition
          * \param num_layers The number of layers to track
          */
-        SparseFieldUpdater(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, bool ignore_zero, char num_layers = 2);
+        SparseFieldUpdater(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, char num_layers = 2);
 
         //! Destructor
         virtual ~SparseFieldUpdater();
@@ -119,8 +119,6 @@ class SparseFieldUpdater
         unsigned char m_num_layers; //!< The number of layers to include (e.g. two for Lz, Lp1, Ln1, Lp2, Ln2)
         std::vector<std::vector<uint3> > m_layers; //!< Sparse field layers
         std::map<char, char> m_index; //!< Mapping from layer number (e.g. -2) to index in the m_layers vector
-
-        bool m_ignore_zero; //!< Whether to include cells with energy values of exactly 0 in Lz
     private:
 
 		//! Simple helper function to compute the sign

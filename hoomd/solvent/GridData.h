@@ -68,8 +68,6 @@ struct SnapshotGridData;
     For interfacing with python, the class also a thin wrapper around a copy of the
     arrays, a SnapshotGridData, that can be acccess via numpy.
     */
-// NOTE: Should store a mask array and a flag indicating whether or not it is up to date. This will e much more
-// efficient than recomputing it each time. Not sure exactly how I can enforce this though...
 class GridData
     {
     public:
@@ -77,10 +75,16 @@ class GridData
         /* \param sysdef The HOOMD system definition
          * \param sigma the maximum requested grid spacing along every dimension
          */
-        GridData(std::shared_ptr<SystemDefinition> sysdef, Scalar sigma);
+        GridData(std::shared_ptr<SystemDefinition> sysdef, Scalar sigma, bool ignore_zero);
 
         //! Destructor
         virtual ~GridData();
+
+        //! Whether or not to ignore zero cells when determining the boundary
+        bool ignoreZero()
+            {
+            return m_ignore_zero;
+            }
 
         //! Returns the distance function grid
         const GPUArray<Scalar>& getPhiGrid()
@@ -188,7 +192,7 @@ class GridData
         //! Wrap a vector around a grid
         /*! \param coords Vector to wrap, updated in place
         */
-        inline void wrap(int3& coords)
+        inline uint3 wrap(int3 coords)
             {
             // Use periodic flags
             const BoxDim& box = this->m_pdata->getBox();
@@ -206,6 +210,8 @@ class GridData
                 coords.y -= m_dim.y;
             if (periodic.z && coords.z >= (int) m_dim.z)
                 coords.z -= m_dim.z;
+
+            return make_uint3(coords.x, coords.y, coords.z);
            }
 
         //! Wrap grid indices in the x direction

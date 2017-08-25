@@ -16,13 +16,12 @@ namespace solvent
 {
 
 //! Constructor
-SparseFieldUpdater::SparseFieldUpdater(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, bool ignore_zero, char num_layers)
+SparseFieldUpdater::SparseFieldUpdater(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, char num_layers)
     : m_sysdef(sysdef),
       m_pdata(sysdef->getParticleData()),
       m_exec_conf(m_pdata->getExecConf()),
       m_grid(grid),
-      m_num_layers(num_layers),
-      m_ignore_zero(ignore_zero)
+      m_num_layers(num_layers)
     {
     // Initialize the layers and the index
     m_layers = std::vector<std::vector<uint3> >();
@@ -110,7 +109,7 @@ void SparseFieldUpdater::initializeLz()
                 // The ignore_zero option can be set to avoid these cells.
                 if (cur_sign == 0)
                     {
-                    if (!m_ignore_zero)
+                    if (!m_grid->ignoreZero())
                         {
                         m_exec_conf->msg->notice(5) << "Your system has grid cells with an exactly zero value of the energy."
                             "This is likely because your system is very sparse relative to the specified r_cut."
@@ -160,7 +159,7 @@ void SparseFieldUpdater::initializeLz()
                             // If the sign change is 1 instead of 2, we are on a zero cell and react accordingly.
                             if (std::abs(cur_sign - sgn(h_fn.data[neighbor_cell])) == 1)
                                 {
-                                if (!m_ignore_zero)
+                                if (!m_grid->ignoreZero())
                                     {
                                     m_exec_conf->msg->notice(5) << "Your system has grid cells with an exactly zero value of the energy."
                                         "This is likely because your system is very sparse relative to the specified r_cut."

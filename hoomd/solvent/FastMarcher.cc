@@ -36,16 +36,11 @@ void FastMarcher::march()
 
     // Access grid data
     ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
-    uint3 dims = m_grid->getDimensions();
 
     // Access field data
     const std::vector<std::vector<uint3> > layers = m_field->getLayers();
     const std::map<char, char> layer_indexer = m_field->getIndex();
     Index3D indexer = this->m_grid->getIndexer();
-
-    // Use periodic flags
-    const BoxDim& box = this->m_pdata->getBox();
-    uchar3 periodic = box.getPeriodic();
 
     /**************************
      * March outwards
@@ -109,26 +104,10 @@ void FastMarcher::march()
         for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
             {
             int3 neighbor_idx = neighbor_indices[idx];
-            int x = neighbor_idx.x;
-            int y = neighbor_idx.y;
-            int z = neighbor_idx.z;
-
-            if (periodic.x && x < 0)
-                x += dims.x;
-            if (periodic.y && y < 0)
-                y += dims.y;
-            if (periodic.z && z < 0)
-                z += dims.z;
-            if (periodic.x && x >= (int) dims.x)
-                x -= dims.x;
-            if (periodic.y && y >= (int) dims.y)
-                y -= dims.y;
-            if (periodic.z && z >= (int) dims.z)
-                z -= dims.z;
+            uint3 current_neighbor = m_grid->wrap(neighbor_idx);
 
             // Only bother with points in the layers
             //NOTE: Make sure that make_uint3 is ok here; x, y, z are ints, but should be effectively unsigned
-            uint3 current_neighbor = make_uint3(x, y, z);
             auto existence_iterator = std::find(std::begin(eligible_positive), std::end(eligible_positive), current_neighbor);
             if (existence_iterator == std::end(eligible_positive))
                 continue;
@@ -201,26 +180,10 @@ void FastMarcher::march()
         for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
             {
             int3 neighbor_idx = neighbor_indices[idx];
-            int x = neighbor_idx.x;
-            int y = neighbor_idx.y;
-            int z = neighbor_idx.z;
-
-            if (periodic.x && x < 0)
-                x += dims.x;
-            if (periodic.y && y < 0)
-                y += dims.y;
-            if (periodic.z && z < 0)
-                z += dims.z;
-            if (periodic.x && x >= (int) dims.x)
-                x -= dims.x;
-            if (periodic.y && y >= (int) dims.y)
-                y -= dims.y;
-            if (periodic.z && z >= (int) dims.z)
-                z -= dims.z;
+            uint3 current_neighbor = m_grid->wrap(neighbor_idx);
 
             // Only bother with points in the layers
             //NOTE: Make sure that make_uint3 is ok here; x, y, z are ints, but should be effectively unsigned
-            uint3 current_neighbor = make_uint3(x, y, z);
             auto existence_iterator = std::find(std::begin(eligible_negative), std::end(eligible_negative), current_neighbor);
             if (existence_iterator == std::end(eligible_negative))
                 continue;
@@ -238,16 +201,11 @@ void FastMarcher::estimateLzDistances()
     ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
     Scalar3 grid_spacing = m_grid->getSpacing();
-    uint3 dims = m_grid->getDimensions();
     Index3D indexer = this->m_grid->getIndexer();
 
     // Access field data
     const std::vector<std::vector<uint3> > layers = m_field->getLayers();
     const std::map<char, char> layer_indexer = m_field->getIndex();
-
-    // Use periodic flags
-    const BoxDim& box = this->m_pdata->getBox();
-    uchar3 periodic = box.getPeriodic();
 
     // Interpolate distances on Lz
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
@@ -269,6 +227,7 @@ void FastMarcher::estimateLzDistances()
         directions.push_back(vec3<Scalar>(0, 1, 0));
         directions.push_back(vec3<Scalar>(0, 0, 1));
 
+        // Check forward and backwards for changes in sign
         Scalar shifts[2] = {1, -1};
 
         for (unsigned int i = 0; i < directions.size(); i++)
@@ -293,27 +252,12 @@ void FastMarcher::estimateLzDistances()
             for (unsigned int j = 0; j < sizeof(shifts)/sizeof(Scalar); j++)
                 {
                 vec3<Scalar> total_shift = direction*shifts[j];
-                int neighbor_x = x+total_shift.x;
-                int neighbor_y = y+total_shift.y;
-                int neighbor_z = z+total_shift.z;
-
-                if (periodic.x && neighbor_x < 0)
-                    neighbor_x += dims.x;
-                if (periodic.y && neighbor_y < 0)
-                    neighbor_y += dims.y;
-                if (periodic.z && neighbor_z < 0)
-                    neighbor_z += dims.z;
-                if (periodic.x && neighbor_x >= (int) dims.x)
-                    neighbor_x -= dims.x;
-                if (periodic.y && neighbor_y >= (int) dims.y)
-                    neighbor_y -= dims.y;
-                if (periodic.z && neighbor_z >= (int) dims.z)
-                    neighbor_z -= dims.z;
+                uint3 neighbor_idx = m_grid->wrap(make_int3(x+total_shift.x, y+total_shift.y, z+total_shift.z));
 
                 // Distance calculation is performed by taking the change in energy between cells,
                 // then finding where along that line the zero energy point lies, and then multiplying
                 // that fraction into the grid spacing
-                unsigned int neighbor_cell = indexer(neighbor_x, neighbor_y, neighbor_z);
+                unsigned int neighbor_cell = indexer(neighbor_idx.x, neighbor_idx.y, neighbor_idx.z);
 
                 // If there is no difference between this cell and its neighbor, there cannot be a
                 // crossing, so we can skip it. This also accounts for the special case where the two
@@ -324,7 +268,7 @@ void FastMarcher::estimateLzDistances()
                 Scalar boundary_distance = sgn(total_energy_difference) * step * h_fn.data[cur_cell] / total_energy_difference; // multiply by the sign so that cur_cell determines total sign
                 if (abs(boundary_distance) < abs(min_distance))
                     min_distance = boundary_distance;
-                }
+                } // End loop over directions 
             } // End loops over neighbors
 
         h_phi.data[cur_cell] = min_distance;

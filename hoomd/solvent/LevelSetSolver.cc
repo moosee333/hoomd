@@ -16,12 +16,12 @@ namespace solvent
 {
 
 //! Constructor
-LevelSetSolver::LevelSetSolver(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, bool ignore_zero)
+LevelSetSolver::LevelSetSolver(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid)
     : ForceCompute(sysdef),
       m_sysdef(sysdef),
       m_pdata(sysdef->getParticleData()),
       m_exec_conf(m_pdata->getExecConf()),
-      m_updater(new SparseFieldUpdater(m_sysdef, grid, ignore_zero)),
+      m_updater(new SparseFieldUpdater(m_sysdef, grid)),
       m_marcher(new FastMarcher(m_sysdef, m_updater)),
       m_grid(grid)
     { }
@@ -34,14 +34,6 @@ void LevelSetSolver::addGridForceCompute(std::shared_ptr<GridForceCompute> gfc)
     {
     assert(gfc);
     m_grid_forces.push_back(gfc);
-    }
-
-void export_LevelSetSolver(py::module& m)
-    {
-    pybind11::class_<LevelSetSolver, std::shared_ptr<LevelSetSolver> >(m, "LevelSetSolver", pybind11::base<ForceCompute>())
-        .def(py::init<std::shared_ptr<SystemDefinition>, std::shared_ptr<GridData>, bool>())
-        .def("addGridForceCompute", &LevelSetSolver::addGridForceCompute)
-    ;
     }
 
 void LevelSetSolver::computeForces(unsigned int timestep)
@@ -61,6 +53,14 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     m_marcher->march();
 
     // Once the initial grid is established we compute the numerical derivatives
+    }
+
+void export_LevelSetSolver(py::module& m)
+    {
+    pybind11::class_<LevelSetSolver, std::shared_ptr<LevelSetSolver> >(m, "LevelSetSolver", pybind11::base<ForceCompute>())
+        .def(py::init<std::shared_ptr<SystemDefinition>, std::shared_ptr<GridData> >())
+        .def("addGridForceCompute", &LevelSetSolver::addGridForceCompute)
+    ;
     }
 
 } // end namespace solvent

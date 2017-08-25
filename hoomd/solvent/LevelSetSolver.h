@@ -52,9 +52,8 @@ class LevelSetSolver : public ForceCompute
         //! Constructor
         /* \param sysdef The HOOMD system definition
          * \param grid the grid we'll be solving on
-         * \param ignore_zero Whether to include cells with energy=0 in L0
          */
-        LevelSetSolver(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid, bool ignore_zero);
+        LevelSetSolver(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<GridData> grid);
 
         //! Destructor
         virtual ~LevelSetSolver();

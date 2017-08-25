@@ -17,14 +17,14 @@ namespace solvent
 {
 
 //! Constructor
-GridData::GridData(std::shared_ptr<SystemDefinition> sysdef, Scalar sigma)
+GridData::GridData(std::shared_ptr<SystemDefinition> sysdef, Scalar sigma, bool ignore_zero)
     : m_sysdef(sysdef), 
       m_pdata(sysdef->getParticleData()), 
       m_exec_conf(m_pdata->getExecConf()), 
       m_sigma(sigma), 
       m_dim(make_uint3(0,0,0)),
       m_need_init_grid(true),
-      m_ignore_zero(true)
+      m_ignore_zero(ignore_zero)
     {
     // connect to box change signal
     m_pdata->getBoxChangeSignal() .connect<GridData, &GridData::setBoxChanged>(this);
@@ -527,7 +527,7 @@ void export_SnapshotGridData(py::module& m)
 void export_GridData(py::module& m)
     {
     pybind11::class_<GridData, std::shared_ptr<GridData> >(m, "GridData")
-        .def(py::init<std::shared_ptr<SystemDefinition>, Scalar>())
+        .def(py::init<std::shared_ptr<SystemDefinition>, Scalar, bool>())
         .def("takeSnapshot_double", &GridData::takeSnapshot<double>)
         .def("takeSnapshot_float", &GridData::takeSnapshot<float>)
         .def("setSigma", &GridData::setSigma);

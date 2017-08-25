@@ -19,6 +19,7 @@ class grid(hoomd.meta._metadata):
 
     Args:
         sigma (float): The grid spacing
+        ignore_zero (bool): Whether or not cells with exactly zero energy are considered boundary cells
 
     :py:class:`grid` represents a grid that can be utilized by the ls_solver class to
     find solutions of the variational implicit solvent model.
@@ -29,14 +30,14 @@ class grid(hoomd.meta._metadata):
     forces on the grid can be accessed through these snapshots
 
     """
-    def __init__(self, sigma):
+    def __init__(self, sigma, ignore_zero = False):
         hoomd.util.print_status_line();
 
         self.sigma = sigma
 
         # create the c++ mirror class
         if not hoomd.context.exec_conf.isCUDAEnabled():
-            self.cpp_grid = _solvent.GridData(hoomd.context.current.system_definition, self.sigma);
+            self.cpp_grid = _solvent.GridData(hoomd.context.current.system_definition, self.sigma, ignore_zero);
             self.cpp_class = _solvent.GridData;
         else:
             raise NotImplementedError("Grid pair potentials are not yet GPU enabled!")
