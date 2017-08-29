@@ -27,7 +27,6 @@ By themselves, wall groups do nothing. Only when you specify a wall force
 from hoomd import _hoomd
 from hoomd.md import _md
 from hoomd.md import external
-from hoomd.md._md import walls
 import hoomd;
 import math;
 
@@ -344,7 +343,7 @@ class sphere(object):
 
     """
     def __init__(self, r=0.0, origin=(0.0, 0.0, 0.0), inside=True):
-        self._cpp=walls.Sphere(r, _hoomd.make_scalar3(*origin), inside);
+        self._cpp=_md.walls.Sphere(r, _hoomd.make_scalar3(*origin), inside);
 
     @property
     def r(self):
@@ -392,7 +391,7 @@ class cylinder(object):
     For an example see :py:class:`sphere`.
     """
     def __init__(self, r=0.0, origin=(0.0, 0.0, 0.0), axis=(0.0, 0.0, 1.0), inside=True):
-        self._cpp = walls.Cylinder(r, _hoomd.make_scalar3(*origin), _hoomd.make_scalar3(*axis), inside);
+        self._cpp = _md.walls.Cylinder(r, _hoomd.make_scalar3(*origin), _hoomd.make_scalar3(*axis), inside);
 
     @property
     def r(self):
@@ -416,7 +415,7 @@ class cylinder(object):
         r = self._cpp.r
         origin = _hoomd.make_scalar3(self._cpp.origin.x, self._cpp.origin.y, self._cpp.origin.z)
         inside = self._cpp.inside
-        self._cpp = walls.Cylinder(r, origin, _hoomd.make_scalar3(*axis), inside);
+        self._cpp = _md.walls.Cylinder(r, origin, _hoomd.make_scalar3(*axis), inside);
 
     @property
     def inside(self):
@@ -449,7 +448,7 @@ class plane(object):
     For an example see :py:class:`sphere`.
     """
     def __init__(self, origin=(0.0, 0.0, 0.0), normal=(0.0, 0.0, 1.0), inside=True):
-        self._cpp = walls.Plane(_hoomd.make_scalar3(*origin), _hoomd.make_scalar3(*normal), inside)
+        self._cpp = _md.walls.Plane(_hoomd.make_scalar3(*origin), _hoomd.make_scalar3(*normal), inside)
 
     @property
     def origin(self):
