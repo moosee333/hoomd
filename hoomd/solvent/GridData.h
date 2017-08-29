@@ -100,38 +100,44 @@ class GridData
             return m_fn;
             }
 
+        //! Returns the temporary grid
+        const GPUArray<Scalar>& getTempGrid()
+            {
+            initializeGrid(); // initialize grid if necessary
+            return m_tmp;
+            }
+
         //! Returns a snapshot of the grid arrays
         template<class Real>
         std::shared_ptr<SnapshotGridData<Real> > takeSnapshot();
 
-        //! Simple enumeration of flags to employ to identify the grids
-        typedef enum deriv_direction
-            {
-            FORWARD = 1,
-            REVERSE,
-            CENTRAL
-            } deriv_direction;
-
         //! Returns the gradient of the phi grid
-        /*! \param dx GPUArray to insert x derivatives into of same dimension as underlying grid
-            \param dy GPUArray to insert y derivatives into of same dimension as underlying grid
-            \param dz GPUArray to insert z derivatives into of same dimension as underlying grid
+        /*! \param dx GPUArray to insert x derivatives into of same length as points
+            \param dy GPUArray to insert y derivatives into of same length as points
+            \param dz GPUArray to insert z derivatives into of same length as points
             \param points A vector of points for which to compute the derivative; the remainder of the input grids will be untouched
             \param dir The type of finite-differencing to use to compute the derivative
+NOTE: Currently will return poor approximations (lower order) if the points passed don't have neighbors on both sides; however I should never have
+to compute derivatives away from the boundary, so I'm trusting the user not to pass such points.
         */
-        void grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, std::vector<uint3> points, GridData::deriv_direction dir = FORWARD);
+        void grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, std::vector<uint3> points);
+
+        //! Find the value of the mean curvature K on the set of points
+        void getMeanCurvature(std::vector<uint3> points);
 
         //! Returns the hessian of the phi grid
-        /*! \param dx_square GPUArray to insert x derivatives into
-            \param dy_square GPUArray to insert y derivatives into
-            \param dz_square  GPUArray to insert z derivatives into
-            \param dxdy GPUArray to insert x derivatives into
-            \param dydz GPUArray to insert y derivatives into
-            \param dzdz GPUArray to insert z derivatives into
+        /*! \param ddxx GPUArray to insert d_{xx}
+            \param ddxy GPUArray to insert d_{xy}
+            \param ddxz GPUArray to insert d_{xz}
+            \param ddyy GPUArray to insert d_{yy}
+            \param ddyz GPUArray to insert d_{yz}
+            \param ddzz GPUArray to insert d_{zz}
+NOTE: Currently will return poor approximations (lower order) if the points passed don't have neighbors on both sides; however I should never have
+to compute derivatives away from the boundary, so I'm trusting the user not to pass such points. Same problem as with the grad calculation, I'm just
+assuming that with the sparse field construct this is never an actual problem (whereas it is with a narrow band).
         */
-        void hessian(GPUArray<Scalar>& dx_square, GPUArray<Scalar>& dy_square, GPUArray<Scalar>& dz_square, 
-                            GPUArray<Scalar>& dxdy, GPUArray<Scalar>& dxdz, GPUArray<Scalar>& dydz, 
-                            GridData::deriv_direction dir);
+        void hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<Scalar>& ddxz, 
+                GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vector<uint3> points);
 
         //! Find the vector from the each of the input points to the exact location of the boundary on the phi grid
         /*! \param points A vector of points for which to compute the derivative; the remainder of the input grids will be untouched
@@ -269,6 +275,7 @@ class GridData
 
         GPUArray<Scalar> m_phi; //!< The phi grid, of dimensions m_dim
         GPUArray<Scalar> m_fn;  //!< The velocity grid
+        GPUArray<Scalar> m_tmp;  //!< A temporary grid that can be accessed at any point for temporary usage and debugging
 
         Index3D m_indexer;      //!< The grid indexer
 
@@ -403,7 +410,7 @@ class GridData
                             std::vector<uint3> point;
                             point.push_back(make_uint3(i, j, k));
                             GPUArray<Scalar> divx(point.size(), m_exec_conf), divy(point.size(), m_exec_conf), divz(point.size(), m_exec_conf);
-                            grad(divx, divy, divz, point, this->CENTRAL);
+                            grad(divx, divy, divz, point);
                             
                             Scalar dx, dy, dz;
                             {
@@ -466,6 +473,7 @@ struct SnapshotGridData
         {
         phi.resize(n_elements,Scalar(0.0));
         fn.resize(n_elements,Scalar(0.0));
+        tmp.resize(n_elements,Scalar(0.0));
         }
 
     //! Returns the distance function grid as a Numpy array
@@ -474,8 +482,12 @@ struct SnapshotGridData
     //! Returns the velocity grid
     pybind11::object getVelocityGridNP() const;
     
+    //! Returns the temporary grid
+    pybind11::object getTempGridNP() const;
+    
     std::vector<Real> phi;
     std::vector<Real> fn;
+    std::vector<Real> tmp;
     uint3 m_dim;         //!< The grid dimensions of the underlying grid
     };
 

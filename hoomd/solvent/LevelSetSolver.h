@@ -63,6 +63,9 @@ class LevelSetSolver : public ForceCompute
         */
         virtual void addGridForceCompute(std::shared_ptr<GridForceCompute> gfc);
 
+        //! Compute the discretized A term of the numerical differential equation update
+        virtual void computeA();
+
         //! Actually compute the forces
         /*! In this class, the forces are computed by simply summing the forces due
             to each of the GridForceComputes that are added to the class
@@ -84,6 +87,11 @@ class LevelSetSolver : public ForceCompute
 
         std::vector< std::shared_ptr<GridForceCompute> > m_grid_forces;    //!< List of all the grid force computes
         std::shared_ptr<GridData> m_grid; //!< The grid data object
+
+        // All physical constants
+        Scalar m_rho_water = 1; //!< The density of water
+        Scalar m_delta_p = 1; //!< Pressure
+        Scalar m_gamma_0 = 1; //!< Surface tension
 
     };
 

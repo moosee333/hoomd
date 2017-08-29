@@ -51,7 +51,7 @@ void SparseFieldUpdater::computeInitialField()
         initializeLayer(-i);
         }
 
-/*    //DEBUGGING CODE
+    /*//DEBUGGING CODE
     for (int i = -m_num_layers; i <= m_num_layers; i++)
     {
         std::vector<uint3> tmp = m_layers[m_index[i]];

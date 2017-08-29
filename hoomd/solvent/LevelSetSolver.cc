@@ -53,6 +53,35 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     m_marcher->march();
 
     // Once the initial grid is established we compute the numerical derivatives
+    /*
+     * The next steps once the distances are computed is to actually compute the move.
+     * For that, we need to do a number of things
+     * I'm breaking up the computation like the VISM paper, so I need A and B terms separately
+     */
+    computeA();
+    //computeB();
+    }
+
+void LevelSetSolver::computeA()
+    {
+    /*
+     * This function needs to compute the curvatures, etc
+     */ 
+    // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
+
+    const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
+    Scalar missing_value = 0; // The grid value that indicates that a cell's distance has not yet been finalized
+
+    GPUArray<Scalar> divx(Lz.size(), m_exec_conf), divy(Lz.size(), m_exec_conf), divz(Lz.size(), m_exec_conf); 
+    ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::readwrite);
+
+    std::vector<Scalar3> boundary_vecs;
+    m_grid->grad(divx, divy, divz, Lz);
+    m_grid->getMeanCurvature(Lz);
     }
 
 void export_LevelSetSolver(py::module& m)

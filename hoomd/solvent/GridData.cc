@@ -27,8 +27,7 @@ GridData::GridData(std::shared_ptr<SystemDefinition> sysdef, Scalar sigma, bool 
       m_ignore_zero(ignore_zero)
     {
     // connect to box change signal
-    m_pdata->getBoxChangeSignal() .connect<GridData, &GridData::setBoxChanged>(this);
-
+    m_pdata->getBoxChangeSignal().connect<GridData, &GridData::setBoxChanged>(this);
     }
 
 //! Destructor
@@ -80,12 +79,16 @@ void GridData::initializeGrid()
         computeDimensions();
 
         unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
+
         GPUArray<Scalar> phi(n_elements, m_exec_conf);
         m_phi.swap(phi);
 
         GPUArray<Scalar> fn(n_elements, m_exec_conf);
         m_fn.swap(fn);
         m_need_init_grid = false;
+
+        GPUArray<Scalar> tmp(n_elements, m_exec_conf);
+        m_tmp.swap(tmp);
         }
     }
 
@@ -100,10 +103,12 @@ std::shared_ptr<SnapshotGridData<Real> > GridData::takeSnapshot()
     // access the GPU arrays
     ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
     ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);
+    ArrayHandle<Scalar> h_tmp(m_tmp, access_location::host, access_mode::read);
 
     // copy over data
     std::copy(h_phi.data, h_phi.data + n, snap->phi.begin());
     std::copy(h_fn.data, h_fn.data + n, snap->fn.begin());
+    std::copy(h_tmp.data, h_tmp.data + n, snap->tmp.begin());
 
 
     return snap;
@@ -127,152 +132,181 @@ GPUArray<Scalar> GridData::heaviside(unsigned int order)
 
 //NOTE: Fix this using Jens's new version (check i+1 and i-1 instead of i+2 and i-2)
 //NOTE: Adapt this to take the list of points that we want to use
-void GridData::hessian(GPUArray<Scalar>& dx_square, GPUArray<Scalar>& dy_square, GPUArray<Scalar>& dz_square, 
-                    GPUArray<Scalar>& dxdy, GPUArray<Scalar>& dxdz, GPUArray<Scalar>& dydz, 
-                    GridData::deriv_direction dir)
+void GridData::hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<Scalar>& ddxz, 
+GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vector<uint3> points)
 	{
     // access the GPU arrays
     ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
-    Index3D indexer = this->getIndexer();
-
-    // Create and access intermediate GPUArrays
-    unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
-    GPUArray<Scalar> divx(n_elements, m_exec_conf);
-    GPUArray<Scalar> divy(n_elements, m_exec_conf);
-    GPUArray<Scalar> divz(n_elements, m_exec_conf);
-    ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-
-    // Access argument GPUArrays
-    ArrayHandle<Scalar> h_dx_square(dx_square, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_dy_square(dy_square, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_dz_square(dz_square, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_dxdy(dxdy, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_dxdz(dxdz, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_dydz(dydz, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-
     Scalar3 spacing = this->getSpacing();
-    for (unsigned int i = 0; i < m_dim.x; i++)
-        for (unsigned int j = 0; j < m_dim.y; j++)
-            for (unsigned int k = 0; k < m_dim.z; k++)
-                {
-                unsigned int cur_idx = indexer(i, j, k);
-                if(dir == GridData::FORWARD)
-                    {
-                    int x = this->wrapx(i+1);
-                    int y = this->wrapy(j+1);
-                    int z = this->wrapz(k+1);
 
-                    unsigned int x_idx = indexer(x, j, k);
-                    unsigned int y_idx = indexer(i, y, k);
-                    unsigned int z_idx = indexer(i, j, z);
-                    h_divx.data[cur_idx] = (h_phi.data[x_idx] - h_phi.data[cur_idx])/spacing.x;
-                    h_divy.data[cur_idx] = (h_phi.data[y_idx] - h_phi.data[cur_idx])/spacing.y;
-                    h_divz.data[cur_idx] = (h_phi.data[z_idx] - h_phi.data[cur_idx])/spacing.z;
-                    }
-                else if(dir == GridData::REVERSE)
-                    {
-                    int x = this->wrapx(i-1);
-                    int y = this->wrapy(j-1);
-                    int z = this->wrapz(k-1);
+    // Create intermediate GPUArrays
+    unsigned int n_elements = points.size();
+    GPUArray<Scalar> dxpx(n_elements, m_exec_conf), dypx(n_elements, m_exec_conf), dzpx(n_elements, m_exec_conf);
+    GPUArray<Scalar> dxpy(n_elements, m_exec_conf), dypy(n_elements, m_exec_conf), dzpy(n_elements, m_exec_conf);
+    GPUArray<Scalar> dxpz(n_elements, m_exec_conf), dypz(n_elements, m_exec_conf), dzpz(n_elements, m_exec_conf);
+    GPUArray<Scalar> dxmx(n_elements, m_exec_conf), dymx(n_elements, m_exec_conf), dzmx(n_elements, m_exec_conf);
+    GPUArray<Scalar> dxmy(n_elements, m_exec_conf), dymy(n_elements, m_exec_conf), dzmy(n_elements, m_exec_conf);
+    GPUArray<Scalar> dxmz(n_elements, m_exec_conf), dymz(n_elements, m_exec_conf), dzmz(n_elements, m_exec_conf);
 
-                    unsigned int x_idx = indexer(x, j, k);
-                    unsigned int y_idx = indexer(i, y, k);
-                    unsigned int z_idx = indexer(i, j, z);
-                    h_divx.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[x_idx])/spacing.x;
-                    h_divy.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[y_idx])/spacing.y;
-                    h_divz.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[z_idx])/spacing.z;
-                    }
-                else if(dir == GridData::CENTRAL)
-                    {
-                    int x_forward = this->wrapx(i+1);
-                    int y_forward = this->wrapy(j+1);
-                    int z_forward = this->wrapz(k+1);
-                    int x_reverse = this->wrapx(i-1);
-                    int y_reverse = this->wrapy(j-1);
-                    int z_reverse = this->wrapz(k-1);
+    // Construct lists of neighboring points
+    std::vector<uint3> px, py, pz, mx, my, mz;
+    px.reserve(points.size());
+    py.reserve(points.size());
+    pz.reserve(points.size());
+    mx.reserve(points.size());
+    my.reserve(points.size());
+    mz.reserve(points.size());
 
-                    unsigned int x_forward_idx = indexer(x_forward, j, k);
-                    unsigned int y_forward_idx = indexer(i, y_forward, k);
-                    unsigned int z_forward_idx = indexer(i, j, z_forward);
-                    unsigned int x_reverse_idx = indexer(x_reverse, j, k);
-                    unsigned int y_reverse_idx = indexer(i, y_reverse, k);
-                    unsigned int z_reverse_idx = indexer(i, j, z_reverse);
-
-                    h_divx.data[cur_idx] = (h_phi.data[x_forward_idx] - h_phi.data[x_reverse_idx])/spacing.x/2;
-                    h_divy.data[cur_idx] = (h_phi.data[y_forward_idx] - h_phi.data[y_reverse_idx])/spacing.y/2;
-                    h_divz.data[cur_idx] = (h_phi.data[z_forward_idx] - h_phi.data[z_reverse_idx])/spacing.z/2;
-                    }
-                }
-	}
-
-// NOTE: AVOID THIS MUCH CODE DUPLICATION BETWEEN THE TWO GRADIENT FUNCTIONS
-void GridData::grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, std::vector<uint3> points, GridData::deriv_direction dir)
-	{
-    // access the GPU arrays
-    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
-    Index3D indexer = this->getIndexer();
-
-    // Access GPUArrays
-    ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-    ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-
-    Scalar3 spacing = this->getSpacing();
-    for (std::vector<uint3>::iterator point = points.begin();
-            point != points.end(); point++)
+    for(unsigned int i = 0; i < points.size(); i++)
         {
-        unsigned int i = point->x, j = point->y, k = point->z;
-        unsigned int cur_idx = indexer(i, j, k);
-        if(dir == GridData::FORWARD)
-            {
-            int x = this->wrapx(i+1);
-            int y = this->wrapy(j+1);
-            int z = this->wrapz(k+1);
+        px.push_back(make_uint3(this->wrapx(points[i].x + 1), points[i].y, points[i].z));
+        py.push_back(make_uint3(points[i].x, this->wrapy(points[i].y + 1), points[i].z));
+        pz.push_back(make_uint3(points[i].x, points[i].y, this->wrapz(points[i].z + 1)));
 
-            unsigned int x_idx = indexer(x, j, k);
-            unsigned int y_idx = indexer(i, y, k);
-            unsigned int z_idx = indexer(i, j, z);
-            h_divx.data[cur_idx] = (h_phi.data[x_idx] - h_phi.data[cur_idx])/spacing.x;
-            h_divy.data[cur_idx] = (h_phi.data[y_idx] - h_phi.data[cur_idx])/spacing.y;
-            h_divz.data[cur_idx] = (h_phi.data[z_idx] - h_phi.data[cur_idx])/spacing.z;
-            }
-        else if(dir == GridData::REVERSE)
-            {
-            int x = this->wrapx(i-1);
-            int y = this->wrapy(j-1);
-            int z = this->wrapz(k-1);
+        mx.push_back(make_uint3(this->wrapx(points[i].x - 1), points[i].y, points[i].z));
+        my.push_back(make_uint3(points[i].x, this->wrapy(points[i].y - 1), points[i].z));
+        mz.push_back(make_uint3(points[i].x, points[i].y, this->wrapz(points[i].z - 1)));
+        }
 
-            unsigned int x_idx = indexer(x, j, k);
-            unsigned int y_idx = indexer(i, y, k);
-            unsigned int z_idx = indexer(i, j, z);
-            h_divx.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[x_idx])/spacing.x;
-            h_divy.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[y_idx])/spacing.y;
-            h_divz.data[cur_idx] = (h_phi.data[cur_idx] - h_phi.data[z_idx])/spacing.z;
-            }
-        else if(dir == GridData::CENTRAL)
-            {
-            int x_forward = this->wrapx(i+1);
-            int y_forward = this->wrapy(j+1);
-            int z_forward = this->wrapz(k+1);
-            int x_reverse = this->wrapx(i-1);
-            int y_reverse = this->wrapy(j-1);
-            int z_reverse = this->wrapz(k-1);
+    // Compute gradient for each of the neighboring points
+    this->grad(dxpx, dypx, dzpx, px);
+    this->grad(dxpy, dypy, dzpy, py);
+    this->grad(dxpy, dypy, dzpy, py);
+    this->grad(dxmx, dymx, dzmx, mx);
+    this->grad(dxmy, dymy, dzmy, my);
+    this->grad(dxmy, dymy, dzmy, my);
 
-            unsigned int x_forward_idx = indexer(x_forward, j, k);
-            unsigned int y_forward_idx = indexer(i, y_forward, k);
-            unsigned int z_forward_idx = indexer(i, j, z_forward);
-            unsigned int x_reverse_idx = indexer(x_reverse, j, k);
-            unsigned int y_reverse_idx = indexer(i, y_reverse, k);
-            unsigned int z_reverse_idx = indexer(i, j, z_reverse);
+    // Access intermediate GPUArrays (make sure to do this after the grad calls to avoid multiple simultaneous accesses)
+    ArrayHandle<Scalar> h_dxpx(dxpx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dypx(dypx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dzpx(dzpx, access_location::host, access_mode::readwrite);
 
-            h_divx.data[cur_idx] = (h_phi.data[x_forward_idx] - h_phi.data[x_reverse_idx])/spacing.x/2;
-            h_divy.data[cur_idx] = (h_phi.data[y_forward_idx] - h_phi.data[y_reverse_idx])/spacing.y/2;
-            h_divz.data[cur_idx] = (h_phi.data[z_forward_idx] - h_phi.data[z_reverse_idx])/spacing.z/2;
-            }
+    ArrayHandle<Scalar> h_dxpy(dxpy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dypy(dypy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dzpy(dzpy, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_dxpz(dxpz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dypz(dypz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dzpz(dzpz, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_dxmx(dxmx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dymx(dymx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dzmx(dzmx, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_dxmy(dxmy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dymy(dymy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dzmy(dzmy, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_dxmz(dxmz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dymz(dymz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dzmz(dzmz, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_ddxx(ddxx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddyy(ddyy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddzz(ddzz, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_ddxy(ddxy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddxz(ddxz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddyz(ddyz, access_location::host, access_mode::readwrite);
+
+    for(unsigned int i = 0; i < points.size(); i++)
+        {
+        h_ddxx.data[i] = (h_dxpx.data[i] - h_dxmx.data[i])/spacing.x/2;
+        h_ddyy.data[i] = (h_dypy.data[i] - h_dymy.data[i])/spacing.y/2;
+        h_ddzz.data[i] = (h_dzpz.data[i] - h_dzmz.data[i])/spacing.z/2;
+
+        h_ddxy.data[i] = ((h_dxpy.data[i] - h_dxmy.data[i])/spacing.x  + (h_dypx.data[i] - h_dymx.data[i])/spacing.y)/4; 
+        h_ddxz.data[i] = ((h_dxpz.data[i] - h_dxmz.data[i])/spacing.x  + (h_dzpx.data[i] - h_dzmx.data[i])/spacing.z)/4; 
+        h_ddyz.data[i] = ((h_dypz.data[i] - h_dymz.data[i])/spacing.y  + (h_dzpy.data[i] - h_dzmy.data[i])/spacing.z)/4; 
         }
 	}
+
+void GridData::grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, std::vector<uint3> points)
+	{
+    // access the GPU arrays
+    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+    Index3D indexer = this->getIndexer();
+    Scalar3 spacing = this->getSpacing();
+
+    ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::readwrite);
+
+    for (unsigned int cur_idx = 0; cur_idx < points.size(); cur_idx++)
+        {
+        uint3 point = points[cur_idx];
+        unsigned int i = point.x, j = point.y, k = point.z;
+
+        int x_forward = this->wrapx(i+1);
+        int y_forward = this->wrapy(j+1);
+        int z_forward = this->wrapz(k+1);
+        int x_reverse = this->wrapx(i-1);
+        int y_reverse = this->wrapy(j-1);
+        int z_reverse = this->wrapz(k-1);
+
+        unsigned int x_forward_idx = indexer(x_forward, j, k);
+        unsigned int y_forward_idx = indexer(i, y_forward, k);
+        unsigned int z_forward_idx = indexer(i, j, z_forward);
+        unsigned int x_reverse_idx = indexer(x_reverse, j, k);
+        unsigned int y_reverse_idx = indexer(i, y_reverse, k);
+        unsigned int z_reverse_idx = indexer(i, j, z_reverse);
+
+        h_divx.data[cur_idx] = (h_phi.data[x_forward_idx] - h_phi.data[x_reverse_idx])/spacing.x/2;
+        h_divy.data[cur_idx] = (h_phi.data[y_forward_idx] - h_phi.data[y_reverse_idx])/spacing.y/2;
+        h_divz.data[cur_idx] = (h_phi.data[z_forward_idx] - h_phi.data[z_reverse_idx])/spacing.z/2;
+        }
+	}
+
+//! Find the value of the mean curvature K on the set of points
+void GridData::getMeanCurvature(std::vector<uint3> points)
+    {
+    //NOTE: Consider passing the first derivatives as arguments so that we don't recompute
+    auto n_elements = points.size();
+    GPUArray<Scalar> dx(n_elements, m_exec_conf), dy(n_elements, m_exec_conf), dz(n_elements, m_exec_conf); 
+    GPUArray<Scalar> ddxx(n_elements, m_exec_conf), ddxy(n_elements, m_exec_conf), ddxz(n_elements, m_exec_conf), ddyy(n_elements, m_exec_conf), ddyz(n_elements, m_exec_conf), ddzz(n_elements, m_exec_conf);
+
+    this->grad(dx, dy, dz, points);
+    this->hessian(ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, points);
+
+    GPUArray<Scalar> norms(n_elements, m_exec_conf);
+    ArrayHandle<Scalar> h_norms(norms, access_location::host, access_mode::readwrite);
+
+    GPUArray<Scalar> H(n_elements, m_exec_conf);
+    ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_ddxx(ddxx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddxy(ddxy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddxz(ddxz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddyy(ddyy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddyz(ddyz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddzz(ddzz, access_location::host, access_mode::readwrite);
+
+    for (unsigned int i = 0; i < points.size(); i++)
+        {
+        // Normalize the gradients to get the normal vector
+        h_norms.data[i] = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
+        h_dx.data[i] /= h_norms.data[i];
+        h_dy.data[i] /= h_norms.data[i];
+        h_dz.data[i] /= h_norms.data[i];
+
+        // Multiply the requisite terms
+        h_H.data[i] += h_dx.data[i]*h_ddxx.data[i]*h_dx.data[i];
+        h_H.data[i] += h_dx.data[i]*h_ddxy.data[i]*h_dy.data[i];
+        h_H.data[i] += h_dx.data[i]*h_ddxz.data[i]*h_dz.data[i];
+        h_H.data[i] += h_dy.data[i]*h_ddxy.data[i]*h_dx.data[i];
+        h_H.data[i] += h_dy.data[i]*h_ddyy.data[i]*h_dy.data[i];
+        h_H.data[i] += h_dy.data[i]*h_ddyz.data[i]*h_dz.data[i];
+        h_H.data[i] += h_dz.data[i]*h_ddxz.data[i]*h_dx.data[i];
+        h_H.data[i] += h_dz.data[i]*h_ddyz.data[i]*h_dy.data[i];
+        h_H.data[i] += h_dz.data[i]*h_ddzz.data[i]*h_dz.data[i];
+
+        h_H.data[i] -= h_ddxx.data[i] + h_ddyy.data[i] + h_ddzz.data[i];
+        }
+    }
 
 GPUArray<Scalar> GridData::delta(std::vector<uint3> points)
     {
@@ -281,7 +315,7 @@ GPUArray<Scalar> GridData::delta(std::vector<uint3> points)
     GPUArray<Scalar> delta(n_elements, m_exec_conf);
 
     // access GPUArrays
-    ArrayHandle<Scalar> h_delta(delta, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
+    ArrayHandle<Scalar> h_delta(delta, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
     Scalar3 spacing = this->getSpacing();
 
@@ -431,7 +465,7 @@ std::vector<Scalar3> GridData::vecToBoundary(std::vector<uint3> points)
     // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
     GPUArray<Scalar> divx(points.size(), m_exec_conf), divy(points.size(), m_exec_conf), divz(points.size(), m_exec_conf); 
     std::vector<Scalar3> boundary_vecs;
-    grad(divx, divy, divz, points, this->CENTRAL);
+    grad(divx, divy, divz, points);
 
         {
         ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
@@ -470,7 +504,7 @@ pybind11::object SnapshotGridData<Real>::getPhiGridNP() const
 
 template<class Real>
 pybind11::object SnapshotGridData<Real>::getVelocityGridNP() const
-    {
+   {
     std::vector<intp> dims(3);
     dims[0] = m_dim.x;
     dims[1] = m_dim.y;
@@ -480,17 +514,31 @@ pybind11::object SnapshotGridData<Real>::getVelocityGridNP() const
     return py::object(num_util::makeNumFromData((Real*)&fn[0], dims), false);
     }
 
+template<class Real>
+pybind11::object SnapshotGridData<Real>::getTempGridNP() const
+   {
+    std::vector<intp> dims(3);
+    dims[0] = m_dim.x;
+    dims[1] = m_dim.y;
+    dims[2] = m_dim.z;
+
+    //! Return a Numpy array
+    return py::object(num_util::makeNumFromData((Real*)&tmp[0], dims), false);
+    }
+
 void export_SnapshotGridData(py::module& m)
     {
     py::class_<SnapshotGridData<float>, std::shared_ptr<SnapshotGridData<float> > >(m,"SnapshotGridData_float")
     .def(py::init<unsigned int, uint3>())
     .def_property_readonly("phi", &SnapshotGridData<float>::getPhiGridNP, py::return_value_policy::take_ownership)
-    .def_property_readonly("fn", &SnapshotGridData<float>::getVelocityGridNP, py::return_value_policy::take_ownership);
+    .def_property_readonly("fn", &SnapshotGridData<float>::getVelocityGridNP, py::return_value_policy::take_ownership)
+    .def_property_readonly("tmp", &SnapshotGridData<float>::getTempGridNP, py::return_value_policy::take_ownership);
 
     py::class_<SnapshotGridData<double>, std::shared_ptr<SnapshotGridData<double> > >(m,"SnapshotGridData_double")
     .def(py::init<unsigned int, uint3>())
     .def_property_readonly("phi", &SnapshotGridData<double>::getPhiGridNP, py::return_value_policy::take_ownership)
-    .def_property_readonly("fn", &SnapshotGridData<double>::getPhiGridNP, py::return_value_policy::take_ownership);
+    .def_property_readonly("fn", &SnapshotGridData<double>::getVelocityGridNP, py::return_value_policy::take_ownership)
+    .def_property_readonly("tmp", &SnapshotGridData<double>::getTempGridNP, py::return_value_policy::take_ownership);
     }
 
 void export_GridData(py::module& m)
