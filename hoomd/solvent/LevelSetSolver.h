@@ -67,7 +67,11 @@ class LevelSetSolver : public ForceCompute
         virtual GPUArray<Scalar> computeA();
 
         //! Linearize the A term such that parabolicity is maintained.
-        void linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& tau, Scalar& dt);
+        void linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& B1, GPUArray<Scalar>& tau, Scalar& dt);
+
+        //! Compute the B1 term 
+        void computeB1(GPUArray<Scalar>, std::vector<uint3> points);
+
         //! Actually compute the forces
         /*! In this class, the forces are computed by simply summing the forces due
             to each of the GridForceComputes that are added to the class

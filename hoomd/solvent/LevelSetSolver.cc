@@ -99,10 +99,14 @@ GPUArray<Scalar> LevelSetSolver::computeA()
     m_grid->getMeanCurvature(H, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
     m_grid->getGaussianCurvature(K, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
 
+    // Need the values of B1 on the surface to determine the timestep
+    GPUArray<Scalar> B1(n_elements, m_exec_conf);
+    this->computeB1(B1, Lz);
+
     // Perform the linearization to ensure parabolicity of the tau matrix
     GPUArray<Scalar> tau(n_elements, m_exec_conf);
     Scalar dt = 0; // Not sure if this requires initialization
-    this->linearizeParabolicTerm(n_elements, H, K, tau, dt);
+    this->linearizeParabolicTerm(n_elements, H, K, B1, tau, dt);
 
 
 
@@ -117,7 +121,7 @@ GPUArray<Scalar> LevelSetSolver::computeA()
     return A;
     }
 
-void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& tau, Scalar& dt)
+void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& B1, GPUArray<Scalar>& tau, Scalar& dt)
     {
     /*
      * In order to ensure that the integration scheme is stable, the A term
@@ -129,6 +133,7 @@ void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Sc
     ArrayHandle<Scalar> h_tau(tau, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_B1(B1, access_location::host, access_mode::readwrite);
 
     Scalar denom_max = 0;
 
@@ -170,8 +175,7 @@ void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Sc
         //look into this further.
         //NOTE: I need to figure out how I'm getting B1 since I don't have the Coulomb terms at
         //this stage.
-        //auto denom_current = m_gamma_0*(a1+a2)/h + abs(B1[i,j,k]);
-        auto denom_current = m_gamma_0*(a1+a2)/h;
+        auto denom_current = m_gamma_0*(a1+a2)/h + abs(h_B1.data[i]);
         if (denom_current > denom_max)
             {
             denom_max = denom_current;
@@ -181,8 +185,20 @@ void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Sc
     dt = m_alpha*h/denom_max;
     }
 
-void computeB1()
+void LevelSetSolver::computeB1(GPUArray<Scalar> B1, std::vector<uint3> points)
     {
+    // Access grid data
+    ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::read);
+    Index3D indexer = m_grid->getIndexer();
+
+    ArrayHandle<Scalar> h_B1(B1, access_location::host, access_mode::read);
+
+    //NOTE: Need to figure out to compute the Coulomb term
+    for (unsigned int i = 0; i < points.size(); i++)
+        {
+        uint3 point = points[i];
+        h_B1.data[i] = m_delta_p + m_rho_water*h_fn.data[indexer(point.x, point.y, point.z)] + coulomb_term;
+        }
     }
 
 void export_LevelSetSolver(py::module& m)
