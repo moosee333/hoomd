@@ -130,10 +130,8 @@ GPUArray<Scalar> GridData::heaviside(unsigned int order)
         }
     }
 
-//NOTE: Fix this using Jens's new version (check i+1 and i-1 instead of i+2 and i-2)
-//NOTE: Adapt this to take the list of points that we want to use
 void GridData::hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<Scalar>& ddxz, 
-GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vector<uint3> points)
+        GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vector<uint3> points)
 	{
     // access the GPU arrays
     ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
@@ -171,10 +169,10 @@ GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vec
     // Compute gradient for each of the neighboring points
     this->grad(dxpx, dypx, dzpx, px);
     this->grad(dxpy, dypy, dzpy, py);
-    this->grad(dxpy, dypy, dzpy, py);
+    this->grad(dxpz, dypz, dzpz, pz);
     this->grad(dxmx, dymx, dzmx, mx);
     this->grad(dxmy, dymy, dzmy, my);
-    this->grad(dxmy, dymy, dzmy, my);
+    this->grad(dxmz, dymz, dzmz, mz);
 
     // Access intermediate GPUArrays (make sure to do this after the grad calls to avoid multiple simultaneous accesses)
     ArrayHandle<Scalar> h_dxpx(dxpx, access_location::host, access_mode::readwrite);
@@ -201,6 +199,7 @@ GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vec
     ArrayHandle<Scalar> h_dymz(dymz, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_dzmz(dzmz, access_location::host, access_mode::readwrite);
 
+    // Access main GPUArrays
     ArrayHandle<Scalar> h_ddxx(ddxx, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_ddyy(ddyy, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_ddzz(ddzz, access_location::host, access_mode::readwrite);
@@ -258,22 +257,24 @@ void GridData::grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Sca
 	}
 
 //! Find the value of the mean curvature K on the set of points
-void GridData::getMeanCurvature(std::vector<uint3> points)
+void GridData::getMeanCurvature(GPUArray<Scalar> H, const GPUArray<Scalar>& dx, const GPUArray<Scalar>& dy, const GPUArray<Scalar>& dz, 
+        const GPUArray<Scalar>& ddxx, const GPUArray<Scalar>& ddxy, const GPUArray<Scalar>& ddxz, 
+        const GPUArray<Scalar>& ddyy, const GPUArray<Scalar>& ddyz, const GPUArray<Scalar>& ddzz, std::vector<uint3> points)
     {
-    //NOTE: Consider passing the first derivatives as arguments so that we don't recompute
-    auto n_elements = points.size();
-    GPUArray<Scalar> dx(n_elements, m_exec_conf), dy(n_elements, m_exec_conf), dz(n_elements, m_exec_conf); 
-    GPUArray<Scalar> ddxx(n_elements, m_exec_conf), ddxy(n_elements, m_exec_conf), ddxz(n_elements, m_exec_conf), ddyy(n_elements, m_exec_conf), ddyz(n_elements, m_exec_conf), ddzz(n_elements, m_exec_conf);
-
-    this->grad(dx, dy, dz, points);
-    this->hessian(ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, points);
-
-    GPUArray<Scalar> norms(n_elements, m_exec_conf);
-    ArrayHandle<Scalar> h_norms(norms, access_location::host, access_mode::readwrite);
-
-    GPUArray<Scalar> H(n_elements, m_exec_conf);
+    /*
+     * The mean curvature is defined as the average of the principal curvatures.
+     * It can also be calculated as (1/2) \del \cdot \vec{n}, where the normal
+     * vector is computed using the derivatives of an implicit surface. In this
+     * function, that formula is expanded out explicitly to give the curvature
+     * as a function of the trace of the Hessian and gradients of the phi field.
+     * cf. Goldman, R. (2005). "Curvature formulas for implicit curves and surfaces". 
+     * Computer Aided Geometric Design. 22 (7): 632.
+     */
+        //NOTE: THE const-ness may not actually be enforceable since I end up accessing through ArrayHandles
+    // The curvatures
     ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
 
+    // Access all derivative GPUArrays
     ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
@@ -287,12 +288,6 @@ void GridData::getMeanCurvature(std::vector<uint3> points)
 
     for (unsigned int i = 0; i < points.size(); i++)
         {
-        // Normalize the gradients to get the normal vector
-        h_norms.data[i] = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
-        h_dx.data[i] /= h_norms.data[i];
-        h_dy.data[i] /= h_norms.data[i];
-        h_dz.data[i] /= h_norms.data[i];
-
         // Multiply the requisite terms
         h_H.data[i] += h_dx.data[i]*h_ddxx.data[i]*h_dx.data[i];
         h_H.data[i] += h_dx.data[i]*h_ddxy.data[i]*h_dy.data[i];
@@ -304,7 +299,60 @@ void GridData::getMeanCurvature(std::vector<uint3> points)
         h_H.data[i] += h_dz.data[i]*h_ddyz.data[i]*h_dy.data[i];
         h_H.data[i] += h_dz.data[i]*h_ddzz.data[i]*h_dz.data[i];
 
-        h_H.data[i] -= h_ddxx.data[i] + h_ddyy.data[i] + h_ddzz.data[i];
+        h_H.data[i] -= (h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]) * (h_ddxx.data[i] + h_ddyy.data[i] + h_ddzz.data[i]);
+
+        // Normalize the gradients to get the normal vector
+        auto norm = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
+        h_H.data[i] /= -2*norm*norm*norm;
+        }
+    }
+
+void GridData::getGaussianCurvature(GPUArray<Scalar> K, const GPUArray<Scalar>& dx, const GPUArray<Scalar>& dy, const GPUArray<Scalar>& dz, 
+        const GPUArray<Scalar>& ddxx, const GPUArray<Scalar>& ddxy, const GPUArray<Scalar>& ddxz, 
+        const GPUArray<Scalar>& ddyy, const GPUArray<Scalar>& ddyz, const GPUArray<Scalar>& ddzz, std::vector<uint3> points)
+    {
+    // The curvatures
+    ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
+
+    // Access all derivative GPUArrays
+    ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
+
+    ArrayHandle<Scalar> h_ddxx(ddxx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddxy(ddxy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddxz(ddxz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddyy(ddyy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddyz(ddyz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_ddzz(ddzz, access_location::host, access_mode::readwrite);
+
+    for (unsigned int i = 0; i < points.size(); i++)
+        {
+        // Construct the adjoint matrix
+        auto adj_xx = -h_ddyz.data[i]*h_ddyz.data[i] + h_ddyy.data[i]*h_ddzz.data[i];
+        auto adj_xy = h_ddxz.data[i]*h_ddyz.data[i] - h_ddxy.data[i]*h_ddzz.data[i];
+        auto adj_xz = -h_ddxz.data[i]*h_ddyy.data[i] + h_ddxy.data[i]*h_ddyz.data[i];
+        auto adj_yx = h_ddyz.data[i]*h_ddxz.data[i] - h_ddxy.data[i]*h_ddzz.data[i];
+        auto adj_yy = -h_ddxz.data[i]*h_ddxz.data[i] + h_ddxx.data[i]*h_ddzz.data[i];
+        auto adj_yz = h_ddxz.data[i]*h_ddxy.data[i] - h_ddxx.data[i]*h_ddyz.data[i];
+        auto adj_zx = -h_ddyy.data[i]*h_ddxz.data[i] + h_ddxy.data[i]*h_ddyz.data[i];
+        auto adj_zy = h_ddxy.data[i]*h_ddxz.data[i] - h_ddxx.data[i]*h_ddyz.data[i];
+        auto adj_zz = -h_ddxy.data[i]*h_ddxy.data[i] + h_ddxx.data[i]*h_ddyy.data[i];
+
+        // Multiply the requisite terms
+        h_K.data[i] += h_dx.data[i]*adj_xx*h_dx.data[i];
+        h_K.data[i] += h_dx.data[i]*adj_xy*h_dy.data[i];
+        h_K.data[i] += h_dx.data[i]*adj_xz*h_dz.data[i];
+        h_K.data[i] += h_dy.data[i]*adj_yx*h_dx.data[i];
+        h_K.data[i] += h_dy.data[i]*adj_yy*h_dy.data[i];
+        h_K.data[i] += h_dy.data[i]*adj_yz*h_dz.data[i];
+        h_K.data[i] += h_dz.data[i]*adj_zx*h_dx.data[i];
+        h_K.data[i] += h_dz.data[i]*adj_zy*h_dy.data[i];
+        h_K.data[i] += h_dz.data[i]*adj_zz*h_dz.data[i];
+
+        // Normalize the gradients to get the normal vector
+        auto norm = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
+        h_K.data[i] /= norm*norm*norm*norm;
         }
     }
 

@@ -64,8 +64,10 @@ class LevelSetSolver : public ForceCompute
         virtual void addGridForceCompute(std::shared_ptr<GridForceCompute> gfc);
 
         //! Compute the discretized A term of the numerical differential equation update
-        virtual void computeA();
+        virtual GPUArray<Scalar> computeA();
 
+        //! Linearize the A term such that parabolicity is maintained.
+        void linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& tau, Scalar& dt);
         //! Actually compute the forces
         /*! In this class, the forces are computed by simply summing the forces due
             to each of the GridForceComputes that are added to the class
@@ -92,6 +94,8 @@ class LevelSetSolver : public ForceCompute
         Scalar m_rho_water = 1; //!< The density of water
         Scalar m_delta_p = 1; //!< Pressure
         Scalar m_gamma_0 = 1; //!< Surface tension
+        Scalar m_tau = 1; //!< Tolman length
+        Scalar m_alpha = 0.5; //!< Regularizer for time steps
 
     };
 

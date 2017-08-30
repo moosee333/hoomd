@@ -112,18 +112,14 @@ class GridData
         std::shared_ptr<SnapshotGridData<Real> > takeSnapshot();
 
         //! Returns the gradient of the phi grid
-        /*! \param dx GPUArray to insert x derivatives into of same length as points
-            \param dy GPUArray to insert y derivatives into of same length as points
-            \param dz GPUArray to insert z derivatives into of same length as points
+        /*! \param divx GPUArray to insert x derivatives into of same length as points
+            \param divy GPUArray to insert y derivatives into of same length as points
+            \param divz GPUArray to insert z derivatives into of same length as points
             \param points A vector of points for which to compute the derivative; the remainder of the input grids will be untouched
-            \param dir The type of finite-differencing to use to compute the derivative
 NOTE: Currently will return poor approximations (lower order) if the points passed don't have neighbors on both sides; however I should never have
 to compute derivatives away from the boundary, so I'm trusting the user not to pass such points.
         */
         void grad(GPUArray<Scalar>& divx, GPUArray<Scalar>& divy, GPUArray<Scalar>& divz, std::vector<uint3> points);
-
-        //! Find the value of the mean curvature K on the set of points
-        void getMeanCurvature(std::vector<uint3> points);
 
         //! Returns the hessian of the phi grid
         /*! \param ddxx GPUArray to insert d_{xx}
@@ -136,8 +132,23 @@ NOTE: Currently will return poor approximations (lower order) if the points pass
 to compute derivatives away from the boundary, so I'm trusting the user not to pass such points. Same problem as with the grad calculation, I'm just
 assuming that with the sparse field construct this is never an actual problem (whereas it is with a narrow band).
         */
+
         void hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<Scalar>& ddxz, 
                 GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vector<uint3> points);
+
+        //! Find the value of the mean curvature H on the set of points
+        /*! \param H GPUArray to insert the curvatures into
+        */
+        void getMeanCurvature(GPUArray<Scalar> H, const GPUArray<Scalar>& dx, const GPUArray<Scalar>& dy, const GPUArray<Scalar>& dz, 
+                const GPUArray<Scalar>& ddxx, const GPUArray<Scalar>& ddxy, const GPUArray<Scalar>& ddxz, 
+                const GPUArray<Scalar>& ddyy, const GPUArray<Scalar>& ddyz, const GPUArray<Scalar>& ddzz, std::vector<uint3> points);
+
+        //! Find the value of the Gaussian curvature K on the set of points
+        /*! \param K GPUArray to insert the curvatures into
+        */
+        void getGaussianCurvature(GPUArray<Scalar> K, const GPUArray<Scalar>& dx, const GPUArray<Scalar>& dy, const GPUArray<Scalar>& dz, 
+                const GPUArray<Scalar>& ddxx, const GPUArray<Scalar>& ddxy, const GPUArray<Scalar>& ddxz, 
+                const GPUArray<Scalar>& ddyy, const GPUArray<Scalar>& ddyz, const GPUArray<Scalar>& ddzz, std::vector<uint3> points);
 
         //! Find the vector from the each of the input points to the exact location of the boundary on the phi grid
         /*! \param points A vector of points for which to compute the derivative; the remainder of the input grids will be untouched

@@ -62,7 +62,7 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     //computeB();
     }
 
-void LevelSetSolver::computeA()
+GPUArray<Scalar> LevelSetSolver::computeA()
     {
     /*
      * This function needs to compute the curvatures, etc
@@ -72,16 +72,117 @@ void LevelSetSolver::computeA()
     const std::map<char, char> layer_indexer = m_updater->getIndex();
 
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
-    Scalar missing_value = 0; // The grid value that indicates that a cell's distance has not yet been finalized
+    unsigned int n_elements = Lz.size();
 
-    GPUArray<Scalar> divx(Lz.size(), m_exec_conf), divy(Lz.size(), m_exec_conf), divz(Lz.size(), m_exec_conf); 
-    ArrayHandle<Scalar> h_divx(divx, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_divy(divy, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_divz(divz, access_location::host, access_mode::readwrite);
+    // Get gradient
+    GPUArray<Scalar> dx(n_elements, m_exec_conf), dy(n_elements, m_exec_conf), dz(n_elements, m_exec_conf); 
+    ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
+    m_grid->grad(dx, dy, dz, Lz);
 
-    std::vector<Scalar3> boundary_vecs;
-    m_grid->grad(divx, divy, divz, Lz);
-    m_grid->getMeanCurvature(Lz);
+    // Compute norm of gradient
+    GPUArray<Scalar> norm_grad(n_elements, m_exec_conf); 
+    ArrayHandle<Scalar> h_norm_grad(norm_grad, access_location::host, access_mode::readwrite);
+    for (unsigned int i = 0; i < n_elements; i++)
+        {
+        h_norm_grad.data[i] = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
+        }
+
+    // Compute hessian
+    GPUArray<Scalar> ddxx(n_elements, m_exec_conf), ddxy(n_elements, m_exec_conf), ddxz(n_elements, m_exec_conf), ddyy(n_elements, m_exec_conf), ddyz(n_elements, m_exec_conf), ddzz(n_elements, m_exec_conf);
+    m_grid->hessian(ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
+
+    // Compute both curvature terms
+    GPUArray<Scalar> H(n_elements, m_exec_conf); 
+    GPUArray<Scalar> K(n_elements, m_exec_conf); 
+    m_grid->getMeanCurvature(H, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
+    m_grid->getGaussianCurvature(K, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
+
+    // Perform the linearization to ensure parabolicity of the tau matrix
+    GPUArray<Scalar> tau(n_elements, m_exec_conf);
+    Scalar dt = 0; // Not sure if this requires initialization
+    this->linearizeParabolicTerm(n_elements, H, K, tau, dt);
+
+
+
+    GPUArray<Scalar> A(n_elements, m_exec_conf); 
+    ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
+    for (unsigned int i = 0; i < n_elements; i++)
+        {
+        h_A.data[i] = 2*m_gamma_0*(h_H.data[i] - m_tau*h_K.data[i])*h_norm_grad.data[i];
+        }
+    return A;
+    }
+
+void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& tau, Scalar& dt)
+    {
+    /*
+     * In order to ensure that the integration scheme is stable, the A term
+     * of the step must be adjusted such that the differential operator is
+     * parabolic. This restriction is reflected in the eigenvalues of the
+     * operator, which correspond to the Tolman length; therefore, we can
+     * ensure parabolicity by scaling the Tolman length.
+     */
+    ArrayHandle<Scalar> h_tau(tau, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
+
+    Scalar denom_max = 0;
+
+    auto spacing = m_grid->getSpacing();
+    auto h = min(min(spacing.x, spacing.y), spacing.z);
+
+    for(unsigned int i = 0; i < n_elements; i++)
+        {
+        auto kappa1 = h_H.data[i] + sqrt(h_H.data[i]*h_H.data[i] - h_K.data[i]);
+        auto kappa2 = h_H.data[i] - sqrt(h_H.data[i]*h_H.data[i] - h_K.data[i]);
+
+        auto a1 = 1 - m_tau*kappa1;
+        auto a2 = 1 - m_tau*kappa2;
+
+        if (a1 < 0.5 && a2 >= 0.5)
+            {
+            h_tau.data[i] = 0.5/kappa1;
+            a1 = 0.5;
+            a2 = 1 - 0.5*kappa2/kappa1;
+            }
+        else if (a1 >= 0.5 && a2 < 0.5)
+            {
+            h_tau.data[i] = 0.5/kappa2;
+            a1 = 1 - 0.5*kappa1/kappa2;
+            a2 = 0.5;
+            }
+        else if (a1 < 0.5 && a2 < 0.5)
+            {
+            h_tau.data[i] = min(0.5/kappa1, 0.5/kappa2);
+            a1 = 1 - h_tau.data[i]/kappa1;
+            a2 = 1 - h_tau.data[i]/kappa2;
+            }
+        else
+            {
+            h_tau.data[i] = m_tau;
+            }
+
+        //NOTE: I'm not sure why this has a gamma_0 term in it. May arise from the linearization,
+        //look into this further.
+        //NOTE: I need to figure out how I'm getting B1 since I don't have the Coulomb terms at
+        //this stage.
+        //auto denom_current = m_gamma_0*(a1+a2)/h + abs(B1[i,j,k]);
+        auto denom_current = m_gamma_0*(a1+a2)/h;
+        if (denom_current > denom_max)
+            {
+            denom_max = denom_current;
+            }
+        }
+    //NOTE: Not sure how to choose m_alpha.
+    dt = m_alpha*h/denom_max;
+    }
+
+void computeB1()
+    {
     }
 
 void export_LevelSetSolver(py::module& m)
