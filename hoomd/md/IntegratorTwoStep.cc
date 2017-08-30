@@ -478,7 +478,7 @@ void IntegratorTwoStep::connectGSDSignal(std::shared_ptr<GSDDumpWriter> writer,
 // 3 - BD
 // 4 - Berendsen
 // 5 - Langevin
-int IntegratorTwoStep::slotWriteGSD(gsd_handle& handle, const std::string name) const
+int IntegratorTwoStep::slotWriteGSD(gsd_handle& handle, const std::string name)
     {
     m_exec_conf->msg->notice(10) << "Writing to GSD File to name: "<< name << std::endl;
     int retval = 0;
@@ -531,17 +531,46 @@ bool IntegratorTwoStep::restoreStateGSD(std::shared_ptr<GSDReader> reader, std::
     #else
     bool mpi=false;
     #endif
-    gsd_schema schema(m_exec_conf, mpi);
+    gsd_schema_md schema(m_exec_conf, mpi);
 
-    ArrayHandle<Scalar> h_method_ids(m_d, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_method_Nvars(m_d, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_method_vars(m_d, access_location::host, access_mode::readwrite);
-    schema.read(reader, frame, "state/md/integrator/id", m_pdata->getNTypes(), h_method_ids.data GSD_TYPE_DOUBLE);
-    schema.read(reader, frame, "state/md/integrator/Nvars", m_pdata->getNTypes(), h_method_Nvars.data, GSD_TYPE_DOUBLE);
-    schema.read(reader, frame, "state/md/integrator/vars", m_pdata->getNTypes(), h_method_vars.data, GSD_TYPE_DOUBLE);
+    // Declare the containers for the integrator data
+    // This vector tells us the number of variables for each method
+    std::vector<Scalar> method_N;
+    // This vector holds the method id's
+    std::vector<Scalar> method_ids;
+    // This vector holds the integrator variables themselves
+    std::vector<Scalar> method_variables;
+
+    // Handles for the containers. Why? Not sure
+    //ArrayHandle<Scalar> h_method_ids(method_ids, access_location::host, access_mode::readwrite);
+    //ArrayHandle<Scalar> h_method_N(method_N, access_location::host, access_mode::readwrite);
+    //ArrayHandle<Scalar> h_method_variables(method_variables, access_location::host, access_mode::readwrite);
+
+    // Fill the containers from the gsd file
+    schema.read(reader, frame, "state/md/integrator/id", m_methods.size(), method_ids, GSD_TYPE_INT8); // one id per method
+    schema.read(reader, frame, "state/md/integrator/Nvars", m_methods.size(), method_N, GSD_TYPE_INT8); // one number of vars per method
+    // find how long the list of variables should be
+    int num_vars = 0;
+    for (auto& n : method_N) {num_vars += n;}
+    schema.read(reader, frame, "state/md/integrator/vars", num_vars, method_variables, GSD_TYPE_FLOAT);
+
+    // Set all the integrator variables of the methods. This assumes that on restart, the same number and order of
+    // integration methods were set up
+    std::vector< std::shared_ptr<IntegrationMethodTwoStep> >::iterator method;
+    for (int i = 0; i < m_methods.size(); i++)
+        {
+            IntegratorVariables v;
+            v.type = ""; //Not bothering with this yet
+            for (int j = 0; j < method_N[i]; j++) // for however many variables there are for this integrator
+                {
+                    v.variable.push_back(method_variables[i+j]);
+                }
+
+            (*m_methods[i]).setIntegratorVariables(v);
+        }
+
     return success;
     }
-
 
 
 void export_IntegratorTwoStep(py::module& m)

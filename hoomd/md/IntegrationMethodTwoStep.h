@@ -238,6 +238,13 @@ class IntegrationMethodTwoStep
             return m_sysdef->getIntegratorData()->getIntegratorVariables(m_integrator_id);
             }
 
+        //! Used to be protected
+        //! helper function to store the integrator variables in the particle data
+        void setIntegratorVariables(const IntegratorVariables& variables)
+            {
+            m_sysdef->getIntegratorData()->setIntegratorVariables(m_integrator_id, variables);
+            }
+
     protected:
         const std::shared_ptr<SystemDefinition> m_sysdef; //!< The system definition this method is associated with
         const std::shared_ptr<ParticleGroup> m_group;     //!< The group of particles this method works on
@@ -247,13 +254,6 @@ class IntegrationMethodTwoStep
         bool m_aniso;                                       //!< True if anisotropic integration is requested
 
         Scalar m_deltaT;                                    //!< The time step
-
-
-        //! helper function to store the integrator variables in the particle data
-        void setIntegratorVariables(const IntegratorVariables& variables)
-            {
-            m_sysdef->getIntegratorData()->setIntegratorVariables(m_integrator_id, variables);
-            }
 
         //! helper function to check if the restart information (if applicable) is useable
         bool restartInfoTestValid(const IntegratorVariables& v, std::string type, unsigned int nvariables);

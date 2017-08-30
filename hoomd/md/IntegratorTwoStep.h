@@ -8,9 +8,7 @@
 #include "IntegrationMethodTwoStep.h"
 
 #include "ForceComposite.h"
-#include "hoomd/GSDDumpWriter.h"
-#include "hoomd/GSDReader.h"
-#include "hoomd/extern/gsd.h"
+#include "GSDMDSchema.h"
 
 #ifndef __INTEGRATOR_TWO_STEP_H__
 #define __INTEGRATOR_TWO_STEP_H__
@@ -103,7 +101,7 @@ class IntegratorTwoStep : public Integrator
         virtual void removeForceComputes();
 
         //! Method that is called whenever the GSD file is written if connected to a GSD file.
-        int slotWriteGSD(gsd_handle&, std::string name) const;
+        int slotWriteGSD(gsd_handle&, std::string name);
 
         //! Method that is called to connect to the gsd write state signal
         void connectGSDSignal(std::shared_ptr<GSDDumpWriter> writer, std::string name);
