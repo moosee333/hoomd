@@ -66,6 +66,10 @@ class LevelSetSolver : public ForceCompute
         //! Compute the discretized A term of the numerical differential equation update
         virtual GPUArray<Scalar> computeA();
 
+        //! Compute the discretized B term of the numerical differential equation update, 
+        //! multiplied by the appropriately normalized version of the norm of phi
+        virtual GPUArray<Scalar> computeBphi();
+
         //! Linearize the A term such that parabolicity is maintained.
         void linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& B1, GPUArray<Scalar>& tau, Scalar& dt);
 

@@ -58,15 +58,16 @@ void LevelSetSolver::computeForces(unsigned int timestep)
      * For that, we need to do a number of things
      * I'm breaking up the computation like the VISM paper, so I need A and B terms separately
      */
-    computeA();
-    //computeB();
+    GPUArray<Scalar> A = computeA();
+    GPUArray<Scalar> Bphi = computeBphi();
+
+    //NOTE: Jens doesn't actually use the parabolic A right now; I think this is because of what he said
+    //vis-a-vis computing the timestep with it but then using the non-linearized version, but it still
+    //seems weird
     }
 
 GPUArray<Scalar> LevelSetSolver::computeA()
     {
-    /*
-     * This function needs to compute the curvatures, etc
-     */ 
     // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
     const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
     const std::map<char, char> layer_indexer = m_updater->getIndex();
@@ -108,8 +109,6 @@ GPUArray<Scalar> LevelSetSolver::computeA()
     Scalar dt = 0; // Not sure if this requires initialization
     this->linearizeParabolicTerm(n_elements, H, K, B1, tau, dt);
 
-
-
     GPUArray<Scalar> A(n_elements, m_exec_conf); 
     ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
@@ -119,6 +118,39 @@ GPUArray<Scalar> LevelSetSolver::computeA()
         h_A.data[i] = 2*m_gamma_0*(h_H.data[i] - m_tau*h_K.data[i])*h_norm_grad.data[i];
         }
     return A;
+    }
+
+GPUArray<Scalar> LevelSetSolver::computeBphi()
+    {
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
+
+    const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
+    unsigned int n_elements = Lz.size();
+
+    /*
+     * The computation a of the B term itself is simple.
+     * The trick is regularizing the derivative of phi to maintain
+     * the stability of integrating the hyperbolic term
+     */
+    GPUArray<Scalar> Bphi(n_elements, m_exec_conf);
+    ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
+    Index3D indexer = m_grid->getIndexer();
+
+    // To finalize the calculation of B we need the normalized version of nabla phi
+    GPUArray<Scalar> norm_phi_upwind = m_grid->getNormUpwind(Lz);
+    ArrayHandle<Scalar> h_norm_phi_upwind(norm_phi_upwind, access_location::host, access_mode::readwrite);
+    
+    for (unsigned int i = 0; i < n_elements; i++)
+        {
+        uint3 point = Lz[i];
+        auto coulomb_term = 0;
+        m_exec_conf->msg->notice(1) << "Currently setting coulomb term to 0 in the computation of the B term; this must be updated" << std::endl;
+        h_Bphi.data[i] = (m_delta_p - m_rho_water*h_fn.data[indexer(point.x, point.y, point.z)] + coulomb_term)*h_norm_phi_upwind.data[i];
+        }
+
+    return Bphi;
     }
 
 void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& B1, GPUArray<Scalar>& tau, Scalar& dt)
@@ -197,6 +229,8 @@ void LevelSetSolver::computeB1(GPUArray<Scalar> B1, std::vector<uint3> points)
     for (unsigned int i = 0; i < points.size(); i++)
         {
         uint3 point = points[i];
+        auto coulomb_term = 0;
+        m_exec_conf->msg->notice(1) << "Currently setting coulomb term to 0 in the computation of the B1 term; this must be updated" << std::endl;
         h_B1.data[i] = m_delta_p + m_rho_water*h_fn.data[indexer(point.x, point.y, point.z)] + coulomb_term;
         }
     }

@@ -136,6 +136,9 @@ assuming that with the sparse field construct this is never an actual problem (w
         void hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<Scalar>& ddxz, 
                 GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vector<uint3> points);
 
+        //! Compute the norm of the phi grid using an upwind scheme
+        GPUArray<Scalar> getNormUpwind(std::vector<uint3> points);
+
         //! Find the value of the mean curvature H on the set of points
         /*! \param H GPUArray to insert the curvatures into
         */
@@ -273,6 +276,9 @@ assuming that with the sparse field construct this is never an actual problem (w
 
         //! Helper function to compute grid dimensions
         void computeDimensions();
+
+        //! Compute the WENO approximation for functions
+        Scalar calculateWENO(Scalar v1, Scalar v2, Scalar v3, Scalar v4, Scalar v5);
 
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data (required for box)

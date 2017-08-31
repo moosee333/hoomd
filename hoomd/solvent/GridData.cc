@@ -538,6 +538,141 @@ std::vector<Scalar3> GridData::vecToBoundary(std::vector<uint3> points)
     return boundary_vecs;
     }
 
+GPUArray<Scalar> GridData::getNormUpwind(std::vector<uint3> points)
+    {
+    //NOTE:For now I'm just going to assume the maximum order interpolation
+    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+    ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);
+    unsigned int n_elements = points.size();
+    Scalar3 spacing = this->getSpacing();
+
+    GPUArray<Scalar> phi_upwind(n_elements, m_exec_conf);
+    ArrayHandle<Scalar> h_phi_upwind(phi_upwind, access_location::host, access_mode::read);
+
+    for (unsigned int pt_idx = 0; pt_idx < n_elements; pt_idx++)
+        {
+        uint3 point = points[pt_idx];
+        
+        //NOTE: Have to make sure that everything we use is included in the sparse band; 
+        //at the moment I'm just trusting the user to specify a sufficently large band.
+        //That's why I don't have to use Jens's logic to determine the maximal possible
+        //order; with the narrow band he doesn't know ahead of time what exists
+        //MAY HAVE TO INCLUDE THE LOWER ORDER OPTION IF MY LOGIC IS WRONG
+
+        // Assign all points
+        unsigned int i = point.x;
+        unsigned int j = point.y;
+        unsigned int k = point.z;
+
+        unsigned int ip = this->wrapx(i+1);
+        unsigned int jp = this->wrapx(j+1);
+        unsigned int kp = this->wrapx(k+1);
+        unsigned int ip2 = this->wrapx(ip+1);
+        unsigned int jp2 = this->wrapx(jp+1);
+        unsigned int kp2 = this->wrapx(kp+1);
+        unsigned int ip3 = this->wrapx(ip2+1);
+        unsigned int jp3 = this->wrapx(jp+21);
+        unsigned int kp3 = this->wrapx(kp+21);
+
+        unsigned int im = this->wrapx(i-1);
+        unsigned int jm = this->wrapx(j-1);
+        unsigned int km = this->wrapx(k-1);
+        unsigned int im2 = this->wrapx(im-1);
+        unsigned int jm2 = this->wrapx(jm-1);
+        unsigned int km2 = this->wrapx(km-1);
+        unsigned int im3 = this->wrapx(im2-1);
+        unsigned int jm3 = this->wrapx(jm2-1);
+        unsigned int km3 = this->wrapx(km2-1);
+
+        // x-direction
+        Scalar vx1 = (h_phi.data[m_indexer(im2, j, k)] - h_phi.data[m_indexer(im3, j, k)])/spacing.x;
+        Scalar vx2 = (h_phi.data[m_indexer(im, j, k)] - h_phi.data[m_indexer(im2, j, k)])/spacing.x;
+        Scalar vx3 = (h_phi.data[m_indexer(i, j, k)] - h_phi.data[m_indexer(im, j, k)])/spacing.x;
+        Scalar vx4 = (h_phi.data[m_indexer(ip, j, k)] - h_phi.data[m_indexer(i, j, k)])/spacing.x;
+        Scalar vx5 = (h_phi.data[m_indexer(ip2, j, k)] - h_phi.data[m_indexer(ip, j, k)])/spacing.x;
+        Scalar vx6 = (h_phi.data[m_indexer(ip3, j, k)] - h_phi.data[m_indexer(ip2, j, k)])/spacing.x;
+
+        Scalar phi_dxm = calculateWENO(vx1, vx2, vx3, vx4, vx5);
+        Scalar phi_dxp = calculateWENO(vx6, vx5, vx4, vx3, vx2);
+
+        // y-direction
+        Scalar vy1 = (h_phi.data[m_indexer(i, jm2, k)] - h_phi.data[m_indexer(i, jm3, k)])/spacing.y;
+        Scalar vy2 = (h_phi.data[m_indexer(i, jm, k)] - h_phi.data[m_indexer(i, jm2, k)])/spacing.y;
+        Scalar vy3 = (h_phi.data[m_indexer(i, j, k)] - h_phi.data[m_indexer(i, jm, k)])/spacing.y;
+        Scalar vy4 = (h_phi.data[m_indexer(i, jp, k)] - h_phi.data[m_indexer(i, j, k)])/spacing.y;
+        Scalar vy5 = (h_phi.data[m_indexer(i, jp2, k)] - h_phi.data[m_indexer(i, jp, k)])/spacing.y;
+        Scalar vy6 = (h_phi.data[m_indexer(i, jp3, k)] - h_phi.data[m_indexer(i, jp2, k)])/spacing.y;
+
+        Scalar phi_dym = calculateWENO(vy1, vy2, vy3, vy4, vy5);
+        Scalar phi_dyp = calculateWENO(vy6, vy5, vy4, vy3, vy2);
+
+        // z-direction
+        Scalar vz1 = (h_phi.data[m_indexer(i, j, km2)] - h_phi.data[m_indexer(i, j, km3)])/spacing.z;
+        Scalar vz2 = (h_phi.data[m_indexer(i, j, km)] - h_phi.data[m_indexer(i, j, km2)])/spacing.z;
+        Scalar vz3 = (h_phi.data[m_indexer(i, j, k)] - h_phi.data[m_indexer(i, j, km)])/spacing.z;
+        Scalar vz4 = (h_phi.data[m_indexer(i, j, kp)] - h_phi.data[m_indexer(i, j, k)])/spacing.z;
+        Scalar vz5 = (h_phi.data[m_indexer(i, j, kp2)] - h_phi.data[m_indexer(i, j, kp)])/spacing.z;
+        Scalar vz6 = (h_phi.data[m_indexer(i, j, kp3)] - h_phi.data[m_indexer(i, j, kp2)])/spacing.z;
+
+        Scalar phi_dzm = calculateWENO(vz1, vz2, vz3, vz4, vz5);
+        Scalar phi_dzp = calculateWENO(vz6, vz5, vz4, vz3, vz2);
+
+        Scalar fn_ijk = h_fn.data[m_indexer(point.x, point.y, point.z)];
+        Scalar nx2 = 0, ny2 = 0, nz2 = 0;
+        if (fn_ijk > 0)
+            {
+            nx2 = max(max(phi_dxm,0.0)*max(phi_dxm,0.0), min(phi_dxp,0.0)*min(phi_dxp,0.0));
+            ny2 = max(max(phi_dym,0.0)*max(phi_dym,0.0), min(phi_dyp,0.0)*min(phi_dyp,0.0));
+            nz2 = max(max(phi_dzm,0.0)*max(phi_dzm,0.0), min(phi_dzp,0.0)*min(phi_dzp,0.0));
+            }
+        else
+            {
+            nx2 = max(min(phi_dxm,0.0)*min(phi_dxm,0.0), max(phi_dxp,0.0)*max(phi_dxp,0.0));
+            ny2 = max(min(phi_dym,0.0)*min(phi_dym,0.0), max(phi_dyp,0.0)*max(phi_dyp,0.0));
+            nz2 = max(min(phi_dzm,0.0)*min(phi_dzm,0.0), max(phi_dzp,0.0)*max(phi_dzp,0.0));
+            }
+        h_phi_upwind.data[i] = sqrt(nx2+ny2+nz2);
+        }
+    return phi_upwind;
+    }
+
+Scalar GridData::calculateWENO(Scalar v1, Scalar v2, Scalar v3, Scalar v4, Scalar v5)
+    {
+    //NOTE: Currently this is almost entirely just copied from Jens's function;
+    //I need to go through the calculation myself to check
+
+    // Double stencil
+    Scalar a = v2 - v1;
+    Scalar b = v3 - v2;
+    Scalar c = v4 - v3;
+    Scalar d = v5 - v4;
+
+    // Estimate smoothness
+    Scalar S0 = 13*(a - b)*(a - b) + 3*(a - (3*b))*(a-3*b);
+    Scalar S1 = 13*(b - c)*(b - c) + 3*(b + c)*(b + c);
+    Scalar S2 = 13*(c - d)*(c - d) + 3*((3*c) - d)*((3*c) - d);
+
+    // eps choosen so as to bias towards fifth order flux
+    // large values of eps bias towards central differencing, causing oscillations
+    // small values bias towards 3rd order ENO (lowering the order)
+    // see Fedkiw, Merriman and Osher J Comp Phys 2000
+    Scalar eps0 = 1e-6;
+    Scalar eps = (eps0 * max(v1*v1, max(v2*v2, max(v3*v3, max(v4*v4, v5*v5))))) + 1e-99; // Prevent eps = 0
+
+    Scalar alpha0 = 1.0/((eps + S0)*(eps + S0));
+    Scalar alpha1 = 6.0/((eps + S1)*(eps + S1));
+    Scalar alpha2 = 3.0/((eps + S2)*(eps + S2));
+
+    Scalar alphasum = alpha0 + alpha1 + alpha2;
+    Scalar w0 = alpha0/alphasum;
+    Scalar w2 = alpha2/alphasum;
+
+    Scalar phi_weno = ((1/3.0)*w0*(a - (2.0*b) + c)) + ((1/6.0)*(w2 - (1/2.0))*(b - (2.0*c) + d));
+
+    Scalar phi_1 = (1/12.0)*(-v2 + (7*v3) + (7*v4) - v5);
+    return phi_1 - phi_weno;
+    }
+
 template<class Real>
 pybind11::object SnapshotGridData<Real>::getPhiGridNP() const
     {
