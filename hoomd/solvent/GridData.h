@@ -200,6 +200,7 @@ assuming that with the sparse field construct this is never an actual problem (w
             return m_sigma;
             }
 
+        //! Get the grid indexer
         Index3D getIndexer() const
             {
             return m_indexer;
@@ -260,6 +261,7 @@ assuming that with the sparse field construct this is never an actual problem (w
         //! Simple enumeration of flags to employ to identify the grids
         enum flags
             {
+            MISSING_VALUE = 0,
             ENERGIES = 1,
             DISTANCES = 2
             };
@@ -284,6 +286,7 @@ assuming that with the sparse field construct this is never an actual problem (w
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data (required for box)
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
 
+        Scalar missing_value = 0; //!< The grid value that indicates that a cell's distance has not yet been finalized
         Scalar m_sigma;     //!< The maximum grid spacing along each axis
         uint3 m_dim;         //!< The current grid dimensions
 

@@ -8,8 +8,6 @@
 using namespace std;
 namespace py = pybind11;
 
-//NOTE:NEED TO STANDARDIZE THE WAY I USE THE MISSING_VALUE, BOTH THROUGHOUT THIS CLASS AND ALSO WITH RESPECT TO THE GRID
-//IT SHOULD PROBABLY BE A GRIDDATA CLASS LEVEL CONSTANT
 /*! \file FastMarcher.cc
     \brief Contains code for the FastMarcher class
 */
@@ -292,7 +290,7 @@ void FastMarcher::calculateBoundaryVelocities()
 
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
     std::vector<Scalar3> vectors_to_boundary = m_grid->vecToBoundary(Lz);
-    Scalar missing_value = 0; // The grid value that indicates that a cell's distance has not yet been finalized
+    Scalar missing_value = GridData::MISSING_VALUE;
 
     ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
     for (unsigned int i = 0; i < Lz.size(); i++)
@@ -365,7 +363,7 @@ Scalar FastMarcher::calculateTentativeDistance(uint3 cell, bool positive)
     Scalar3 grid_spacing = m_grid->getSpacing();
     Index3D indexer = this->m_grid->getIndexer();
 
-    Scalar missing_value = 0; // The grid value that indicates that a cell's distance has not yet been finalized
+    Scalar missing_value = GridData::MISSING_VALUE;
     Scalar guessed_distance = std::numeric_limits<Scalar>::infinity();
 
     // Loop over possible phi values
