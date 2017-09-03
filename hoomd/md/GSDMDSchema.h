@@ -36,11 +36,15 @@ struct gsd_schema_md : public gsd_schema_md_base
         {
         bool success = true;
         std::vector<Scalar> d;
+        std::cout << "Ntypes is equal to " << Ntypes << "\n";
         if(m_exec_conf->isRoot())
             {
+            std::cout << "d is getting resized in the root rank\n";
             d.resize(Ntypes);
             success = reader->readChunk((void *) &d[0], frame, name.c_str(), Ntypes*gsd_sizeof_type(type), Ntypes) && success;
             }
+
+        std::cout << "d is " << d.size() << " long\n";
     #ifdef ENABLE_MPI
         if(m_mpi)
             {
