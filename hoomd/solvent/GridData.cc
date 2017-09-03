@@ -730,7 +730,9 @@ void export_GridData(py::module& m)
         .def(py::init<std::shared_ptr<SystemDefinition>, Scalar, bool>())
         .def("takeSnapshot_double", &GridData::takeSnapshot<double>)
         .def("takeSnapshot_float", &GridData::takeSnapshot<float>)
-        .def("setSigma", &GridData::setSigma);
+        .def("setSigma", &GridData::setSigma)
+        .def("getDimensions", &GridData::getDimsPy, py::return_value_policy::take_ownership)
+        .def("setGrid", &GridData::setVelocityGrid);
     }
 
 } // end namespace solvent

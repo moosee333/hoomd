@@ -64,6 +64,12 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     //NOTE: Jens doesn't actually use the parabolic A right now; I think this is because of what he said
     //vis-a-vis computing the timestep with it but then using the non-linearized version, but it still
     //seems weird
+    
+    // Now that we have A and BPhi, we should be able to compute the forces. However, I don't think this
+    // is quite good enough; I'm no longer making use of the interpolation I was doing before in order to
+    // get the values, I'm just taking the exact values at the grid point, which is not what I want to do.
+    // I think I need to use the boundary vector calculation to find the boundary, and then interpolate
+    // somehow; I'll have to look at my prototype.
     }
 
 GPUArray<Scalar> LevelSetSolver::computeA()

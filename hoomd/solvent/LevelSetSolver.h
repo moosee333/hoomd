@@ -105,6 +105,9 @@ class LevelSetSolver : public ForceCompute
         Scalar m_tau = 1; //!< Tolman length
         Scalar m_alpha = 0.5; //!< Regularizer for time steps
 
+
+        Scalar m_dt = 0.0001; //!< Time step
+
     };
 
 //! Export LevelSetSolver to python

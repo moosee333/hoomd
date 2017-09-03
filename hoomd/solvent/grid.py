@@ -53,6 +53,19 @@ class grid(hoomd.meta._metadata):
         self.sigma = sigma
         self.cpp_grid.setSigma(self.sigma)
 
+    @property
+    def dims(self):
+        dims = self.cpp_grid.getDimensions()
+        return dims
+
+    def set_grid(self, grid_values):
+        """
+        Set the values of the fn grid
+        """
+        if not self.dims == grid_values.shape:
+            raise ValueError("The dimensions of the underlying grid are {}, but you are trying to set it using a grid of shape {}".format(self.dims, grid_values.shape))
+        self.cpp_grid.setGrid(grid_values)
+
     def take_snapshot(self, dtype='float'):
         R""" Take a snapshot of the current grid data.
 

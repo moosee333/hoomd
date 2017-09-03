@@ -22,6 +22,7 @@
 
 #include <hoomd/extern/nano-signal-slot/nano_signal_slot.hpp>
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
+#include <hoomd/extern/pybind/include/pybind11/numpy.h>
 
 #ifndef __GRID_DATA_H__
 #define __GRID_DATA_H__
@@ -170,6 +171,33 @@ assuming that with the sparse field construct this is never an actual problem (w
          */
         void setGridValues(unsigned int flags = 0, double value = 0.0);
 
+        void setVelocityGrid(pybind11::array_t<double, pybind11::array::c_style | pybind11::array::forcecast> vals)
+            {
+            pybind11::buffer_info info = vals.request();
+            auto dims = getDimensions();
+            auto shape = info.shape;
+            if (shape.size() != 3)
+                throw std::runtime_error("The input array to hoomd.solvent.grid.setGrid must be 3D.");
+            else if(shape[0] != dims.x || shape[1] != dims.y || shape[2] != dims.z)
+                throw std::runtime_error("The input array passed to hoomd.solvent.grid.setGrid has dimensions that do not match the underlying GridData object.");
+
+            //auto data = vals.unchecked<double, 3>();
+            auto ptr = static_cast<double *>(info.ptr);
+
+            ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);
+            Index3D indexer = getIndexer();
+            for (unsigned int i = 0; i < shape[0]; i++)
+                for (unsigned int j = 0; j < shape[1]; j++)
+                    for (unsigned int k = 0; k < shape[2]; k++)
+                        {
+                        unsigned int idx = indexer(i, j, k);
+                        //NOTE: I would have expected this multiplication to work differently:
+                        //the ordering should be ptr+k+j*shape[1]+i*shape[1]*shape[2]. However,
+                        //this works for now. I'll come back and sort this out later.
+                        h_fn.data[idx] = *(ptr + i + j*shape[1] + k*shape[1]*shape[2]);
+                        }
+            }
+
         //! Return the grid spacing along every dimension
         Scalar3 getSpacing()
             {
@@ -185,6 +213,13 @@ assuming that with the sparse field construct this is never an actual problem (w
             initializeGrid();
 
             return m_dim;
+            }
+
+        //! Helper function to access dimensions in python
+        std::tuple<unsigned int, unsigned int, unsigned int> getDimsPy()
+            {
+            uint3 dims = getDimensions();
+            return std::tuple<unsigned int, unsigned int, unsigned int>(dims.x, dims.y, dims.z);
             }
 
         //! Set the maximum grid spacing
