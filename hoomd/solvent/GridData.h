@@ -181,6 +181,7 @@ assuming that with the sparse field construct this is never an actual problem (w
             else if(shape[0] != dims.x || shape[1] != dims.y || shape[2] != dims.z)
                 throw std::runtime_error("The input array passed to hoomd.solvent.grid.setGrid has dimensions that do not match the underlying GridData object.");
 
+            //NOTE: Figure out why the unchecked memory version doesn't work
             //auto data = vals.unchecked<double, 3>();
             auto ptr = static_cast<double *>(info.ptr);
 
@@ -321,7 +322,7 @@ assuming that with the sparse field construct this is never an actual problem (w
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data (required for box)
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
 
-        Scalar missing_value = 0; //!< The grid value that indicates that a cell's distance has not yet been finalized
+        //Scalar missing_value = 0; //!< The grid value that indicates that a cell's distance has not yet been finalized //REPLACED BY ENUM
         Scalar m_sigma;     //!< The maximum grid spacing along each axis
         uint3 m_dim;         //!< The current grid dimensions
 
