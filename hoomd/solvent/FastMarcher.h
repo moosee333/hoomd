@@ -66,6 +66,11 @@ class FastMarcher
         //! Compute distances
         void march();
 
+        //! Perform a trilinear interpolation to find the best estimate of the velocities at the true boundary
+        /* \param B_Lz A GPUArray indexed by the grid indexer that contains the value of B on Lz cells cells
+         */
+        GPUArray<Scalar> boundaryInterp(GPUArray<Scalar> B_Lz);
+
     protected:
 
         //! Compute distances for Lz using linear interpolation
@@ -82,12 +87,6 @@ class FastMarcher
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
         std::shared_ptr<SparseFieldUpdater> m_field; //!< Sparse field
         std::shared_ptr<solvent::GridData> m_grid; //!< The grid that layers are maintained on
-
-        //! Perform a trilinear interpolation to find the best estimate of the velocities at the true boundary
-        /* \param 
-         * \param 
-         */
-        void calculateBoundaryVelocities();
 
     private:
 		//! Simple helper function to compute the sign

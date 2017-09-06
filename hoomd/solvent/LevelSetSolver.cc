@@ -41,7 +41,6 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     // We need to precompute the energy for each of grid forces before performing any level set operations
 	for(std::vector<std::shared_ptr<GridForceCompute> >::iterator grid_force = m_grid_forces.begin(); grid_force != m_grid_forces.end(); ++grid_force)
         {
-		// (*grid_force)->setGrid(m_grid); // Happens on the python side.
 		(*grid_force)->compute(timestep);
         }
 
@@ -58,6 +57,10 @@ void LevelSetSolver::computeForces(unsigned int timestep)
      * For that, we need to do a number of things
      * I'm breaking up the computation like the VISM paper, so I need A and B terms separately
      */
+    //NOTE: FOR THE BELOW FUNCTIONS, I AM CURRENTLY USING LZ INTERNALLY. HOWEVER, IF 
+    //I START USING A WIDER BAND, THEN I SHOULD BE ABLE TO ALSO HAVE CURVATURE INFORMATION
+    //FOR MORE LAYERS, AND THEREFORE I SHOULD ALSO BE ABLE TO HAVE BETTER DATA TO COMPUTE
+    //THE INTERPOLATIONS ETC THAT I NEED
     GPUArray<Scalar> A = computeA();
     GPUArray<Scalar> Bphi = computeBphi();
 
@@ -65,15 +68,57 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     //vis-a-vis computing the timestep with it but then using the non-linearized version, but it still
     //seems weird
     
+    
     // Now that we have A and BPhi, we should be able to compute the forces. However, I don't think this
     // is quite good enough; I'm no longer making use of the interpolation I was doing before in order to
     // get the values, I'm just taking the exact values at the grid point, which is not what I want to do.
     // I think I need to use the boundary vector calculation to find the boundary, and then interpolate
     // somehow; I'll have to look at my prototype.
+    // I'm actually not sure how this should work now; since the A term includes the norm internally, and
+    // that norm is computed to accomodate various stability criteria, I'm not sure that applying an
+    // interpolation in the same way that I was before is still appropriate.
+    // I think I have to apply this to the A term before multiplying by the norm grad, and then do the 
+    // linearization, and then multiply. For the B term, I should be able to do it with the existing B term.
+    // Doing it for each of them independently should work.
+    //NOTE: Avoid recomputing gradient; should find one spot where I calculate and then pass it everywhere
+
+    // The total change in boundary force is just the sum of the two terms; now we can take the Euler step
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
+    const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
+    GPUArray<Scalar> Fn_phi(Lz.size(), m_exec_conf);
+    ArrayHandle<Scalar> h_Fn_phi(Fn_phi, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
+    for (unsigned int i = 0; i < Lz.size(); i++)
+        {
+        h_Fn_phi.data[i] = h_A.data[i] + h_Bphi.data[i];
+        }
+    
+    // Extend velocities to rest of grid
+    // Euler step
+    ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+
+    }
+
+GPUArray<Scalar> LevelSetSolver::computenew()
+    {
+        /*
+         * For the A term, we can compute it on all points on the grid, not just Lz,
+         * because the computation should still be mathematically equivalent to actually
+         * extending (and therefore is probably first-order accurate numerically). Therefore,
+         * we update the entire grid's values here
+         */
     }
 
 GPUArray<Scalar> LevelSetSolver::computeA()
     {
+        /*
+         * For the A term, we can compute it on all points on the grid, not just Lz,
+         * because the computation should still be mathematically equivalent to actually
+         * extending (and therefore is probably first-order accurate numerically). Therefore,
+         * we update the entire grid's values here
+         */
     // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
     const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
     const std::map<char, char> layer_indexer = m_updater->getIndex();
@@ -133,27 +178,48 @@ GPUArray<Scalar> LevelSetSolver::computeBphi()
 
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
     unsigned int n_elements = Lz.size();
+    unsigned int n_elements_full = m_grid->getVelocityGrid().getNumElements();
 
     /*
      * The computation a of the B term itself is simple.
      * The trick is regularizing the derivative of phi to maintain
      * the stability of integrating the hyperbolic term
      */
-    GPUArray<Scalar> Bphi(n_elements, m_exec_conf);
-    ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
-    Index3D indexer = m_grid->getIndexer();
+    // We first compute the B term, and we place it directly on a grid rather than storing it in a vector
+    GPUArray<Scalar> B(n_elements_full, m_exec_conf);
 
+        { // Scope the ArrayHandles to avoid conflicts when calling grid functions
+        ArrayHandle<Scalar> h_B(B, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
+        Index3D indexer = m_grid->getIndexer();
+        
+        for (unsigned int i = 0; i < n_elements; i++)
+            {
+            uint3 point = Lz[i];
+            unsigned int idx = indexer(point.x, point.y, point.z);
+
+            auto coulomb_term = 0;
+            m_exec_conf->msg->notice(1) << "Currently setting coulomb term to 0 in the computation of the B term; this must be updated" << std::endl;
+
+            h_B.data[idx] = (m_delta_p - m_rho_water*h_fn.data[idx] + coulomb_term);
+            }
+        }
+
+    // The advantage of having B on a grid rather than in a vector is that it is convenient for the interpolation.
+    GPUArray<Scalar> B_final = m_marcher->boundaryInterp(B);
+    ArrayHandle<Scalar> h_B_final(B_final, access_location::host, access_mode::readwrite);
+    
     // To finalize the calculation of B we need the normalized version of nabla phi
     GPUArray<Scalar> norm_phi_upwind = m_grid->getNormUpwind(Lz);
     ArrayHandle<Scalar> h_norm_phi_upwind(norm_phi_upwind, access_location::host, access_mode::readwrite);
+
+    // The final computation is multiplying B by the norm computed via upwind differencing.
+    GPUArray<Scalar> Bphi(n_elements, m_exec_conf);
+    ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
     
     for (unsigned int i = 0; i < n_elements; i++)
         {
-        uint3 point = Lz[i];
-        auto coulomb_term = 0;
-        m_exec_conf->msg->notice(1) << "Currently setting coulomb term to 0 in the computation of the B term; this must be updated" << std::endl;
-        h_Bphi.data[i] = (m_delta_p - m_rho_water*h_fn.data[indexer(point.x, point.y, point.z)] + coulomb_term)*h_norm_phi_upwind.data[i];
+        h_Bphi.data[i] = h_B_final.data[i]*h_norm_phi_upwind.data[i];
         }
 
     return Bphi;
@@ -161,6 +227,7 @@ GPUArray<Scalar> LevelSetSolver::computeBphi()
 
 void LevelSetSolver::linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& B1, GPUArray<Scalar>& tau, Scalar& dt)
     {
+    //NOTE: tau and dt are changed internally by reference
     /*
      * In order to ensure that the integration scheme is stable, the A term
      * of the step must be adjusted such that the differential operator is
