@@ -28,6 +28,7 @@ struct gsd_schema_md : public gsd_schema_md_base
         if(!m_exec_conf->isRoot())
             return 0;
         int retval = 0;
+        std::cout << "GSDMDSchema.h: data for path " << name << " is this long: " << data.size() << "\n";
         retval |= gsd_write_chunk(&handle, name.c_str(), type, Ntypes, 1, 0, &data);
         return retval;
         }
@@ -36,19 +37,25 @@ struct gsd_schema_md : public gsd_schema_md_base
         {
         bool success = true;
         std::vector<Scalar> d;
-        std::cout << "Ntypes is equal to " << Ntypes << "\n";
+        std::cout << "GSDMDSchema.h: Ntypes is equal to " << Ntypes << "\n";
         if(m_exec_conf->isRoot())
             {
-            std::cout << "d is getting resized in the root rank\n";
+            std::cout << "GSDMDSchema.h: d is getting resized in the root rank\n";
             d.resize(Ntypes);
-            success = reader->readChunk((void *) &d[0], frame, name.c_str(), Ntypes*gsd_sizeof_type(type), Ntypes) && success;
+            std::cout << "GSDMDSchema.h: in root rank, d is size: " << d.size() << "\n";
+            //success = reader->readChunk((void *) &d[0], frame, name.c_str(), Ntypes*gsd_sizeof_type(type), Ntypes) && success;
+            std::cout << "GSDMDSchema.h: path: " << name << " is about to be read from\n";
+            std::cout << "GSDMDSchema.h: gsd_sizeof_type yeilds: " << gsd_sizeof_type(type) << "\n";
+            success = reader->readChunk((void *) &d, frame, name.c_str(), Ntypes*gsd_sizeof_type(type), Ntypes) && success;
             }
 
-        std::cout << "d is " << d.size() << " long\n";
+        std::cout << "GSDMDSchema.h: d is " << d.size() << " long\n";
     #ifdef ENABLE_MPI
         if(m_mpi)
+            std::cout << "GSDMDSchema.h: ENABLE_MPI is defined\n";
             {
             bcast(d, 0, m_exec_conf->getMPICommunicator()); // broadcast the data
+            std::cout << "GSDMDSchema.h: broadcasting complete\n";
             }
     #endif
         if(!d.size())
@@ -56,7 +63,10 @@ struct gsd_schema_md : public gsd_schema_md_base
         for(unsigned int i = 0; i < Ntypes; i++)
             {
             data[i] = d[i];
+            std::cout << "GSDMDSchema.h: data write complete\n";
             }
+        std::cout << "GSDMDSchema.h: data[0] contains: " << data[0] << "\n";
+        std::cout << "GSDMDSchema.h: d[0] contains: " << d[0] << "\n";
         return success;
         }
     };

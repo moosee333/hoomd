@@ -496,6 +496,8 @@ int IntegratorTwoStep::slotWriteGSD(gsd_handle& handle, const std::string name)
     std::vector<int> method_ids;
     // This vector holds the integrator variables themselves
     std::vector<float> method_variables;
+    // This is the number of methods that are declared. We will need this integer for restoring
+    int num_methods = m_methods.size();
 
     std::vector< std::shared_ptr<IntegrationMethodTwoStep> >::iterator method;
     for (method = m_methods.begin(); method != m_methods.end(); ++method)
@@ -509,10 +511,12 @@ int IntegratorTwoStep::slotWriteGSD(gsd_handle& handle, const std::string name)
             method_ids.push_back((*method)->getGSDID());
         }
 
+    const std::string num_meth_path = "state/md/integrator/Nmeth";
     const std::string id_path = "state/md/integrator/id";
     const std::string num_path = "state/md/integrator/Nvars";
     const std::string var_path = "state/md/integrator/vars";
 
+    retval |= gsd_write_chunk(&handle, num_meth_path.c_str(), GSD_TYPE_INT8, 1, 1, 0, &num_methods);
     retval |= gsd_write_chunk(&handle, id_path.c_str(), GSD_TYPE_INT8, method_ids.size(), 1, 0, &method_ids);
     retval |= gsd_write_chunk(&handle, num_path.c_str(), GSD_TYPE_INT8, method_N.size(), 1, 0, &method_N);
     retval |= gsd_write_chunk(&handle, var_path.c_str(), GSD_TYPE_FLOAT, method_variables.size(), 1, 0, &method_variables);
@@ -545,16 +549,28 @@ bool IntegratorTwoStep::restoreStateGSD(std::shared_ptr<GSDReader> reader, std::
     //ArrayHandle<Scalar> h_method_ids(method_ids, access_location::host, access_mode::readwrite);
     //ArrayHandle<Scalar> h_method_N(method_N, access_location::host, access_mode::readwrite);
     //ArrayHandle<Scalar> h_method_variables(method_variables, access_location::host, access_mode::readwrite);
-    std::cout << "From IntegratorTwoStep.cc\n";
-    std::cout << "The number of methods is " << m_methods.size() << "\n";
 
-    // Fill the containers from the gsd file
-    schema.read(reader, frame, "state/md/integrator/id", m_methods.size(), method_ids, GSD_TYPE_INT8); // one id per method
-    schema.read(reader, frame, "state/md/integrator/Nvars", m_methods.size(), method_N, GSD_TYPE_INT8); // one number of vars per method
+    // Read the number of methods from the gsd file
+    std::vector<Scalar> num_methods_vec;
+    num_methods_vec.resize(1);
+    int num_methods;
+    schema.read(reader, frame, "state/md/integrator/Nmeth", 1, num_methods_vec, GSD_TYPE_INT8);
+    num_methods = num_methods_vec[0];
+    std::cout << "IntegratorTwoStepp.cc: num_methods_vec[0] " << num_methods_vec[0] << "\n";
+    std::cout << "IntegratorTwoStepp.cc: The number of methods is " << num_methods << "\n";
+
+    // read the integrator types list
+    schema.read(reader, frame, "state/md/integrator/id", num_methods, method_ids, GSD_TYPE_INT8); // one id per method
+    std::cout << "IntegratorTwoStep.cc: ID reading complete\n";
+
+    // read the number of variables for each method
+    schema.read(reader, frame, "state/md/integrator/Nvars", num_methods, method_N, GSD_TYPE_INT8); // one number of vars per method
+    std::cout << "IntegratorTwoStep.cc: ID reading complete\n";
+
     // find how long the list of variables should be
     int num_vars = 0;
     for (auto& n : method_N) {num_vars += n;}
-    std::cout << "The number of variables is" << num_vars << "\n";
+    std::cout << "IntegratorTwoStep.cc: The number of variables is" << num_vars << "\n";
     schema.read(reader, frame, "state/md/integrator/vars", num_vars, method_variables, GSD_TYPE_FLOAT);
 
     // Set all the integrator variables of the methods. This assumes that on restart, the same number and order of
