@@ -101,74 +101,84 @@ void LevelSetSolver::computeForces(unsigned int timestep)
 
     }
 
-GPUArray<Scalar> LevelSetSolver::computenew()
-    {
-        /*
-         * For the A term, we can compute it on all points on the grid, not just Lz,
-         * because the computation should still be mathematically equivalent to actually
-         * extending (and therefore is probably first-order accurate numerically). Therefore,
-         * we update the entire grid's values here
-         */
-    }
-
 GPUArray<Scalar> LevelSetSolver::computeA()
     {
         /*
          * For the A term, we can compute it on all points on the grid, not just Lz,
          * because the computation should still be mathematically equivalent to actually
          * extending (and therefore is probably first-order accurate numerically). Therefore,
-         * we update the entire grid's values here
+         * we can loop over the layers and update them individually
          */
-    // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
     const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
     const std::map<char, char> layer_indexer = m_updater->getIndex();
 
-    const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
-    unsigned int n_elements = Lz.size();
 
-    // Get gradient
-    GPUArray<Scalar> dx(n_elements, m_exec_conf), dy(n_elements, m_exec_conf), dz(n_elements, m_exec_conf); 
-    ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
-    m_grid->grad(dx, dy, dz, Lz);
+    Index3D indexer = m_grid->getIndexer();
+    uint3 dims = m_grid->getDimensions();
+    unsigned int n_elements = dims.x*dims.y*dims.z;
+    GPUArray<Scalar> A_all(n_elements, m_exec_conf); 
+    ArrayHandle<Scalar> h_A_all(A_all, access_location::host, access_mode::readwrite);
 
-    // Compute norm of gradient
-    GPUArray<Scalar> norm_grad(n_elements, m_exec_conf); 
-    ArrayHandle<Scalar> h_norm_grad(norm_grad, access_location::host, access_mode::readwrite);
-    for (unsigned int i = 0; i < n_elements; i++)
+    //NOTE: Make sure the typecasting here will work as expected
+    for (int i = (-1)*(int)m_updater->getNumLayers(); i <= m_updater->getNumLayers(); i++)
         {
-        h_norm_grad.data[i] = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
-        }
+        const std::vector<uint3> layer = layers[layer_indexer.find(i)->second];
+        unsigned int n_layer_elements = layer.size();
 
-    // Compute hessian
-    GPUArray<Scalar> ddxx(n_elements, m_exec_conf), ddxy(n_elements, m_exec_conf), ddxz(n_elements, m_exec_conf), ddyy(n_elements, m_exec_conf), ddyz(n_elements, m_exec_conf), ddzz(n_elements, m_exec_conf);
-    m_grid->hessian(ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
+        // Get gradient
+        GPUArray<Scalar> dx(n_layer_elements, m_exec_conf), dy(n_layer_elements, m_exec_conf), dz(n_layer_elements, m_exec_conf); 
+        m_grid->grad(dx, dy, dz, layer);
 
-    // Compute both curvature terms
-    GPUArray<Scalar> H(n_elements, m_exec_conf); 
-    GPUArray<Scalar> K(n_elements, m_exec_conf); 
-    m_grid->getMeanCurvature(H, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
-    m_grid->getGaussianCurvature(K, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, Lz);
+        // Compute norm of gradient
+        GPUArray<Scalar> norm_grad(n_layer_elements, m_exec_conf); 
+        ArrayHandle<Scalar> h_norm_grad(norm_grad, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
+        for (unsigned int i = 0; i < n_layer_elements; i++)
+            {
+            h_norm_grad.data[i] = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
+            }
 
-    // Need the values of B1 on the surface to determine the timestep
-    GPUArray<Scalar> B1(n_elements, m_exec_conf);
-    this->computeB1(B1, Lz);
+        // Compute hessian
+        GPUArray<Scalar> ddxx(n_layer_elements, m_exec_conf), ddxy(n_layer_elements, m_exec_conf), ddxz(n_layer_elements, m_exec_conf), ddyy(n_layer_elements, m_exec_conf), ddyz(n_layer_elements, m_exec_conf), ddzz(n_layer_elements, m_exec_conf);
+        m_grid->hessian(ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, layer);
 
-    // Perform the linearization to ensure parabolicity of the tau matrix
-    GPUArray<Scalar> tau(n_elements, m_exec_conf);
-    Scalar dt = 0; // Not sure if this requires initialization
-    this->linearizeParabolicTerm(n_elements, H, K, B1, tau, dt);
+        // Compute both curvature terms
+        GPUArray<Scalar> H(n_layer_elements, m_exec_conf); 
+        GPUArray<Scalar> K(n_layer_elements, m_exec_conf); 
+        m_grid->getMeanCurvature(H, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, layer);
+        m_grid->getGaussianCurvature(K, dx, dy, dz, ddxx, ddxy, ddxz, ddyy, ddyz, ddzz, layer);
 
-    GPUArray<Scalar> A(n_elements, m_exec_conf); 
-    ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
-    for (unsigned int i = 0; i < n_elements; i++)
-        {
-        h_A.data[i] = 2*m_gamma_0*(h_H.data[i] - m_tau*h_K.data[i])*h_norm_grad.data[i];
-        }
-    return A;
+        // Need the values of B1 on the surface to determine the timestep
+        //NOTE: Make sure that this works for non-Lz cells (i.e. whether using the current energies for B1 is the right approach). I think it's fine, only B (not B1) needs to worry about extension.
+        GPUArray<Scalar> B1(n_layer_elements, m_exec_conf);
+        this->computeB1(B1, layer);
+
+        // Perform the linearization to ensure parabolicity of the tau matrix
+        GPUArray<Scalar> tau(n_layer_elements, m_exec_conf);
+        Scalar dt = 0; // Not sure if this requires initialization
+        this->linearizeParabolicTerm(n_layer_elements, H, K, B1, tau, dt);
+
+        GPUArray<Scalar> A(n_layer_elements, m_exec_conf); 
+        ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
+        for (unsigned int i = 0; i < n_layer_elements; i++)
+            {
+            h_A.data[i] = 2*m_gamma_0*(h_H.data[i] - m_tau*h_K.data[i])*h_norm_grad.data[i];
+            }
+
+        // Insert values for this layer into the overall grid
+        for (unsigned int j = 0; j < n_layer_elements; j++)
+            {
+            uint3 point = layer[j];
+            unsigned int idx = indexer(point.x, point.y, point.z);
+            h_A_all.data[idx] = h_A.data[j];
+            }
+        } // End loop over layers
+
+    return A_all;
     }
 
 GPUArray<Scalar> LevelSetSolver::computeBphi()
