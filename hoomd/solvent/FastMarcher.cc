@@ -53,8 +53,6 @@ void FastMarcher::march()
     const std::vector<uint3> Lp1 = layers[layer_indexer.find(1)->second];
     for (std::vector<uint3>::const_iterator element = Lp1.begin(); element != Lp1.end(); element++)
         {
-            //NOTE: need to decide whether to just march positive and negative separately, or to instead
-            //use absolute values
         Scalar d = calculateTentativeDistance(*element, true);
         outer_tentative_distances.push(std::pair<uint3, Scalar>(*element, d));
         current_outer_tentative_distances[*element] = d;
@@ -72,10 +70,13 @@ void FastMarcher::march()
         eligible_positive.insert(eligible_positive.end(), L.begin(), L.end());
         }
 
-    // Then March
+    // Then march
     while (!outer_tentative_distances.empty())
         {
-        // This is how we ensure that we get the most updated value
+        // To ensure that we get the most updated value, we have to check
+        // the updated values saved in the map for every point. The outdated
+        // tentative values will still exist in the PQ, but we just ignore
+        // them when they are removed.
         std::pair<uint3, Scalar> next = outer_tentative_distances.top();
         outer_tentative_distances.pop();
         uint3 next_point = next.first;
@@ -122,15 +123,11 @@ void FastMarcher::march()
      * March inwards
      *************************/
     // Initialize tentative distances in the inward direction
-            //NOTE: NEED TO TEST MY COMPARATORS
-            //NOTE: may be worth implementing a better PQ that allows updating, for now I'm doing the clunky thing again
     std::priority_queue< std::pair<uint3, Scalar>, std::vector< std::pair<uint3, Scalar> >, CompareScalarLess > inner_tentative_distances;
     std::map<uint3, Scalar, CompareInt> current_inner_tentative_distances;
     const std::vector<uint3> Ln1 = layers[layer_indexer.find(-1)->second];
     for (std::vector<uint3>::const_iterator element = Ln1.begin(); element != Ln1.end(); element++)
         {
-            //NOTE: need to decide whether to just march negative and negative separately, or to instead
-            //use absolute values
         Scalar d = calculateTentativeDistance(*element, false);
         inner_tentative_distances.push(std::pair<uint3, Scalar>(*element, d));
         current_inner_tentative_distances[*element] = d;
@@ -148,7 +145,7 @@ void FastMarcher::march()
         eligible_negative.insert(eligible_negative.end(), L.begin(), L.end());
         }
 
-    // Then March
+    // Then march
     while (!inner_tentative_distances.empty())
         {
         // This is how we ensure that we get the most updated value
@@ -278,7 +275,216 @@ void FastMarcher::estimateLzDistances()
         }
     }
 
-GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar> B_Lz)
+void FastMarcher::extend_velocities(GPUArray<Scalar>& velocities)
+    {
+        /*
+         * We already have the distances. Now we reconstruct a PQ of these distances
+         * and go in the same order, computing gradients as we go. This marching is
+         * much simpler since there are no tentative updates, just immediate ones.
+         */
+    
+    // Access grid data
+    ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+
+    // Access field data
+    const std::vector<std::vector<uint3> > layers = m_field->getLayers();
+    const std::map<char, char> layer_indexer = m_field->getIndex();
+    Index3D indexer = this->m_grid->getIndexer();
+    Scalar3 spacing = this->m_grid->getSpacing();
+
+    // Access velocities
+    ArrayHandle<Scalar> h_velocities(velocities, access_location::host, access_mode::readwrite);
+
+    /**************************
+     * March outwards
+     *************************/
+    //NOTE: assumes that layer0 is already filled in the velocities array
+    // Insert all existing positive distances into the grid
+    std::priority_queue< std::pair<uint3, Scalar>, std::vector< std::pair<uint3, Scalar> >, CompareScalarGreater > outer_distances;
+    for (unsigned int layer_idx = 1; layer_idx < m_field->getNumLayers(); layer_idx++)
+        {
+        std::vector<uint3> layer = layers[layer_indexer.find(layer_idx)->second];
+        for (std::vector<uint3>::const_iterator element = layer.begin(); element != layer.end(); element++)
+            {
+            unsigned int idx = indexer(element->x, element->y, element->z);
+            outer_distances.push(std::pair<uint3, Scalar>(*element, h_phi.data[idx]));
+            }
+        }
+
+    // Now march in this order
+    while (!outer_distances.empty())
+        {
+        // This is how we ensure that we get the most updated value
+        std::pair<uint3, Scalar> current = outer_distances.top();
+        outer_distances.pop();
+        uint3 current_point = current.first;
+        Scalar current_distance = current.second;
+
+        int i = current_point.x, j = current_point.y, k = current_point.z;
+        unsigned int cur_idx = indexer(i, j, k);
+
+        //NOTE: When assigning the S_i I'm assigning a value for when phi_i = 0
+        //by default I'm just using the D+ operator. This should be irrelevant
+        //because it should cancel; the only case where it could be a problem is
+        //if all of the phi_i are 0, but I don't think that this is possible
+        //since by construction we are propagating outwards from the interface
+
+        //NOTE: Consider switching to central differences rather than simple upwind
+        //for the phi terms since I should be able to compute those
+
+        // Note that while the phi{x,y,z} are the proper finite differences, the
+        // S{x,y,z} variables are actually the values of S at the neighbor. This
+        // is because when solving the propagation equation for S_{ijk}, the 
+        // finite difference terms in S get split.
+
+        // x direction
+        Scalar phix;
+        unsigned int idx_xp = indexer(i+1, j, k), idx_xm = indexer(i-1, j, k);
+        Scalar dist_xp = h_phi.data[idx_xp], dist_xm = h_phi.data[idx_xm];
+
+        // If both neighbors are further from the interface, there is no information to be gained here
+        if (min(dist_xp, dist_xm) > current_distance)
+            phix = 0;
+        else
+            {
+            // Choose the closer of the two neighbors to the interface
+            if (dist_xp < dist_xm)
+                phix = (dist_xp - current_distance)/spacing.x;
+            else
+                phix = (current_distance - dist_xm)/spacing.x;
+            }
+
+        // Choose the appropriate differencing operator depending on the sign of the phi derivative
+        Scalar Sx = phix > 0 ? h_velocities.data[idx_xm] : h_velocities.data[idx_xp];
+
+        // y direction
+        Scalar phiy;
+        unsigned int idx_yp = indexer(i, j+1, k) ,idx_ym = indexer(i, j-1, k);
+        Scalar dist_yp = h_phi.data[idx_yp], dist_ym = h_phi.data[idx_ym];
+
+        if (min(dist_yp, dist_ym) > current_distance)
+            phiy = 0;
+        else
+            {
+            if (dist_yp < dist_ym)
+                phiy = (dist_yp - current_distance)/spacing.y;
+            else
+                phiy = (current_distance - dist_ym)/spacing.y;
+            }
+
+        Scalar Sy = phiy > 0 ? h_velocities.data[idx_ym] : h_velocities.data[idx_yp];
+
+        // z direction
+        Scalar phiz;
+        unsigned int idx_zp = indexer(i, j, k+1) ,idx_zm = indexer(i, j, k-1);
+        Scalar dist_zp = h_phi.data[idx_zp], dist_zm = h_phi.data[idx_zm];
+
+        if (min(dist_zp, dist_zm) > current_distance)
+            phiz = 0;
+        else
+            {
+            if (dist_zp < dist_zm)
+                phiz = (dist_zp - current_distance)/spacing.x;
+            else
+                phiz  = (current_distance - dist_zm)/spacing.x;
+            }
+
+        Scalar Sz = phiz > 0 ? h_velocities.data[idx_zm] : h_velocities.data[idx_zp];
+
+        h_velocities.data[cur_idx] = ((Sx*phix/spacing.x) + (Sy*phiy/spacing.y) + (Sz*phiz/spacing.z)) /
+            (phix/spacing.x + phiy/spacing.y + phiz/spacing.z);
+        }
+
+    /**************************
+     * March inwards
+     *************************/
+    std::priority_queue< std::pair<uint3, Scalar>, std::vector< std::pair<uint3, Scalar> >, CompareScalarLess > inner_distances;
+    // Make sure to use int (not unsigned int) since I'll have to negate
+    for (int layer_idx = 1; layer_idx < m_field->getNumLayers(); layer_idx++)
+        {
+        std::vector<uint3> layer = layers[layer_indexer.find(-layer_idx)->second];
+        for (std::vector<uint3>::const_iterator element = layer.begin(); element != layer.end(); element++)
+            {
+            unsigned int idx = indexer(element->x, element->y, element->z);
+            inner_distances.push(std::pair<uint3, Scalar>(*element, h_phi.data[idx]));
+            }
+        }
+
+    // Now march in this order
+    while (!inner_distances.empty())
+        {
+        // This is how we ensure that we get the most updated value
+        std::pair<uint3, Scalar> current = inner_distances.top();
+        inner_distances.pop();
+        uint3 current_point = current.first;
+        Scalar current_distance = current.second;
+
+        int i = current_point.x, j = current_point.y, k = current_point.z;
+        unsigned int cur_idx = indexer(i, j, k);
+
+        // x direction
+        Scalar phix;
+        unsigned int idx_xp = indexer(i+1, j, k), idx_xm = indexer(i-1, j, k);
+        Scalar dist_xp = h_phi.data[idx_xp], dist_xm = h_phi.data[idx_xm];
+
+        // If both neighbors are further from the interface, there is no information to be gained here
+        if (max(dist_xp, dist_xm) < current_distance)
+            phix = 0;
+        else
+            {
+            // Choose the closer of the two neighbors to the interface
+            if (dist_xp > dist_xm)
+                phix = (dist_xp - current_distance)/spacing.x;
+            else
+                phix = (current_distance - dist_xm)/spacing.x;
+            }
+
+        // Choose the appropriate differencing operator depending on the sign of the phi derivative.
+        // The sign of the comparator is switched relative to the outward marching because all phi
+        // values are negative inside the boundary
+        Scalar Sx = phix < 0 ? h_velocities.data[idx_xm] : h_velocities.data[idx_xp];
+
+        // y direction
+        Scalar phiy;
+        unsigned int idx_yp = indexer(i, j+1, k) ,idx_ym = indexer(i, j-1, k);
+        Scalar dist_yp = h_phi.data[idx_yp], dist_ym = h_phi.data[idx_ym];
+
+        if (max(dist_yp, dist_ym) < current_distance)
+            phiy = 0;
+        else
+            {
+            if (dist_yp > dist_ym)
+                phiy = (dist_yp - current_distance)/spacing.y;
+            else
+                phiy = (current_distance - dist_ym)/spacing.y;
+            }
+
+        Scalar Sy = phiy < 0 ? h_velocities.data[idx_ym] : h_velocities.data[idx_yp];
+
+        // z direction
+        Scalar phiz;
+        unsigned int idx_zp = indexer(i, j, k+1) ,idx_zm = indexer(i, j, k-1);
+        Scalar dist_zp = h_phi.data[idx_zp], dist_zm = h_phi.data[idx_zm];
+
+        if (max(dist_zp, dist_zm) < current_distance)
+            phiz = 0;
+        else
+            {
+            if (dist_zp > dist_zm)
+                phiz = (dist_zp - current_distance)/spacing.x;
+            else
+                phiz  = (current_distance - dist_zm)/spacing.x;
+            }
+
+        Scalar Sz = phiz < 0 ? h_velocities.data[idx_zm] : h_velocities.data[idx_zp];
+
+        //NOTE: Make sure that this exact formulat treats signs correctly when pointing inward (I think it should)
+        h_velocities.data[cur_idx] = ((Sx*phix/spacing.x) + (Sy*phiy/spacing.y) + (Sz*phiz/spacing.z)) /
+            (phix/spacing.x + phiy/spacing.y + phiz/spacing.z);
+        }
+    }
+
+GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
     {
     // Access field data
     const std::vector<std::vector<uint3> > layers = m_field->getLayers();
@@ -292,10 +498,10 @@ GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar> B_Lz)
 
     ArrayHandle<Scalar> h_B_Lz(B_Lz, access_location::host, access_mode::readwrite);
 
-    unsigned int n_elements = Lz.size();
-    GPUArray<Scalar> B_interp(n_elements, m_exec_conf);
+    unsigned int n_layer_elements = Lz.size();
+    GPUArray<Scalar> B_interp(n_layer_elements, m_exec_conf);
     ArrayHandle<Scalar> h_B_interp(B_interp, access_location::host, access_mode::readwrite);
-    for (unsigned int i = 0; i < n_elements; i++)
+    for (unsigned int i = 0; i < n_layer_elements; i++)
         {
         Scalar3 vector_to_boundary = vectors_to_boundary[i];
         int3 point = make_int3(Lz[i].x, Lz[i].y, Lz[i].z);

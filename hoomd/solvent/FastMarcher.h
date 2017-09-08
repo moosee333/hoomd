@@ -66,10 +66,15 @@ class FastMarcher
         //! Compute distances
         void march();
 
-        //! Perform a trilinear interpolation to find the best estimate of the velocities at the true boundary
-        /* \param B_Lz A GPUArray indexed by the grid indexer that contains the value of B on Lz cells cells
+        //! Propagate some known field (typically the velocity field) from the boundaries along characteristics
+        /* \param velocities A GPUArray of the same shape as the grid that contains interface velocities; the rest will be filled in
          */
-        GPUArray<Scalar> boundaryInterp(GPUArray<Scalar> B_Lz);
+        void extend_velocities(GPUArray<Scalar>& velocities);
+
+        //! Perform a trilinear interpolation to find the best estimate of the velocities at the true boundary
+        /* \param B_Lz A GPUArray indexed by the grid indexer that contains the value of B on Lz cells (
+         */
+        GPUArray<Scalar> boundaryInterp(GPUArray<Scalar>& B_Lz);
 
     protected:
 
