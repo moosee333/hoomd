@@ -51,54 +51,44 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     // Now use the fast marcher to compute the distances
     m_marcher->march();
 
-    // Once the initial grid is established we compute the numerical derivatives
-    /*
-     * The next steps once the distances are computed is to actually compute the move.
-     * For that, we need to do a number of things
-     * I'm breaking up the computation like the VISM paper, so I need A and B terms separately
-     */
-    //NOTE: FOR THE BELOW FUNCTIONS, I AM CURRENTLY USING LZ INTERNALLY. HOWEVER, IF 
-    //I START USING A WIDER BAND, THEN I SHOULD BE ABLE TO ALSO HAVE CURVATURE INFORMATION
-    //FOR MORE LAYERS, AND THEREFORE I SHOULD ALSO BE ABLE TO HAVE BETTER DATA TO COMPUTE
-    //THE INTERPOLATIONS ETC THAT I NEED
-    GPUArray<Scalar> A = computeA();
-    GPUArray<Scalar> Bphi = computeBphi();
-
-    //NOTE: Jens doesn't actually use the parabolic A right now; I think this is because of what he said
-    //vis-a-vis computing the timestep with it but then using the non-linearized version, but it still
-    //seems weird
-    
-    
-    // Now that we have A and BPhi, we should be able to compute the forces. However, I don't think this
-    // is quite good enough; I'm no longer making use of the interpolation I was doing before in order to
-    // get the values, I'm just taking the exact values at the grid point, which is not what I want to do.
-    // I think I need to use the boundary vector calculation to find the boundary, and then interpolate
-    // somehow; I'll have to look at my prototype.
-    // I'm actually not sure how this should work now; since the A term includes the norm internally, and
-    // that norm is computed to accomodate various stability criteria, I'm not sure that applying an
-    // interpolation in the same way that I was before is still appropriate.
-    // I think I have to apply this to the A term before multiplying by the norm grad, and then do the 
-    // linearization, and then multiply. For the B term, I should be able to do it with the existing B term.
-    // Doing it for each of them independently should work.
-    //NOTE: Avoid recomputing gradient; should find one spot where I calculate and then pass it everywhere
-
-    // The total change in boundary force is just the sum of the two terms; now we can take the Euler step
-    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
-    const std::map<char, char> layer_indexer = m_updater->getIndex();
-    const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
-    GPUArray<Scalar> Fn_phi(Lz.size(), m_exec_conf);
-    ArrayHandle<Scalar> h_Fn_phi(Fn_phi, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
-    ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
-    for (unsigned int i = 0; i < Lz.size(); i++)
+    // Now iterate until convergence
+    while (true)
         {
-        h_Fn_phi.data[i] = h_A.data[i] + h_Bphi.data[i];
-        }
-    
-    // Extend velocities to rest of grid
-    // Euler step
-    ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+        //NOTE: FOR THE BELOW FUNCTIONS, I AM CURRENTLY USING LZ INTERNALLY. HOWEVER, IF 
+        //I START USING A WIDER BAND, THEN I SHOULD BE ABLE TO ALSO HAVE CURVATURE INFORMATION
+        //FOR MORE LAYERS, AND THEREFORE I SHOULD ALSO BE ABLE TO HAVE BETTER DATA TO COMPUTE
+        //THE INTERPOLATIONS ETC THAT I NEED
+        // Compute the two terms of the boundary force
+        GPUArray<Scalar> A = computeA();
+        GPUArray<Scalar> Bphi = computeBphi();
 
+        //NOTE: Jens doesn't actually use the parabolic A right now; I think this is because of what he said
+        //vis-a-vis computing the timestep with it but then using the non-linearized version, but it still
+        //seems weird
+        
+        // The total boundary force is just the sum of A and Bphi, so now we can step forward.
+        const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+        Index3D indexer = m_grid->getIndexer();
+
+        ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+
+        for (std::vector<std::vector<uint3>>::const_iterator layer = layers.begin(); layer != layers.end(); layer++)
+            {
+            for (unsigned int i = 0; i < layer->size(); i++)
+                {
+                uint3 point = (*layer)[i];
+                unsigned int idx = indexer(point.x, point.y, point.z);
+
+                // Take the actual Euler step
+                h_phi.data[idx] += m_dt*(h_A.data[idx] + h_Bphi.data[idx]);
+                }
+            }
+
+        //TEMPORARY UNTIL A PROPER TERMINATION CONDITION IS ESTABLISHED
+        break;
+        }
     }
 
 GPUArray<Scalar> LevelSetSolver::computeA()
