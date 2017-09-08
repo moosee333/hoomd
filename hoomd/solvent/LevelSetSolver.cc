@@ -183,27 +183,36 @@ GPUArray<Scalar> LevelSetSolver::computeA()
 
 GPUArray<Scalar> LevelSetSolver::computeBphi()
     {
+        /*
+         * Computing the B term involves marching outwards to find the best approximation of the normal.
+         * Need to use an upwind scheme for this as well.
+         * First, we compute the values on Lz; then we extrapolate to the rest of the grid.
+         */
     const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
     const std::map<char, char> layer_indexer = m_updater->getIndex();
 
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
-    unsigned int n_elements = Lz.size();
-    unsigned int n_elements_full = m_grid->getVelocityGrid().getNumElements();
+    Index3D grid_indexer = m_grid->getIndexer();
+    uint3 dims = m_grid->getDimensions();
+    unsigned int n_elements = dims.x*dims.y*dims.z;
 
     /*
-     * The computation a of the B term itself is simple.
+     * The computation of the B term itself is simple.
      * The trick is regularizing the derivative of phi to maintain
      * the stability of integrating the hyperbolic term
      */
-    // We first compute the B term, and we place it directly on a grid rather than storing it in a vector
-    GPUArray<Scalar> B(n_elements_full, m_exec_conf);
+
+    // We first compute compute the approximate B term on the Lz grid points
+    // Note that we place it directly on a grid rather than storing it in a vector
+    // for use with the boundary interpolation
+    GPUArray<Scalar> B_estimate(n_elements, m_exec_conf);
 
         { // Scope the ArrayHandles to avoid conflicts when calling grid functions
-        ArrayHandle<Scalar> h_B(B, access_location::host, access_mode::readwrite);
+        ArrayHandle<Scalar> h_B_estimate(B_estimate, access_location::host, access_mode::readwrite);
         ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::readwrite);
         Index3D indexer = m_grid->getIndexer();
         
-        for (unsigned int i = 0; i < n_elements; i++)
+        for (unsigned int i = 0; i < Lz.size(); i++)
             {
             uint3 point = Lz[i];
             unsigned int idx = indexer(point.x, point.y, point.z);
@@ -211,25 +220,32 @@ GPUArray<Scalar> LevelSetSolver::computeBphi()
             auto coulomb_term = 0;
             m_exec_conf->msg->notice(1) << "Currently setting coulomb term to 0 in the computation of the B term; this must be updated" << std::endl;
 
-            h_B.data[idx] = (m_delta_p - m_rho_water*h_fn.data[idx] + coulomb_term);
+            h_B_estimate.data[idx] = (m_delta_p - m_rho_water*h_fn.data[idx] + coulomb_term);
             }
         }
 
-    // The advantage of having B on a grid rather than in a vector is that it is convenient for the interpolation.
-    GPUArray<Scalar> B_final = m_marcher->boundaryInterp(B);
-    ArrayHandle<Scalar> h_B_final(B_final, access_location::host, access_mode::readwrite);
-    
-    // To finalize the calculation of B we need the normalized version of nabla phi
-    GPUArray<Scalar> norm_phi_upwind = m_grid->getNormUpwind(Lz);
-    ArrayHandle<Scalar> h_norm_phi_upwind(norm_phi_upwind, access_location::host, access_mode::readwrite);
+    // Since we have B on a grid, we can use it directly for interpolation. Once we
+    // interpolate the "exact" values of B, we use the fast marching method to extend
+    // these velocities along characteristics to the rest of the sparse field
+    GPUArray<Scalar> B_final = m_marcher->boundaryInterp(B_estimate);
+    m_marcher->extend_velocities(B_final);
 
-    // The final computation is multiplying B by the norm computed via upwind differencing.
+    // Finally, use upwind finite differencing to compute the appropriately normalized norm of
+    // phi on all layers, then multiply this by the B value to get the finalized Bphi value
     GPUArray<Scalar> Bphi(n_elements, m_exec_conf);
     ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
-    
-    for (unsigned int i = 0; i < n_elements; i++)
+    ArrayHandle<Scalar> h_B_final(B_final, access_location::host, access_mode::readwrite);
+
+    for (std::vector<std::vector<uint3>>::const_iterator layer = layers.begin(); layer != layers.end(); layer++)
         {
-        h_Bphi.data[i] = h_B_final.data[i]*h_norm_phi_upwind.data[i];
+        GPUArray<Scalar> layer_norm_phi_upwind = m_grid->getNormUpwind(*layer);
+        ArrayHandle<Scalar> h_layer_norm_phi_upwind(layer_norm_phi_upwind, access_location::host, access_mode::readwrite);
+        for (unsigned int i = 0; i < layer->size(); i++)
+            {
+            uint3 point = (*layer)[i];
+            unsigned int idx = grid_indexer(point.x, point.y, point.z);
+            h_Bphi.data[idx] = h_B_final.data[idx]*h_layer_norm_phi_upwind.data[i];
+            }
         }
 
     return Bphi;

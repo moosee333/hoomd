@@ -229,7 +229,7 @@ void FastMarcher::estimateLzDistances()
 
         for (unsigned int i = 0; i < directions.size(); i++)
             {
-            Scalar step;
+            Scalar step = 0;
             switch (i)
                 {
                 case 0:
@@ -491,6 +491,7 @@ GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
     const std::map<char, char> layer_indexer = m_field->getIndex();
     Index3D indexer = this->m_grid->getIndexer();
     Scalar3 spacing = m_grid->getSpacing();
+    uint3 dims = m_grid->getDimensions();
 
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
     std::vector<Scalar3> vectors_to_boundary = m_grid->vecToBoundary(Lz);
@@ -498,10 +499,10 @@ GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
 
     ArrayHandle<Scalar> h_B_Lz(B_Lz, access_location::host, access_mode::readwrite);
 
-    unsigned int n_layer_elements = Lz.size();
-    GPUArray<Scalar> B_interp(n_layer_elements, m_exec_conf);
+    unsigned int n_elements = dims.x*dims.y*dims.z;
+    GPUArray<Scalar> B_interp(n_elements, m_exec_conf);
     ArrayHandle<Scalar> h_B_interp(B_interp, access_location::host, access_mode::readwrite);
-    for (unsigned int i = 0; i < n_layer_elements; i++)
+    for (unsigned int i = 0; i < Lz.size(); i++)
         {
         Scalar3 vector_to_boundary = vectors_to_boundary[i];
         int3 point = make_int3(Lz[i].x, Lz[i].y, Lz[i].z);
@@ -514,6 +515,8 @@ GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
         vec3<bool> use_previous = vec3<bool>(vector_to_boundary.x < 0, vector_to_boundary.y < 0, vector_to_boundary.z < 0);
         int3 index_shifter = make_int3(use_previous.x * (-1), use_previous.y * (-1), use_previous.z * (-1)); 
         
+        // When use_previous is true, epsilon_unsigned will be negative, so it can be directly
+        // added to 1 rather than subtracted
         uint3 point_to_use = m_grid->wrap(point + index_shifter);
         Scalar3 epsilon_unsigned = vector_to_boundary/spacing;
         Scalar epsilon1  = use_previous.x ? 1 + epsilon_unsigned.x : epsilon_unsigned.x;
@@ -541,8 +544,11 @@ GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
         uint3 index110 = make_uint3(point_to_use.x + 1, point_to_use.y + 1, point_to_use.z);
         uint3 index111 = make_uint3(point_to_use.x + 1, point_to_use.y + 1, point_to_use.z + 1);
 
-        // As a best guess, for cells that don't have well defined energies (e.g. anything not on
-        //NOTE: THIS SHOULDN'T BE USING H_PHI, IT NEEDS ACTUAL ENERGIES ON L0
+        // As a best guess, for cells that don't have well defined energies (e.g. anything 
+        // not on Lz), we just replace it with the original cell (which is guaranteed to have
+        // values)
+        //NOTE: Does this work if use_previous is true in any direction? Or does that make the
+        //base cell also possibly invalid (e.g. missing a value)?
         Scalar energy000 = h_B_Lz.data[indexer(index000.x, index000.y, index000.z)];
         Scalar energy001 = h_B_Lz.data[indexer(index001.x, index001.y, index001.z)];
         energy001 = (energy001 == missing_value) ? energy000 : energy001;
@@ -559,7 +565,8 @@ GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
         Scalar energy111 = h_B_Lz.data[indexer(index111.x, index111.y, index111.z)];
         energy111 = (energy111 == missing_value) ? energy000 : energy111;
 
-        h_B_interp.data[i] = eps000*energy000 + eps001*energy001 + eps010*energy010 + eps011*energy011
+        unsigned int idx = indexer(point.x, point.y, point.z);
+        h_B_interp.data[idx] = eps000*energy000 + eps001*energy001 + eps010*energy010 + eps011*energy011
             + eps100*energy100 + eps101*energy101 + eps110*energy110 + eps111*energy111;
         }
     return B_interp;
