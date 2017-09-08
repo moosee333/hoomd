@@ -138,14 +138,14 @@ void GridData::hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<
     Scalar3 spacing = this->getSpacing();
 
     // Create intermediate GPUArrays
-    unsigned int n_elements = points.size();
-    GPUArray<Scalar> dx(n_elements, m_exec_conf), dy(n_elements, m_exec_conf), dz(n_elements, m_exec_conf);
-    GPUArray<Scalar> dxpx(n_elements, m_exec_conf), dypx(n_elements, m_exec_conf), dzpx(n_elements, m_exec_conf);
-    GPUArray<Scalar> dxpy(n_elements, m_exec_conf), dypy(n_elements, m_exec_conf), dzpy(n_elements, m_exec_conf);
-    GPUArray<Scalar> dxpz(n_elements, m_exec_conf), dypz(n_elements, m_exec_conf), dzpz(n_elements, m_exec_conf);
-    GPUArray<Scalar> dxmx(n_elements, m_exec_conf), dymx(n_elements, m_exec_conf), dzmx(n_elements, m_exec_conf);
-    GPUArray<Scalar> dxmy(n_elements, m_exec_conf), dymy(n_elements, m_exec_conf), dzmy(n_elements, m_exec_conf);
-    GPUArray<Scalar> dxmz(n_elements, m_exec_conf), dymz(n_elements, m_exec_conf), dzmz(n_elements, m_exec_conf);
+    unsigned int n_points = points.size();
+    GPUArray<Scalar> dx(n_points, m_exec_conf), dy(n_points, m_exec_conf), dz(n_points, m_exec_conf);
+    GPUArray<Scalar> dxpx(n_points, m_exec_conf), dypx(n_points, m_exec_conf), dzpx(n_points, m_exec_conf);
+    GPUArray<Scalar> dxpy(n_points, m_exec_conf), dypy(n_points, m_exec_conf), dzpy(n_points, m_exec_conf);
+    GPUArray<Scalar> dxpz(n_points, m_exec_conf), dypz(n_points, m_exec_conf), dzpz(n_points, m_exec_conf);
+    GPUArray<Scalar> dxmx(n_points, m_exec_conf), dymx(n_points, m_exec_conf), dzmx(n_points, m_exec_conf);
+    GPUArray<Scalar> dxmy(n_points, m_exec_conf), dymy(n_points, m_exec_conf), dzmy(n_points, m_exec_conf);
+    GPUArray<Scalar> dxmz(n_points, m_exec_conf), dymz(n_points, m_exec_conf), dzmz(n_points, m_exec_conf);
 
     // Construct lists of neighboring points
     std::vector<uint3> px, py, pz, mx, my, mz;
@@ -647,13 +647,13 @@ GPUArray<Scalar> GridData::getNormUpwind(std::vector<uint3> points)
     //NOTE:For now I'm just going to assume the maximum order interpolation
     ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
     ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);
-    unsigned int n_elements = points.size();
+    unsigned int n_points = points.size();
     Scalar3 spacing = this->getSpacing();
 
-    GPUArray<Scalar> phi_upwind(n_elements, m_exec_conf);
+    GPUArray<Scalar> phi_upwind(n_points, m_exec_conf);
     ArrayHandle<Scalar> h_phi_upwind(phi_upwind, access_location::host, access_mode::read);
 
-    for (unsigned int pt_idx = 0; pt_idx < n_elements; pt_idx++)
+    for (unsigned int pt_idx = 0; pt_idx < n_points; pt_idx++)
         {
         uint3 point = points[pt_idx];
         
