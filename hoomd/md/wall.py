@@ -604,51 +604,132 @@ class wallpotential(external._external_force):
         The current wall force implementation has limited support for NPT integration.
         Use with caution and please read all NPT specific notes.
 
-    NPT Integrator Settings
-    +----------------+------------+-------------------------+-------------------------------------+
-    | Geometry       | Plane      | Sphere                  | Cylinder                            |
-    +================+============+=========================+=====================================+
-    | Required       | *None*     | couple='xyz'            | couple='xy','xz','yz',   or xyz[*]_ |
-    +----------------+------------+-------------------------+-------------------------------------+
-    | Forbidden      | *None*     | Tilt Degrees of Freedom | Tilt Degrees of Freedom             |
-    +----------------+------------+-------------------------+-------------------------------------+
+    Note:
+        NPT Integrator Methods:
+				+----------------+------------+-------------------------+-------------------------------------+
+				| Geometry       | Plane      | Sphere                  | Cylinder                            |
+				+================+============+=========================+=====================================+
+				| Required       | *None*     | couple='xyz'            | couple='xy','xz','yz',   or 'xyz'   |
+				+----------------+------------+-------------------------+-------------------------------------+
+				| Forbidden      | *None*     | Tilt Degrees of Freedom | Tilt Degrees of Freedom             |
+				+----------------+------------+-------------------------+-------------------------------------+
 
     .. [*] For any anisotropic couplings, the coupled directions must be perpendicular to all cylinder axes in the system.
 
     Additional calls to update the python and c++ definitions will be required for all but very simple runs. The following
-    examples will demonstrate several cases of proper usage of the :py:func:wallobject_pull and  :py:func:wallobject_push functions.
+    examples will demonstrate several cases of proper usage of the update_params_pull and wallobject_push functions.
 
     Examples::
 
-        # setup system
-        ...
-        # setup walls
-        walls=wall.group(wall.sphere(r=3,origin=(0,0,0)),wall.cylinder(r=2.5,axis=(0,0,1),inside=True), wall.plane(normal=(1,0,0)))
-        # setup forces using walls
-        my_force=wall.pairpotential(walls)
-        my_force.force_coeff.set('A', all required arguments)
-        # use NPT integration method
-        ...
-        integrate.npt(group=group.all(),kT=...,P=...,couple='xyz') # setting according to restrictions and requirements above
-        run(1e4)
-        # stopping here things would just work without any issue
+        # This is an example for repulsive paritcles bounded between two (Yukawa) parallel planar walls 
+        # setup system after being thermalized 
+        #create system of sq lattice
 
-        # update the python object before running again or it will overwrite the modified c++ object at run time
-        my_force.wallobject_pull()
-        run(1e4)
+        from hoomd import *
+        from hoomd.md import *
+        import hoomd.deprecated as deprecated
+
+        c=context.initialize()
+
+        N=2.0;
+        system = init.create_lattice(unitcell=lattice.sq(a=N),n=[3,3]);
+
+
+        snapshot = system.take_snapshot()
+        box=snapshot.box
+
+        #change size of box along z-direction 
+        snapshot.box = data.boxdim(Lx=box.Lx, Ly=box.Ly, Lz=40, xy=0, xz=0, yz=0)
+
+        #random velocities
+        for idx in range(9):
+         vx = (2.0 * random.random()- 1.0 )
+         vy = (2.0 * random.random()- 1.0 )
+         vz = (2.0 * random.random()- 1.0 )
+         snapshot.particles.velocity[idx] = (vx,vy,vz)
+         snapshot.particles.diameter[idx] = 1.0
+
+         system.restore_snapshot(snapshot)
+
+
+        #replicate system
+        system.replicate(nx=6,ny=6,nz=1)
+        all = group.all()
+
+        #xml for VMD visualization
+        deprecated.dump.xml(group= group.all(), filename="init.xml",vis=True)
+        traj = dump.dcd("traj.dcd",period=5e2,overwrite=True)
+
+        #introduce SLJ forces between particles to make them 'hard'
+        nl =nlist.cell()
+        c.sorter.disable()
+        slj= pair.slj(r_cut = 2**(1./6.), nlist=nl)
+        slj.set_params(mode="shift")
+        slj.pair_coeff.set('A','A' , epsilon=1.0, sigma=1.0 )
+
+        #introduce Yukawa Walls bounding from  above/below Z direction
+        walls = wall.group()
+        walls.add_plane((0,0,7.0),(0.,0.,1.))
+        walls.add_plane((0,0,-7.0),(0.,0.,-1.))
+        wall_force_slj=wall.slj(walls, r_cut=2.0)
+        wall_force_slj.force_coeff.set('A', epsilon= 1,r_cut=2**(1.6),sigma=sigma,r_extrap = 0.05)
+
+        #log Thermos
+        logger = analyze.log(quantities=['temperature' , 'potential_energy', 'kinetic_energy'],
+																 period=5e2, filename='test.log', overwrite=True)
+
+
+        #Run Simulation
+
+        integrate.mode_standard(dt=0.001)
+
+        #NVE Integration
+        integrator = integrate.nve(all , limit = 0.0001)
+        zero = update.zero_momentum(period =100)
+        run(1e3)
+        integrator.disable()
+        zero.disable()
+
+        #NVT interation to reached target temperature
+
+        tf=0.75
+        integrator = integrate.nvt(group=all , tau = 0.65 , kT = 0.001)
+        integrator.set_params(kT=variant.linear_interp(points=[(0, logger.query('temperature')), (1e4, 1.0)]))
+
+        run(1e5)
+        #reach targeted Temperature
+
+        integrator.set_params(kT=variant.linear_interp(points=[(0, logger.query('temperature')), (1.5e4, tf)]))
+        run(1e5)
+
+
+        #print initial parameters of walls
+        print(walls.planes)
+        npt_integrator = integrate.npt(group=all , kT=tf ,tau=0.65,P=1e-2,tauP=0.65,x =False,y=False)
+        run(3e5)
+
+        integrator.disable()
+
+        #update wall parameters
+        wall_force_slj.update_params_pull()
+
+        #print final parameters of walls
+        print(walls.planes)
+
+
 
         # multiple forces can reference the same python object but the c++ objects are always independent
         my_force2=wall.pairpotential(walls)
         my_force2.force_coeff.set('A', all required arguments)
         # because my_force2 hasn't had it's walls modified during a run it needs to use my_force to update properly here
-        my_force.wallobject_pull()
+        my_force.update_params_pull()
         # only one pull is required per python object, it will be pushed to all forces which use it at runtime
         run(1e4)
 
         # if changes are to be made during a run, it will also be required to push (which normally is handled by the run command)
         def shrink_sphere(timestep):
             # only need to pull once
-            my_force2.wallobject_pull()
+            my_force2.update_params_pull()
             walls.spheres[0].r*=0.999
             # must push to each force which uses the modified values
             my_force.wallobject_push()
@@ -721,11 +802,59 @@ class wallpotential(external._external_force):
 
     # TODO: NPT_walls, documentation for this functionality, settle on nameing?
     # updates python obj using c++ obj
-    def wallobject_pull(self):
+    def update_params_pull(self):
+        R""" This functions updates the parameter values of (python) wall objects that were potentially modified and of interest to the user  
+        after performing methods such as NPT integration or implementating :py:class:`hoomd.update` routines (See example below).    
+
+        Note:   
+            Usage of this function is not a mandatory step to continue at any point with a simulation.   
+         
+        Example::   
+
+            In[0]: 
+            #Create pair of walls parallel to xy plane. For example, they could bound repulsive pointwise particles.
+            walls = wall.group()
+            walls =walls.add_plane(origin=(0,0,8.0),normal=(0.,0.,-1.),inside=True) 
+            walls =walls.add_plane(origin=(0,0,-8.0),normal=(0.,0.,1.),inside=True) 
+            wall_force_slj=wall.slj(walls, r_cut=2.0)
+            wall_force_slj.force_coeff.set('A', epsilon= 1,r_cut=2**(1.6),sigma=1.0,r_extrap = 0.05)
+            #print initial planar walls parameters 
+            print(walls.planes)
+
+            Out[0]: 
+            [{'origin':(0.0, 0.0, 8.0), 'normal': (0.0, 0.0, -1.0), 'inside': True},
+            {'origin':(0.0, 0.0, -8.0), 'normal': (0.0, 0.0, 1.0), 'inside': True}]
+
+            In[1]: 
+            #Run NPT integration method with compression along Z-axis
+            npt_integrator = integrate.npt(group=all , kT=tf ,tau=0.65,P=1e-2,tauP=0.65,x =False,y=False ,z=True)
+            run(3e5) 
+            #print parameters of planar walls after compression (no sign changes despite compression)
+            print(walls.planes)
+
+            Out[1]: 
+            [{'origin':(0.0, 0.0, 8.0), 'normal': (0.0, 0.0, -1.0), 'inside': True}, 
+            {'origin':(0.0, 0.0, -8.0), 'normal': (0.0, 0.0, 1.0), 'inside': True}] 
+
+
+            In[2]: 
+            #Let's update walls parameters 
+            wall_force_slj.update_params_pull()
+            #print new walls parameters
+            print(walls.planes)
+
+            Out[2]: 
+            [{'origin':(0.0, 0.0, 2.063586751564829), 'normal': (0.0, 0.0, -1.0), 'inside': True},
+            {'origin':(0.0, 0.0, -2.063586751564829), 'normal': (0.0, 0.0, 1.0), 'inside': True}]  
+        """ 
+
         self.cpp_force.updateFieldPy(self.field_coeff)
 
     # update c++ ojb using python obj
-    def wallobject_push(self):
+    def update_params_push(self):
+        R""" Create Doc ?
+        """ 
+
         fcoeff = self.process_field_coeff(self.field_coeff);
         self.cpp_force.setField(fcoeff);
 

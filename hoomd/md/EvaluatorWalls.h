@@ -343,13 +343,6 @@ class EvaluatorWalls
                     }
                 }
 
-            // evaluate virial
-            virial[0] = F.x*m_pos.x;
-            virial[1] = F.x*m_pos.y;
-            virial[2] = F.x*m_pos.z;
-            virial[3] = F.y*m_pos.y;
-            virial[4] = F.y*m_pos.z;
-            virial[5] = F.z*m_pos.z;
             }
 
         #ifndef NVCC
