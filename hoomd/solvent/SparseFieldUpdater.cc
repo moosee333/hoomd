@@ -282,4 +282,114 @@ void SparseFieldUpdater::initializeLayer(int layer)
         } // End m_layers[prev_layer_index] loop
     }
 
+void SparseFieldUpdater::updateField()
+    {
+    ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+    Index3D indexer = m_grid->getIndexer();
+    Scalar3 spacing = m_grid->getSpacing();
+
+    //NOTE: ARE THERE ANY OPTIMIZATIONS TO BE HAD HERE TO PREVENT REUPDATING THE FIELD IF NOTHING HAS CHANGED?
+    // Initialize the status lists such that we can use identical indexing to the layers
+    std::vector<std::vector<uint3> > status_lists;
+    for (unsigned int i = 0; i < m_layers.size(); i++)
+        status_lists.push_back(std::vector<uint3>());
+
+    // Build up the status lists by looping layer-by-layer
+    for (int i = 0; i <= m_num_layers; i++)
+        {
+        for (int sgn = 1; sgn != -3; sgn-=2)
+            { //NOTE:SHOULD WRITE A MORE ELEGANT LOOP, BUT THIS WILL WORK FOR NOW
+            // Don't do 0 twice
+            if (i == 0 && sgn == -1)
+                continue;
+
+            int list_index = i*sgn; 
+            unsigned int layer_index = m_index.find(list_index)->second, 
+                         increase_index = m_index.find(list_index+1)->second, 
+                         decrease_index = m_index.find(list_index-1)->second;
+
+            //NOTE: For non-orthorhombic boxes does this bound work?
+            //I COULD IMPLEMENT A MORE COMPLEX GEOMETRIC TEST, BUT NOT SURE IF THAT'S WORTHWHILE (CERTAINLY NOT YET)
+            Scalar distance_bound = sqrt(spacing.x*spacing.x + spacing.y*spacing.y + spacing.z*spacing.z);
+            // //NOTE: THE BOUNDS ARE WRONG FOR NEGATIVE LAYERS (WRONG ORDER)
+            throw std::runtime_error("Fix bounds to work for negative layers!");
+            Scalar upper_bound = (i+0.5)*distance_bound;
+            Scalar lower_bound = (i-0.5)*distance_bound;
+
+            // Since deleting items one at a time from vectors is relatively inefficient, we apply a modification of
+            // the erase-remove idiom (with an intermediate loop to move the additional items)
+            std::vector<uint3>::iterator removal_iterator = std::remove_if(m_layers[layer_index].begin(), m_layers[layer_index].end(),
+                    [&](uint3 tmp) {
+                        return (h_phi.data[indexer(tmp.x, tmp.y, tmp.z)] >= upper_bound || h_phi.data[indexer(tmp.x, tmp.y, tmp.z)] < lower_bound);
+                    });
+            for (std::vector<uint3>::iterator move_iterator = removal_iterator; move_iterator != m_layers[layer_index].end(); move_iterator++)
+                {
+                // Check which sign condition was violated
+                if (h_phi.data[indexer(move_iterator->x, move_iterator->y, move_iterator->z)] >= upper_bound)
+                    status_lists[increase_index].push_back(*move_iterator);
+                else if (h_phi.data[indexer(move_iterator->x, move_iterator->y, move_iterator->z)] < lower_bound)
+                    status_lists[decrease_index].push_back(*move_iterator);
+                else
+                    throw std::runtime_error("Trying to add an element to the status list that shoulnd't move");
+                }
+            m_layers[layer_index].erase(removal_iterator, m_layers[layer_index].end());
+            }
+        }
+
+    // Now update the layers from the status lists
+    for (int i = 0; i <= m_num_layers; i++)
+        {
+        for (int sgn = 1; sgn != -3; sgn -= 2)
+            { //NOTE:SHOULD WRITE A MORE ELEGANT LOOP, BUT THIS WILL WORK FOR NOW
+            if (i == 0 && sgn == -1)
+                continue;
+
+            int list_index = i*sgn; 
+            unsigned int layer_index = m_index.find(list_index)->second;
+
+            for (std::vector<uint3>::const_iterator element = status_lists[layer_index].begin(); element != status_lists[layer_index].end(); element++)
+                {
+                m_layers[layer_index].push_back(*element);
+                }
+
+            // For the final layer, we may have to add cells that were not part of the original sparse field
+            if (i == m_num_layers - 1)
+                {
+                for (std::vector<uint3>::const_iterator element = m_layers[layer_index].begin(); element != m_layers[layer_index].end(); element++)
+                    {
+                    // Any neighbor of the second to last layer (either inner or outer) that is not already a member of either the last layer or the
+                    // third to last year needs to be added to the last layer now
+                    unsigned int x = element->x, y = element->y, z = element->z;
+                    int3 neighbor_indices[6] =
+                        {
+                        make_int3(x+1, y, z),
+                        make_int3(x-1, y, z),
+                        make_int3(x, y+1, z),
+                        make_int3(x, y-1, z),
+                        make_int3(x, y, z+1),
+                        make_int3(x, y, z-1),
+                        }; // The neighboring cells
+
+                    for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
+                        {
+                        int3 neighbor_idx = neighbor_indices[idx];
+                        uint3 periodic_neighbor = m_grid->wrap(neighbor_idx);
+
+                        //NOTE: Make sure the cast works when multiplying by sgn
+                        int inner_test_list_index = (int) (m_num_layers - 2) * (sgn), outer_test_list_index = (int) (m_num_layers) * (sgn);
+                        unsigned int inner_test_layer_index = m_index.find(inner_test_list_index)->second, outer_test_layer_index = m_index.find(outer_test_list_index)->second;
+
+                        if (std::find(m_layers[inner_test_layer_index].begin(), m_layers[inner_test_layer_index].end(), periodic_neighbor) == m_layers[inner_test_layer_index].end()
+                                &&
+                            std::find(m_layers[outer_test_layer_index].begin(), m_layers[outer_test_layer_index].end(), periodic_neighbor) == m_layers[outer_test_layer_index].end()
+                                )
+                            {
+                            m_layers[outer_test_layer_index].push_back(periodic_neighbor);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 } // end namespace solvent

@@ -86,6 +86,9 @@ void LevelSetSolver::computeForces(unsigned int timestep)
                 }
             }
 
+        // Update the sparse field
+        
+
         //TEMPORARY UNTIL A PROPER TERMINATION CONDITION IS ESTABLISHED
         break;
         }

@@ -95,6 +95,9 @@ class SparseFieldUpdater
             return m_index;
             }
 
+        //! Update the sparse field based on the current values of the grid
+        void updateField();
+
     protected:
 
         //! Initialize the zero layer
