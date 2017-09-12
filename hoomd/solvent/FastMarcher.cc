@@ -16,13 +16,13 @@ namespace solvent
 {
 
 //! Constructor
-FastMarcher::FastMarcher(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<SparseFieldUpdater> field)
+FastMarcher::FastMarcher(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<SparseFieldUpdater> updater)
     :
     m_sysdef(sysdef),
     m_pdata(sysdef->getParticleData()),
     m_exec_conf(m_pdata->getExecConf()),
-    m_field(field),
-    m_grid(field->getGrid())
+    m_updater(updater),
+    m_grid(updater->getGrid())
     { }
 
 //! Destructor
@@ -38,8 +38,8 @@ void FastMarcher::march()
     ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
 
     // Access field data
-    const std::vector<std::vector<uint3> > layers = m_field->getLayers();
-    const std::map<char, char> layer_indexer = m_field->getIndex();
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
     Index3D indexer = this->m_grid->getIndexer();
 
     /**************************
@@ -61,10 +61,10 @@ void FastMarcher::march()
     // Build lists of eligible points
     std::vector<uint3> eligible_positive;
     unsigned int num_eligible_positive = 0;
-    for (unsigned int layer = 1; layer <= m_field->getNumLayers(); layer++)
+    for (unsigned int layer = 1; layer <= m_updater->getNumLayers(); layer++)
         num_eligible_positive += layers[layer_indexer.find(layer)->second].size();
     eligible_positive.reserve(num_eligible_positive);
-    for (unsigned int layer = 1; layer <= m_field->getNumLayers(); layer++)
+    for (unsigned int layer = 1; layer <= m_updater->getNumLayers(); layer++)
         {
         std::vector<uint3> L = layers[layer_indexer.find(layer)->second];
         eligible_positive.insert(eligible_positive.end(), L.begin(), L.end());
@@ -136,10 +136,10 @@ void FastMarcher::march()
     // Build lists of eligible points
     std::vector<uint3> eligible_negative;
     unsigned int num_eligible_negative = 0;
-    for (int layer = 1; layer <= m_field->getNumLayers(); layer++)
+    for (int layer = 1; layer <= m_updater->getNumLayers(); layer++)
         num_eligible_negative += layers[layer_indexer.find(-layer)->second].size();
     eligible_negative.reserve(num_eligible_negative);
-    for (int layer = 1; layer <= m_field->getNumLayers(); layer++)
+    for (int layer = 1; layer <= m_updater->getNumLayers(); layer++)
         {
         std::vector<uint3> L = layers[layer_indexer.find(-layer)->second];
         eligible_negative.insert(eligible_negative.end(), L.begin(), L.end());
@@ -201,8 +201,8 @@ void FastMarcher::estimateLzDistances()
     Index3D indexer = this->m_grid->getIndexer();
 
     // Access field data
-    const std::vector<std::vector<uint3> > layers = m_field->getLayers();
-    const std::map<char, char> layer_indexer = m_field->getIndex();
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
 
     // Interpolate distances on Lz
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
@@ -287,8 +287,8 @@ void FastMarcher::extend_velocities(GPUArray<Scalar>& velocities)
     ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
 
     // Access field data
-    const std::vector<std::vector<uint3> > layers = m_field->getLayers();
-    const std::map<char, char> layer_indexer = m_field->getIndex();
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
     Index3D indexer = this->m_grid->getIndexer();
     Scalar3 spacing = this->m_grid->getSpacing();
 
@@ -301,7 +301,7 @@ void FastMarcher::extend_velocities(GPUArray<Scalar>& velocities)
     //NOTE: assumes that layer0 is already filled in the velocities array
     // Insert all existing positive distances into the grid
     std::priority_queue< std::pair<uint3, Scalar>, std::vector< std::pair<uint3, Scalar> >, CompareScalarGreater > outer_distances;
-    for (unsigned int layer_idx = 1; layer_idx < m_field->getNumLayers(); layer_idx++)
+    for (unsigned int layer_idx = 1; layer_idx < m_updater->getNumLayers(); layer_idx++)
         {
         std::vector<uint3> layer = layers[layer_indexer.find(layer_idx)->second];
         for (std::vector<uint3>::const_iterator element = layer.begin(); element != layer.end(); element++)
@@ -400,7 +400,7 @@ void FastMarcher::extend_velocities(GPUArray<Scalar>& velocities)
      *************************/
     std::priority_queue< std::pair<uint3, Scalar>, std::vector< std::pair<uint3, Scalar> >, CompareScalarLess > inner_distances;
     // Make sure to use int (not unsigned int) since I'll have to negate
-    for (int layer_idx = 1; layer_idx < m_field->getNumLayers(); layer_idx++)
+    for (int layer_idx = 1; layer_idx < m_updater->getNumLayers(); layer_idx++)
         {
         std::vector<uint3> layer = layers[layer_indexer.find(-layer_idx)->second];
         for (std::vector<uint3>::const_iterator element = layer.begin(); element != layer.end(); element++)
@@ -487,8 +487,8 @@ void FastMarcher::extend_velocities(GPUArray<Scalar>& velocities)
 GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
     {
     // Access field data
-    const std::vector<std::vector<uint3> > layers = m_field->getLayers();
-    const std::map<char, char> layer_indexer = m_field->getIndex();
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
     Index3D indexer = this->m_grid->getIndexer();
     Scalar3 spacing = m_grid->getSpacing();
     uint3 dims = m_grid->getDimensions();

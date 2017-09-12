@@ -56,9 +56,10 @@ class FastMarcher
     {
     public:
         //! Constructor
-        /* \param field The Sparse Field on which we march
+        /* \param sysdef HOOMD System Definition
+         * \param updater The Sparse Field on which we march
          */
-        FastMarcher(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<SparseFieldUpdater> field);
+        FastMarcher(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<SparseFieldUpdater> updater);
 
         //! Destructor
         virtual ~FastMarcher();
@@ -90,7 +91,7 @@ class FastMarcher
         std::shared_ptr<SystemDefinition> m_sysdef; //!< HOOMD system definition
         std::shared_ptr<ParticleData> m_pdata;               //!< HOOMD particle data (required for box)
         std::shared_ptr<const ExecutionConfiguration> m_exec_conf; //!< Stored shared ptr to the execution configuration
-        std::shared_ptr<SparseFieldUpdater> m_field; //!< Sparse field
+        std::shared_ptr<SparseFieldUpdater> m_updater; //!< Sparse field
         std::shared_ptr<solvent::GridData> m_grid; //!< The grid that layers are maintained on
 
     private:
