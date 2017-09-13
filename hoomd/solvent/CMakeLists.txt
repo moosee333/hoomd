@@ -1,4 +1,4 @@
-# Maintainer: jglaser
+# Maintainer: vramasub
 
 set(_solvent_sources module-solvent.cc
     GridData.cc

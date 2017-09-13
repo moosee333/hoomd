@@ -2,7 +2,7 @@
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
 
-// Maintainer: jglaser
+// Maintainer: vramasub
 
 /*! \file GridData.h
     \brief Defines the GridData class and associated utilities
@@ -163,7 +163,20 @@ assuming that with the sparse field construct this is never an actual problem (w
         GPUArray<Scalar> heaviside(unsigned int order = 0);
 
         //! Second order accurate delta function
+        /*! \param points The list of points where the delta function will be nonzero
+         */
+        // Note that the returned array will be of the same size as the full grid.
+        // The input points are simply the only ones that will be assumed to require updating.
         GPUArray<Scalar> delta(std::vector<uint3> points);
+
+        //! Second order accurate delta function
+        /*! \param points The list of points where the delta function will be nonzero
+         */
+        // Note that the returned array will be of the same size as the full grid.
+        // The input points are simply the only ones that will be assumed to require updating.
+        //NOTE: THIS IS THE VERSION OF THE FUNCTION THAT INCLUDED THE EXTRA CHECK FOR
+        //POINTS ON THE BOUNDARY. IT SHOULD BE REMOVED
+        GPUArray<Scalar> delta_old(std::vector<uint3> points);
 
         //! Function to set grid values, primarily useful for initialization
         /*! \param flags Bits indicating which grid to update (1 for energies, 2 for distances, 3 for both)

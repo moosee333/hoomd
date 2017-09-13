@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2017 The Regents of the University of Michigan
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
-// Maintainer: jglaser
+// Maintainer: vramasub
 
 #include "GridData.h"
 #include "hoomd/extern/num_util.h"
@@ -461,6 +461,93 @@ void GridData::getGaussianCurvature(GPUArray<Scalar> K, const GPUArray<Scalar>& 
 
 GPUArray<Scalar> GridData::delta(std::vector<uint3> points)
     {
+    // Create the GPUArray to return and access it
+    unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
+    GPUArray<Scalar> delta(n_elements, m_exec_conf);
+
+    // access GPUArrays
+    ArrayHandle<Scalar> h_delta(delta, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+    Scalar3 spacing = this->getSpacing();
+
+    // Loop and check for neighbors
+    for (std::vector<uint3>::iterator point = points.begin();
+            point != points.end(); point++)
+        {
+        unsigned int i = point->x, j = point->y, k = point->z;
+        unsigned int cur_cell = m_indexer(i, j, k);
+
+        //NOTE: ASSUMING GPUARRAY IS INITIALIZED TO ZERO, SO ONLY MODIFYING THE BOUNDARY
+        //SHOULD CONFIRM THAT THIS WORKS
+        // We only need to worry about higher order accuracy for cells on the boundary
+        int x_forward = this->wrapx(i+1);
+        int y_forward = this->wrapy(j+1);
+        int z_forward = this->wrapz(k+1);
+        int x_reverse = this->wrapx(i-1);
+        int y_reverse = this->wrapy(j-1);
+        int z_reverse = this->wrapz(k-1);
+
+        unsigned int x_forward_idx = m_indexer(x_forward, j, k);
+        unsigned int y_forward_idx = m_indexer(i, y_forward, k);
+        unsigned int z_forward_idx = m_indexer(i, j, z_forward);
+        unsigned int x_reverse_idx = m_indexer(x_reverse, j, k);
+        unsigned int y_reverse_idx = m_indexer(i, y_reverse, k);
+        unsigned int z_reverse_idx = m_indexer(i, j, z_reverse);
+
+        // Extracting distance values from grid for convenience only, can remove unnecessary vars later
+        Scalar phi0 = h_phi.data[cur_cell];
+
+        Scalar phixp = h_phi.data[x_forward_idx];
+        Scalar phiyp = h_phi.data[y_forward_idx];
+        Scalar phizp = h_phi.data[z_forward_idx];
+
+        Scalar phixm = h_phi.data[x_reverse_idx];
+        Scalar phiym = h_phi.data[y_reverse_idx];
+        Scalar phizm = h_phi.data[z_reverse_idx];
+
+        Scalar dxp = (phixp - phi0)/spacing.x;
+        Scalar dyp = (phiyp - phi0)/spacing.y;
+        Scalar dzp = (phizp - phi0)/spacing.z;
+
+        Scalar dxm = (phi0 - phixm)/spacing.x;
+        Scalar dym = (phi0 - phiym)/spacing.y;
+        Scalar dzm = (phi0 - phizm)/spacing.z;
+
+        Scalar dx = (dxp + dxm)/2;
+        Scalar dy = (dyp + dym)/2;
+        Scalar dz = (dzp + dzm)/2;
+
+        Scalar mag_grad_sq = dx*dx*dy*dy*dz*dz;
+        if (mag_grad_sq == 0)
+            {
+            h_delta.data[cur_cell] = 0;
+            }
+        else
+            {
+            if (dxp != 0 && phixp*phi0 <= 0)
+                h_delta.data[cur_cell] += abs(phixp*dx)/(spacing.x*spacing.x)/abs(dxp)/mag_grad_sq;
+            if (dxm != 0 && phixm*phi0 < 0)
+                h_delta.data[cur_cell] += abs(phixm*dx)/(spacing.x*spacing.x)/abs(dxm)/mag_grad_sq;
+
+            if (dyp != 0 && phiyp*phi0 <= 0)
+                h_delta.data[cur_cell] += abs(phiyp*dy)/(spacing.y*spacing.y)/abs(dyp)/mag_grad_sq;
+            if (dym != 0 && phiym*phi0 < 0)
+                h_delta.data[cur_cell] += abs(phiym*dy)/(spacing.y*spacing.y)/abs(dym)/mag_grad_sq;
+
+            if (dzp != 0 && phizp*phi0 <= 0)
+                h_delta.data[cur_cell] += abs(phizp*dz)/(spacing.z*spacing.z)/abs(dzp)/mag_grad_sq;
+            if (dzm != 0 && phizm*phi0 <= 0)
+                h_delta.data[cur_cell] += abs(phizm*dz)/(spacing.z*spacing.z)/abs(dzm)/mag_grad_sq;
+            }
+        }
+    return delta;
+    }
+
+GPUArray<Scalar> GridData::delta_old(std::vector<uint3> points)
+    {
+        //NOTE: I SHOULDN'T HAVE TO DO ANY OF THESE CHECKS; THE WHOLE
+        //POINT OF PROVIDING THE INPUT VECTOR IS SO TO HAVE THE SET OF
+        //BOUNDARY POINTS PRECOMPUTED
     // Create the GPUArray to return and access it
     unsigned int n_elements = m_dim.x*m_dim.y*m_dim.z;
     GPUArray<Scalar> delta(n_elements, m_exec_conf);
