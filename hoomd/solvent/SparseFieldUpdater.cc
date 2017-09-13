@@ -311,27 +311,29 @@ void SparseFieldUpdater::updateField()
             //NOTE: For non-orthorhombic boxes does this bound work?
             //I COULD IMPLEMENT A MORE COMPLEX GEOMETRIC TEST, BUT NOT SURE IF THAT'S WORTHWHILE (CERTAINLY NOT YET)
             Scalar distance_bound = sqrt(spacing.x*spacing.x + spacing.y*spacing.y + spacing.z*spacing.z);
-            // //NOTE: THE BOUNDS ARE WRONG FOR NEGATIVE LAYERS (WRONG ORDER)
-            throw std::runtime_error("Fix bounds to work for negative layers!");
             Scalar upper_bound = (i+0.5)*distance_bound;
             Scalar lower_bound = (i-0.5)*distance_bound;
 
             // Since deleting items one at a time from vectors is relatively inefficient, we apply a modification of
-            // the erase-remove idiom (with an intermediate loop to move the additional items)
+            // the erase-remove idiom. Because the remove* functions don't necessarily preserve the values to be removed
+            // at the end of the list, however, we first need to perform a loop to find these items
+            //NOTE: Consider just creating a new vector; that way we could just go through this loop once and add things to either
+            //status lists or the new vector, then just reassign m_layers[layer_index] to the new vector and delete the old one.
+            for (std::vector<uint3>::iterator element = m_layers[layer_index].end(); element != m_layers[layer_index].end(); element++)
+                {
+                // Check which sign condition was violated
+                if (h_phi.data[indexer(element->x, element->y, element->z)] >= upper_bound)
+                    status_lists[increase_index].push_back(*element);
+                else if (h_phi.data[indexer(element->x, element->y, element->z)] < lower_bound)
+                    status_lists[decrease_index].push_back(*element);
+                //else
+                    //throw std::runtime_error("Trying to add an element to the status list that shouldn't move");
+                } 
             std::vector<uint3>::iterator removal_iterator = std::remove_if(m_layers[layer_index].begin(), m_layers[layer_index].end(),
                     [&](uint3 tmp) {
                         return (h_phi.data[indexer(tmp.x, tmp.y, tmp.z)] >= upper_bound || h_phi.data[indexer(tmp.x, tmp.y, tmp.z)] < lower_bound);
                     });
-            for (std::vector<uint3>::iterator move_iterator = removal_iterator; move_iterator != m_layers[layer_index].end(); move_iterator++)
-                {
-                // Check which sign condition was violated
-                if (h_phi.data[indexer(move_iterator->x, move_iterator->y, move_iterator->z)] >= upper_bound)
-                    status_lists[increase_index].push_back(*move_iterator);
-                else if (h_phi.data[indexer(move_iterator->x, move_iterator->y, move_iterator->z)] < lower_bound)
-                    status_lists[decrease_index].push_back(*move_iterator);
-                else
-                    throw std::runtime_error("Trying to add an element to the status list that shoulnd't move");
-                }
+
             m_layers[layer_index].erase(removal_iterator, m_layers[layer_index].end());
             }
         }

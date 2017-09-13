@@ -34,9 +34,6 @@ void FastMarcher::march()
     // The "exact" Lz values are required before anything else can be done.
     estimateLzDistances();
 
-    // Access grid data
-    ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
-
     // Access field data
     const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
     const std::map<char, char> layer_indexer = m_updater->getIndex();
@@ -90,7 +87,10 @@ void FastMarcher::march()
             }
 
         int i = next_point.x, j = next_point.y, k = next_point.z;
-        h_phi.data[indexer(i, j, k)] = next_distance;
+            { // Scope usage of phi grid to avoid conflicting with calculateTentativeDistances
+            ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+            h_phi.data[indexer(i, j, k)] = next_distance;
+            }
 
         int3 neighbor_indices[6] =
             {
@@ -162,7 +162,10 @@ void FastMarcher::march()
             }
 
         int i = next_point.x, j = next_point.y, k = next_point.z;
-        h_phi.data[indexer(i, j, k)] = next_distance;
+            { // Scope usage of phi grid to avoid conflicting with calculateTentativeDistances
+            ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
+            h_phi.data[indexer(i, j, k)] = next_distance;
+            }
 
         int3 neighbor_indices[6] =
             {
@@ -486,6 +489,7 @@ void FastMarcher::extend_velocities(GPUArray<Scalar>& velocities)
 
 GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
     {
+
     // Access field data
     const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
     const std::map<char, char> layer_indexer = m_updater->getIndex();
@@ -494,17 +498,18 @@ GPUArray<Scalar> FastMarcher::boundaryInterp(GPUArray<Scalar>& B_Lz)
     uint3 dims = m_grid->getDimensions();
 
     const std::vector<uint3> Lz = layers[layer_indexer.find(0)->second];
-    std::vector<Scalar3> vectors_to_boundary = m_grid->vecToBoundary(Lz);
+    GPUArray<Scalar3> vectors_to_boundary = m_grid->vecToBoundary(Lz);
     Scalar missing_value = GridData::MISSING_VALUE;
 
     ArrayHandle<Scalar> h_B_Lz(B_Lz, access_location::host, access_mode::readwrite);
+    ArrayHandle<Scalar3> h_vectors_to_boundary(vectors_to_boundary, access_location::host, access_mode::readwrite);
 
     unsigned int n_elements = dims.x*dims.y*dims.z;
     GPUArray<Scalar> B_interp(n_elements, m_exec_conf);
     ArrayHandle<Scalar> h_B_interp(B_interp, access_location::host, access_mode::readwrite);
     for (unsigned int i = 0; i < Lz.size(); i++)
         {
-        Scalar3 vector_to_boundary = vectors_to_boundary[i];
+        Scalar3 vector_to_boundary = h_vectors_to_boundary.data[i];
         int3 point = make_int3(Lz[i].x, Lz[i].y, Lz[i].z);
         //Scalar3 boundary_locations = make_scalar3(Lz[i].x, Lz[i].y, Lz[i].z)*spacing + spacing/2 + vectors_to_boundary[i];
 
@@ -684,7 +689,7 @@ Scalar FastMarcher::calculateTentativeDistance(uint3 cell, bool positive)
                 if (abs(calculated_distance) < abs(guessed_distance))
                     guessed_distance = calculated_distance;
                 } // End loop over phi values
-    assert(guessed_distance != std::numeric_limits<Scalar>::infinity);
+    assert(guessed_distance != std::numeric_limits<Scalar>::infinity());
     return guessed_distance;
     }
 

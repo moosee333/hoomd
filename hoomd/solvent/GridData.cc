@@ -133,8 +133,6 @@ GPUArray<Scalar> GridData::heaviside(unsigned int order)
 void GridData::hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<Scalar>& ddxz, 
         GPUArray<Scalar>& ddyy, GPUArray<Scalar>& ddyz, GPUArray<Scalar>& ddzz, std::vector<uint3> points)
 	{
-    // access the GPU arrays
-    ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
     Scalar3 spacing = this->getSpacing();
 
     // Create intermediate GPUArrays
@@ -214,87 +212,90 @@ void GridData::hessian(GPUArray<Scalar>& ddxx, GPUArray<Scalar>& ddxy, GPUArray<
     ArrayHandle<Scalar> h_ddxz(ddxz, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_ddyz(ddyz, access_location::host, access_mode::readwrite);
 
-    Index3D indexer = this->getIndexer();
-    for(unsigned int i = 0; i < points.size(); i++)
-        {
-        // Determine order of approximation based on whether or not points are on the boundary
-        uint3 pxi = px[i];
-        uint3 pyi = py[i];
-        uint3 pzi = pz[i];
-        uint3 mxi = mx[i];
-        uint3 myi = my[i];
-        uint3 mzi = mz[i];
+        { // GPU arrays scoping
+        ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+        Index3D indexer = this->getIndexer();
+        for(unsigned int i = 0; i < points.size(); i++)
+            {
+            // Determine order of approximation based on whether or not points are on the boundary
+            uint3 pxi = px[i];
+            uint3 pyi = py[i];
+            uint3 pzi = pz[i];
+            uint3 mxi = mx[i];
+            uint3 myi = my[i];
+            uint3 mzi = mz[i];
 
-        unsigned int x_forward_idx = indexer(pxi.x, pxi.y, pxi.z);
-        unsigned int y_forward_idx = indexer(pyi.x, pyi.y, pyi.z);
-        unsigned int z_forward_idx = indexer(pzi.x, pzi.y, pzi.z);
-        unsigned int x_reverse_idx = indexer(mxi.x, mxi.y, mxi.z);
-        unsigned int y_reverse_idx = indexer(myi.x, myi.y, myi.z);
-        unsigned int z_reverse_idx = indexer(mzi.x, mzi.y, mzi.z);
+            unsigned int x_forward_idx = indexer(pxi.x, pxi.y, pxi.z);
+            unsigned int y_forward_idx = indexer(pyi.x, pyi.y, pyi.z);
+            unsigned int z_forward_idx = indexer(pzi.x, pzi.y, pzi.z);
+            unsigned int x_reverse_idx = indexer(mxi.x, mxi.y, mxi.z);
+            unsigned int y_reverse_idx = indexer(myi.x, myi.y, myi.z);
+            unsigned int z_reverse_idx = indexer(mzi.x, mzi.y, mzi.z);
 
-        Scalar dyx = 0, dzx = 0;
-        if (h_phi.data[x_forward_idx] != GridData::MISSING_VALUE && h_phi.data[x_reverse_idx] != GridData::MISSING_VALUE)
-            {
-            dyx = (h_dypx.data[i] - h_dymx.data[i])/spacing.y/2;
-            dzx = (h_dzpx.data[i] - h_dzmx.data[i])/spacing.z/2;
-            h_ddxx.data[i] = (h_dxpx.data[i] - h_dxmx.data[i])/spacing.x/2;
-            }
-        else if (h_phi.data[x_forward_idx] == GridData::MISSING_VALUE && h_phi.data[x_reverse_idx] != GridData::MISSING_VALUE)
-            {
-            dyx = (h_dy.data[i] - h_dymx.data[i])/spacing.y;
-            dzx = (h_dz.data[i] - h_dzmx.data[i])/spacing.z;
-            h_ddxx.data[i] = (h_dxmx.data[i] - h_dx.data[i])/spacing.x;
-            }
-        else if (h_phi.data[x_forward_idx] != GridData::MISSING_VALUE && h_phi.data[x_reverse_idx] == GridData::MISSING_VALUE)
-            {
-            dyx = (h_dypx.data[i] - h_dy.data[i])/spacing.y;
-            dzx = (h_dzpx.data[i] - h_dz.data[i])/spacing.z;
-            h_ddxx.data[i] = (h_dxpx.data[i] - h_dx.data[i])/spacing.x;
-            }
+            Scalar dyx = 0, dzx = 0;
+            if (h_phi.data[x_forward_idx] != GridData::MISSING_VALUE && h_phi.data[x_reverse_idx] != GridData::MISSING_VALUE)
+                {
+                dyx = (h_dypx.data[i] - h_dymx.data[i])/spacing.y/2;
+                dzx = (h_dzpx.data[i] - h_dzmx.data[i])/spacing.z/2;
+                h_ddxx.data[i] = (h_dxpx.data[i] - h_dxmx.data[i])/spacing.x/2;
+                }
+            else if (h_phi.data[x_forward_idx] == GridData::MISSING_VALUE && h_phi.data[x_reverse_idx] != GridData::MISSING_VALUE)
+                {
+                dyx = (h_dy.data[i] - h_dymx.data[i])/spacing.y;
+                dzx = (h_dz.data[i] - h_dzmx.data[i])/spacing.z;
+                h_ddxx.data[i] = (h_dxmx.data[i] - h_dx.data[i])/spacing.x;
+                }
+            else if (h_phi.data[x_forward_idx] != GridData::MISSING_VALUE && h_phi.data[x_reverse_idx] == GridData::MISSING_VALUE)
+                {
+                dyx = (h_dypx.data[i] - h_dy.data[i])/spacing.y;
+                dzx = (h_dzpx.data[i] - h_dz.data[i])/spacing.z;
+                h_ddxx.data[i] = (h_dxpx.data[i] - h_dx.data[i])/spacing.x;
+                }
 
-        Scalar dxy = 0, dzy = 0;
-        if (h_phi.data[y_forward_idx] != GridData::MISSING_VALUE && h_phi.data[y_reverse_idx] != GridData::MISSING_VALUE)
-            {
-            dxy = (h_dxpy.data[i] - h_dxmy.data[i])/spacing.x/2;
-            dzy = (h_dzpy.data[i] - h_dzmy.data[i])/spacing.z/2;
-            h_ddyy.data[i] = (h_dypy.data[i] - h_dymy.data[i])/spacing.y/2;
-            }
-        else if (h_phi.data[y_forward_idx] == GridData::MISSING_VALUE && h_phi.data[y_reverse_idx] != GridData::MISSING_VALUE)
-            {
-            dxy = (h_dx.data[i] - h_dxmy.data[i])/spacing.x;
-            dzy = (h_dz.data[i] - h_dzmy.data[i])/spacing.z;
-            h_ddyy.data[i] = (h_dymy.data[i] - h_dy.data[i])/spacing.y;
-            }
-        else if (h_phi.data[y_forward_idx] != GridData::MISSING_VALUE && h_phi.data[y_reverse_idx] == GridData::MISSING_VALUE)
-            {
-            dxy = (h_dxpy.data[i] - h_dx.data[i])/spacing.x;
-            dzy = (h_dzpy.data[i] - h_dz.data[i])/spacing.z;
-            h_ddyy.data[i] = (h_dypy.data[i] - h_dy.data[i])/spacing.y;
-            }
+            Scalar dxy = 0, dzy = 0;
+            if (h_phi.data[y_forward_idx] != GridData::MISSING_VALUE && h_phi.data[y_reverse_idx] != GridData::MISSING_VALUE)
+                {
+                dxy = (h_dxpy.data[i] - h_dxmy.data[i])/spacing.x/2;
+                dzy = (h_dzpy.data[i] - h_dzmy.data[i])/spacing.z/2;
+                h_ddyy.data[i] = (h_dypy.data[i] - h_dymy.data[i])/spacing.y/2;
+                }
+            else if (h_phi.data[y_forward_idx] == GridData::MISSING_VALUE && h_phi.data[y_reverse_idx] != GridData::MISSING_VALUE)
+                {
+                dxy = (h_dx.data[i] - h_dxmy.data[i])/spacing.x;
+                dzy = (h_dz.data[i] - h_dzmy.data[i])/spacing.z;
+                h_ddyy.data[i] = (h_dymy.data[i] - h_dy.data[i])/spacing.y;
+                }
+            else if (h_phi.data[y_forward_idx] != GridData::MISSING_VALUE && h_phi.data[y_reverse_idx] == GridData::MISSING_VALUE)
+                {
+                dxy = (h_dxpy.data[i] - h_dx.data[i])/spacing.x;
+                dzy = (h_dzpy.data[i] - h_dz.data[i])/spacing.z;
+                h_ddyy.data[i] = (h_dypy.data[i] - h_dy.data[i])/spacing.y;
+                }
 
-        Scalar dxz = 0, dyz = 0;
-        if (h_phi.data[z_forward_idx] != GridData::MISSING_VALUE && h_phi.data[z_reverse_idx] != GridData::MISSING_VALUE)
-            {
-            dxz = (h_dxpz.data[i] - h_dxmz.data[i])/spacing.x/2;
-            dyz = (h_dypz.data[i] - h_dymz.data[i])/spacing.y/2;
-            h_ddzz.data[i] = (h_dzpz.data[i] - h_dzmz.data[i])/spacing.z/2;
-            }
-        else if (h_phi.data[z_forward_idx] == GridData::MISSING_VALUE && h_phi.data[z_reverse_idx] != GridData::MISSING_VALUE)
-            {
-            dxz = (h_dx.data[i] - h_dxmz.data[i])/spacing.x;
-            dyz = (h_dy.data[i] - h_dymz.data[i])/spacing.y;
-            h_ddzz.data[i] = (h_dzmz.data[i] - h_dz.data[i])/spacing.z;
-            }
-        else if (h_phi.data[z_forward_idx] != GridData::MISSING_VALUE && h_phi.data[z_reverse_idx] == GridData::MISSING_VALUE)
-            {
-            dxz = (h_dxpz.data[i] - h_dx.data[i])/spacing.x;
-            dyz = (h_dypz.data[i] - h_dy.data[i])/spacing.y;
-            h_ddzz.data[i] = (h_dzpz.data[i] - h_dz.data[i])/spacing.z;
-            }
+            Scalar dxz = 0, dyz = 0;
+            if (h_phi.data[z_forward_idx] != GridData::MISSING_VALUE && h_phi.data[z_reverse_idx] != GridData::MISSING_VALUE)
+                {
+                dxz = (h_dxpz.data[i] - h_dxmz.data[i])/spacing.x/2;
+                dyz = (h_dypz.data[i] - h_dymz.data[i])/spacing.y/2;
+                h_ddzz.data[i] = (h_dzpz.data[i] - h_dzmz.data[i])/spacing.z/2;
+                }
+            else if (h_phi.data[z_forward_idx] == GridData::MISSING_VALUE && h_phi.data[z_reverse_idx] != GridData::MISSING_VALUE)
+                {
+                dxz = (h_dx.data[i] - h_dxmz.data[i])/spacing.x;
+                dyz = (h_dy.data[i] - h_dymz.data[i])/spacing.y;
+                h_ddzz.data[i] = (h_dzmz.data[i] - h_dz.data[i])/spacing.z;
+                }
+            else if (h_phi.data[z_forward_idx] != GridData::MISSING_VALUE && h_phi.data[z_reverse_idx] == GridData::MISSING_VALUE)
+                {
+                dxz = (h_dxpz.data[i] - h_dx.data[i])/spacing.x;
+                dyz = (h_dypz.data[i] - h_dy.data[i])/spacing.y;
+                h_ddzz.data[i] = (h_dzpz.data[i] - h_dz.data[i])/spacing.z;
+                }
 
-        h_ddxy.data[i] = (dxy + dyx)/2;
-        h_ddxz.data[i] = (dxz + dzx)/2;
-        h_ddyz.data[i] = (dyz + dzy)/2;
+            h_ddxy.data[i] = (dxy + dyx)/2;
+            h_ddxz.data[i] = (dxz + dzx)/2;
+            h_ddyz.data[i] = (dyz + dzy)/2;
+            }
         }
 	}
 
@@ -698,12 +699,13 @@ GPUArray<Scalar> GridData::delta_old(std::vector<uint3> points)
     return delta;
     }
 
-std::vector<Scalar3> GridData::vecToBoundary(std::vector<uint3> points)
+GPUArray<Scalar3> GridData::vecToBoundary(std::vector<uint3> points)
     {
     // Use the gradient to find the direction to the boundary, then multiply by the phi grid's value to compute the vector
     //NOTE: TAKE THE GRAD AS ARGS?
     GPUArray<Scalar> divx(points.size(), m_exec_conf), divy(points.size(), m_exec_conf), divz(points.size(), m_exec_conf); 
-    std::vector<Scalar3> boundary_vecs;
+    GPUArray<Scalar3> boundary_vecs(points.size(), m_exec_conf);
+    ArrayHandle<Scalar3> h_boundary_vecs(boundary_vecs, access_location::host, access_mode::readwrite);
     grad(divx, divy, divz, points);
 
         {
@@ -722,7 +724,7 @@ std::vector<Scalar3> GridData::vecToBoundary(std::vector<uint3> points)
 
             Scalar dist = h_phi.data[m_indexer(points[i].x, points[i].y, points[i].z)];
 
-            boundary_vecs[i] = make_scalar3(-h_divx.data[i]*dist, -h_divy.data[i]*dist, -h_divz.data[i]*dist); 
+        h_boundary_vecs.data[i] = make_scalar3(-h_divx.data[i]*dist, -h_divy.data[i]*dist, -h_divz.data[i]*dist); 
             }
         }
 
@@ -731,6 +733,7 @@ std::vector<Scalar3> GridData::vecToBoundary(std::vector<uint3> points)
 
 GPUArray<Scalar> GridData::getNormUpwind(std::vector<uint3> points)
     {
+        std::cerr << "Inside get norm upwind" << std::endl;
     //NOTE:For now I'm just going to assume the maximum order interpolation
     ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
     ArrayHandle<Scalar> h_fn(m_fn, access_location::host, access_mode::read);

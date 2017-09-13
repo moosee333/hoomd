@@ -111,6 +111,9 @@ class LevelSetSolver : public ForceCompute
         // Iteration constants
         Scalar m_dt = 0.0001; //!< Time step
         Scalar m_eps_conv = 0.01; //!< Epsilon for convergence criterion
+        unsigned int max_iterations = 100; //!< The maximum number of iterations to try
+
+        unsigned int m_notice_level = 10; //!< The level at which to warn about problems in this class
 
     };
 

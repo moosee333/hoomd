@@ -157,7 +157,7 @@ assuming that with the sparse field construct this is never an actual problem (w
         //! Find the vector from the each of the input points to the exact location of the boundary on the phi grid
         /*! \param points A vector of points for which to compute the derivative; the remainder of the input grids will be untouched
         */
-        std::vector<Scalar3> vecToBoundary(std::vector<uint3> points);
+        GPUArray<Scalar3> vecToBoundary(std::vector<uint3> points);
 
         //! Returns a heaviside function of the desired order on the phi grid
         GPUArray<Scalar> heaviside(unsigned int order = 0);
@@ -401,7 +401,6 @@ assuming that with the sparse field construct this is never an actual problem (w
 
             // access GPUArrays
             ArrayHandle<Scalar> h_heavi(heavi, access_location::host, access_mode::readwrite); //NOTE: Is this the right access location?
-            ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
             Scalar3 spacing = this->getSpacing();
 
             // Loop and check for neighbors
@@ -410,7 +409,11 @@ assuming that with the sparse field construct this is never an actual problem (w
                     for (unsigned int k = 0; k < m_dim.z; k++)
                         {
                         unsigned int cur_cell = m_indexer(i, j, k);
-                        int cur_sign = sgn(h_phi.data[cur_cell]);
+                        int cur_sign;
+                            {
+                            ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+                            cur_sign = sgn(h_phi.data[cur_cell]);
+                            }
 
                         // In very sparse systems where the r_cut is much smaller than
                         // the box dimensions, it is possible for there to be cells that
@@ -446,13 +449,15 @@ assuming that with the sparse field construct this is never an actual problem (w
                         // Check all directions for changes in the sign of the energy (h_fn)
                         for(unsigned int idx = 0; idx < sizeof(neighbor_indices)/sizeof(int3); idx++)
                             {
-                                int3 neighbor_idx = neighbor_indices[idx];
-                                this->wrap(neighbor_idx);
-                                int x = neighbor_idx.x;
-                                int y = neighbor_idx.y;
-                                int z = neighbor_idx.z;
-                                unsigned int neighbor_cell = m_indexer(x, y, z);
+                            int3 neighbor_idx = neighbor_indices[idx];
+                            this->wrap(neighbor_idx);
+                            int x = neighbor_idx.x;
+                            int y = neighbor_idx.y;
+                            int z = neighbor_idx.z;
+                            unsigned int neighbor_cell = m_indexer(x, y, z);
 
+                                {
+                                ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
                                 if(cur_sign != sgn(h_phi.data[neighbor_cell]))
                                     {
                                     if (std::abs(cur_sign - sgn(h_phi.data[neighbor_cell])) == 1)
@@ -472,6 +477,7 @@ assuming that with the sparse field construct this is never an actual problem (w
                                         }
                                     // Once we've found some direction of change, we are finished with this cell
                                     }
+                                }
                             } // End loop over neighbors
                         if (on_boundary)
                             {
@@ -505,12 +511,16 @@ assuming that with the sparse field construct this is never an actual problem (w
                             unsigned int y_reverse_idx = m_indexer(i, y_reverse, k);
                             unsigned int z_reverse_idx = m_indexer(i, j, z_reverse);
 
-                            Scalar Ipx = h_phi.data[x_forward_idx] >= 0 ? h_phi.data[x_forward_idx] : 0;
-                            Scalar Imx = h_phi.data[x_reverse_idx] >= 0 ? h_phi.data[x_reverse_idx] : 0;
-                            Scalar Ipy = h_phi.data[y_forward_idx] >= 0 ? h_phi.data[y_forward_idx] : 0;
-                            Scalar Imy = h_phi.data[y_reverse_idx] >= 0 ? h_phi.data[y_reverse_idx] : 0;
-                            Scalar Ipz = h_phi.data[z_forward_idx] >= 0 ? h_phi.data[z_forward_idx] : 0;
-                            Scalar Imz = h_phi.data[z_reverse_idx] >= 0 ? h_phi.data[z_reverse_idx] : 0;
+                            Scalar Ipx, Imx, Ipy, Imy, Ipz, Imz;
+                                {
+                                ArrayHandle<Scalar> h_phi(m_phi, access_location::host, access_mode::read);
+                                Ipx = h_phi.data[x_forward_idx] >= 0 ? h_phi.data[x_forward_idx] : 0;
+                                Imx = h_phi.data[x_reverse_idx] >= 0 ? h_phi.data[x_reverse_idx] : 0;
+                                Ipy = h_phi.data[y_forward_idx] >= 0 ? h_phi.data[y_forward_idx] : 0;
+                                Imy = h_phi.data[y_reverse_idx] >= 0 ? h_phi.data[y_reverse_idx] : 0;
+                                Ipz = h_phi.data[z_forward_idx] >= 0 ? h_phi.data[z_forward_idx] : 0;
+                                Imz = h_phi.data[z_reverse_idx] >= 0 ? h_phi.data[z_reverse_idx] : 0;
+                                }
 
                             Scalar del_I_x = (Ipx - Imx)/spacing.x/2;
                             Scalar del_I_y = (Ipy - Imy)/spacing.y/2;

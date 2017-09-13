@@ -51,9 +51,17 @@ void LevelSetSolver::computeForces(unsigned int timestep)
     // Now use the fast marcher to compute the distances
     m_marcher->march();
 
+    // Get the energy ready early to check termiantion condition later
+    Scalar energy = this->getEnergy(), new_energy;
+
+    unsigned int num_iterations = 0;
+    
     // Now iterate until convergence
     while (true)
         {
+        num_iterations++;
+        std::cerr << "Starting iteration " << num_iterations << std::endl;
+
         //NOTE: FOR THE BELOW FUNCTIONS, I AM CURRENTLY USING LZ INTERNALLY. HOWEVER, IF 
         //I START USING A WIDER BAND, THEN I SHOULD BE ABLE TO ALSO HAVE CURVATURE INFORMATION
         //FOR MORE LAYERS, AND THEREFORE I SHOULD ALSO BE ABLE TO HAVE BETTER DATA TO COMPUTE
@@ -61,28 +69,32 @@ void LevelSetSolver::computeForces(unsigned int timestep)
         // Compute the two terms of the boundary force
         GPUArray<Scalar> A = computeA();
         GPUArray<Scalar> Bphi = computeBphi();
+        std::cerr << "done computing bphi" << num_iterations << std::endl;
 
         //NOTE: Jens doesn't actually use the parabolic A right now; I think this is because of what he said
         //vis-a-vis computing the timestep with it but then using the non-linearized version, but it still
         //seems weird
         
+        
         // The total boundary force is just the sum of A and Bphi, so now we can step forward.
         const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
         Index3D indexer = m_grid->getIndexer();
 
-        ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
-
-        for (std::vector<std::vector<uint3>>::const_iterator layer = layers.begin(); layer != layers.end(); layer++)
             {
-            for (unsigned int i = 0; i < layer->size(); i++)
-                {
-                uint3 point = (*layer)[i];
-                unsigned int idx = indexer(point.x, point.y, point.z);
+            ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_phi(m_grid->getPhiGrid(), access_location::host, access_mode::readwrite);
 
-                // Take the actual Euler step
-                h_phi.data[idx] += m_dt*(h_A.data[idx] + h_Bphi.data[idx]);
+            for (std::vector<std::vector<uint3>>::const_iterator layer = layers.begin(); layer != layers.end(); layer++)
+                {
+                for (unsigned int i = 0; i < layer->size(); i++)
+                    {
+                    uint3 point = (*layer)[i];
+                    unsigned int idx = indexer(point.x, point.y, point.z);
+
+                    // Take the actual Euler step
+                    h_phi.data[idx] += m_dt*(h_A.data[idx] + h_Bphi.data[idx]);
+                    }
                 }
             }
 
@@ -90,13 +102,17 @@ void LevelSetSolver::computeForces(unsigned int timestep)
         m_updater->updateField();
         
         // Now check the termination condition
-        
-
-        //TEMPORARY UNTIL A PROPER TERMINATION CONDITION IS ESTABLISHED TO AVOID INFINITE LOOPS
-        break;
+        new_energy = this->getEnergy();
+        if (abs(new_energy - energy) < m_eps_conv)
+            {
+            break;
+            }
+        else if (num_iterations >= max_iterations)
+            {
+            break;
+            }
         }
     }
-
 
 Scalar LevelSetSolver::getEnergy()
     {
@@ -164,13 +180,15 @@ GPUArray<Scalar> LevelSetSolver::computeA()
 
         // Compute norm of gradient
         GPUArray<Scalar> norm_grad(n_layer_elements, m_exec_conf); 
-        ArrayHandle<Scalar> h_norm_grad(norm_grad, access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
-        for (unsigned int i = 0; i < n_layer_elements; i++)
-            {
-            h_norm_grad.data[i] = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
+            { // ArrayHandle scoping
+            ArrayHandle<Scalar> h_norm_grad(norm_grad, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_dx(dx, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_dy(dy, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_dz(dz, access_location::host, access_mode::readwrite);
+            for (unsigned int i = 0; i < n_layer_elements; i++)
+                {
+                h_norm_grad.data[i] = sqrt(h_dx.data[i]*h_dx.data[i] + h_dy.data[i]*h_dy.data[i] + h_dz.data[i]*h_dz.data[i]);
+                }
             }
 
         // Compute hessian
@@ -194,20 +212,23 @@ GPUArray<Scalar> LevelSetSolver::computeA()
         this->linearizeParabolicTerm(n_layer_elements, H, K, B1, tau, dt);
 
         GPUArray<Scalar> A(n_layer_elements, m_exec_conf); 
-        ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
-        for (unsigned int i = 0; i < n_layer_elements; i++)
-            {
-            h_A.data[i] = 2*m_gamma_0*(h_H.data[i] - m_tau*h_K.data[i])*h_norm_grad.data[i];
-            }
+            { // ArrayHandle scoping
+            ArrayHandle<Scalar> h_A(A, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_H(H, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_K(K, access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar> h_norm_grad(norm_grad, access_location::host, access_mode::readwrite);
+            for (unsigned int i = 0; i < n_layer_elements; i++)
+                {
+                h_A.data[i] = 2*m_gamma_0*(h_H.data[i] - m_tau*h_K.data[i])*h_norm_grad.data[i];
+                }
 
-        // Insert values for this layer into the overall grid
-        for (unsigned int j = 0; j < n_layer_elements; j++)
-            {
-            uint3 point = layer[j];
-            unsigned int idx = indexer(point.x, point.y, point.z);
-            h_A_all.data[idx] = h_A.data[j];
+            // Insert values for this layer into the overall grid
+            for (unsigned int j = 0; j < n_layer_elements; j++)
+                {
+                uint3 point = layer[j];
+                unsigned int idx = indexer(point.x, point.y, point.z);
+                h_A_all.data[idx] = h_A.data[j];
+                }
             }
         } // End loop over layers
 
@@ -251,7 +272,7 @@ GPUArray<Scalar> LevelSetSolver::computeBphi()
             unsigned int idx = indexer(point.x, point.y, point.z);
 
             auto coulomb_term = 0;
-            m_exec_conf->msg->notice(1) << "Currently setting coulomb term to 0 in the computation of the B term; this must be updated" << std::endl;
+            m_exec_conf->msg->notice(m_notice_level) << "Currently setting coulomb term to 0 in the computation of the B term; this must be updated" << std::endl;
 
             h_B_estimate.data[idx] = (m_delta_p - m_rho_water*h_fn.data[idx] + coulomb_term);
             }
@@ -269,18 +290,28 @@ GPUArray<Scalar> LevelSetSolver::computeBphi()
     ArrayHandle<Scalar> h_Bphi(Bphi, access_location::host, access_mode::readwrite);
     ArrayHandle<Scalar> h_B_final(B_final, access_location::host, access_mode::readwrite);
 
+        std::cerr << "Final Bphi computation" << std::endl;
     for (std::vector<std::vector<uint3>>::const_iterator layer = layers.begin(); layer != layers.end(); layer++)
         {
+        std::cerr << "Inside first loop" << std::endl;
         GPUArray<Scalar> layer_norm_phi_upwind = m_grid->getNormUpwind(*layer);
         ArrayHandle<Scalar> h_layer_norm_phi_upwind(layer_norm_phi_upwind, access_location::host, access_mode::readwrite);
         for (unsigned int i = 0; i < layer->size(); i++)
             {
+        std::cerr << "Access point[" << std::endl;
             uint3 point = (*layer)[i];
+        std::cerr << "Get grid index" << std::endl;
             unsigned int idx = grid_indexer(point.x, point.y, point.z);
+        std::cerr << "Assigning to position " << idx << " in bphi, which has a size of " << Bphi.getNumElements() << std::endl;
             h_Bphi.data[idx] = h_B_final.data[idx]*h_layer_norm_phi_upwind.data[i];
+        std::cerr << "done assigning" << std::endl;
             }
-        }
+        std::cerr << "Left loop" << std::endl;
 
+        }
+        std::cerr << "Left outer loop" << std::endl;
+
+        std::cerr << "About to return" << std::endl;
     return Bphi;
     }
 
@@ -362,7 +393,7 @@ void LevelSetSolver::computeB1(GPUArray<Scalar> B1, std::vector<uint3> points)
         {
         uint3 point = points[i];
         auto coulomb_term = 0;
-        m_exec_conf->msg->notice(1) << "Currently setting coulomb term to 0 in the computation of the B1 term; this must be updated" << std::endl;
+        m_exec_conf->msg->notice(m_notice_level) << "Currently setting coulomb term to 0 in the computation of the B1 term; this must be updated" << std::endl;
         h_B1.data[i] = m_delta_p + m_rho_water*h_fn.data[indexer(point.x, point.y, point.z)] + coulomb_term;
         }
     }
