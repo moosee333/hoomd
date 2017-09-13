@@ -89,10 +89,50 @@ void LevelSetSolver::computeForces(unsigned int timestep)
         // Update the sparse field
         m_updater->updateField();
         
+        // Now check the termination condition
+        
 
-        //TEMPORARY UNTIL A PROPER TERMINATION CONDITION IS ESTABLISHED
+        //TEMPORARY UNTIL A PROPER TERMINATION CONDITION IS ESTABLISHED TO AVOID INFINITE LOOPS
         break;
         }
+    }
+
+
+Scalar LevelSetSolver::getEnergy()
+    {
+    auto spacing = m_grid->getSpacing();
+    //NOTE: ASSUMING ORTHORHOMBIC GRID
+    Scalar V_0 = spacing.x*spacing.y*spacing.z;
+
+
+    const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
+    const std::map<char, char> layer_indexer = m_updater->getIndex();
+    unsigned int zero_layer_index = layer_indexer.find(0)->second;
+    const std::vector<uint3> Lz = layers[zero_layer_index];
+    //Index3D indexer = m_grid->getIndexer();
+    //uint3 dims = m_grid->getDimensions();
+
+    GPUArray<Scalar> delta = m_grid->delta(Lz);
+    ArrayHandle<Scalar> h_delta(delta, access_location::host, access_mode::read);
+    Scalar A = 0;
+    for (unsigned int i = 0; i < delta.getNumElements(); i++)
+        A += h_delta.data[i];
+    A *= V_0;
+
+    GPUArray<Scalar> heavi = m_grid->heaviside(1);
+    ArrayHandle<Scalar> h_heavi(heavi, access_location::host, access_mode::read);
+    Scalar V = 0;
+    for (unsigned int i = 0; i < heavi.getNumElements(); i++)
+        V += 1 - h_heavi.data[i];
+    V *= V_0;
+
+    ArrayHandle<Scalar> h_fn(m_grid->getVelocityGrid(), access_location::host, access_mode::read);
+    Scalar U = 0;
+    for (unsigned int i = 0; i < heavi.getNumElements(); i++)
+        U += h_fn.data[i]*h_heavi.data[i];
+    U *= V_0;
+
+    return m_delta_p*V + m_gamma_0*A + U;
     }
 
 GPUArray<Scalar> LevelSetSolver::computeA()
@@ -105,7 +145,6 @@ GPUArray<Scalar> LevelSetSolver::computeA()
          */
     const std::vector<std::vector<uint3> > layers = m_updater->getLayers();
     const std::map<char, char> layer_indexer = m_updater->getIndex();
-
 
     Index3D indexer = m_grid->getIndexer();
     uint3 dims = m_grid->getDimensions();

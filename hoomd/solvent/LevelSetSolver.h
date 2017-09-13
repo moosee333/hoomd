@@ -73,6 +73,9 @@ class LevelSetSolver : public ForceCompute
         //! Linearize the A term such that parabolicity is maintained.
         void linearizeParabolicTerm(unsigned int n_elements, GPUArray<Scalar>& H, GPUArray<Scalar>& K, GPUArray<Scalar>& B1, GPUArray<Scalar>& tau, Scalar& dt);
 
+        //! Compute the total current energy of the interface
+        Scalar getEnergy();
+
         //! Compute the B1 term 
         void computeB1(GPUArray<Scalar>, std::vector<uint3> points);
 
@@ -105,8 +108,9 @@ class LevelSetSolver : public ForceCompute
         Scalar m_tau = 1; //!< Tolman length
         Scalar m_alpha = 0.5; //!< Regularizer for time steps
 
-
+        // Iteration constants
         Scalar m_dt = 0.0001; //!< Time step
+        Scalar m_eps_conv = 0.01; //!< Epsilon for convergence criterion
 
     };
 
