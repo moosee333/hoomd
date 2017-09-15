@@ -146,7 +146,7 @@ class lj(_compositeBase, hoomd.md.pair.lj):
             self.cpp_force = _dem.COMPPairLJ(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairLJ;
         else:
-            self.nlist.cpp_nlist.setStorageMode(hoomd.NeighborList.storageMode.full);
+            self.nlist.cpp_nlist.setStorageMode(hoomd.md._md.NeighborList.storageMode.full);
             self.cpp_force = _dem.COMPPairLJGPU(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairLJGPU;
         
@@ -233,7 +233,7 @@ class gauss(_compositeBase, hoomd.md.pair.gauss):
             self.cpp_force = _dem.COMPPairGauss(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairGauss;
         else:
-            self.nlist.cpp_nlist.setStorageMode(hoomd.NeighborList.storageMode.full);
+            self.nlist.cpp_nlist.setStorageMode(hoomd.md._md.NeighborList.storageMode.full);
             self.cpp_force = _dem.COMPPairGaussGPU(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairGaussGPU;
         
@@ -319,7 +319,7 @@ class shifted_gauss(_compositeBase, hoomd.md.pair.pair):
             self.cpp_force = _dem.COMPPairShiftedGauss(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairShiftedGauss;
         else:
-            self.nlist.cpp_nlist.setStorageMode(hoomd.NeighborList.storageMode.full);
+            self.nlist.cpp_nlist.setStorageMode(hoomd.md._md.NeighborList.storageMode.full);
             self.cpp_force = _dem.COMPPairShiftedGaussGPU(hoomd.context.current.system_definition, self.nlist.cpp_nlist, self.name);
             self.cpp_class = _dem.COMPPairShiftedGaussGPU;
 
