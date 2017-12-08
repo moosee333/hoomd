@@ -815,7 +815,7 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
      * a) an edge of one polyhedron intersects the face of the other
      * b) the center of mass of one polyhedron is contained in the other
      */
-    #ifdef NVCC
+    #if defined(NVCC) || defined(LEAVES_AGAINST_TREE_TRAVERSAL)
     const detail::GPUTree& tree_a = a.tree;
     const detail::GPUTree& tree_b = b.tree;
     #endif
