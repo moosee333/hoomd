@@ -790,18 +790,6 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
                                  const ShapePolyhedron& b,
                                  unsigned int& err)
     {
-    // test overlap of convex hulls
-    if (a.isSpheroPolyhedron() || b.isSpheroPolyhedron())
-        {
-        if (!test_overlap(r_ab, ShapeSpheropolyhedron(a.orientation,a.data.convex_hull_verts),
-               ShapeSpheropolyhedron(b.orientation,b.data.convex_hull_verts),err)) return false;
-        }
-    else
-        {
-        if (!test_overlap(r_ab, ShapeConvexPolyhedron(a.orientation,a.data.convex_hull_verts),
-           ShapeConvexPolyhedron(b.orientation,b.data.convex_hull_verts),err)) return false;
-        }
-
     OverlapReal DaDb = a.getCircumsphereDiameter() + b.getCircumsphereDiameter();
     const OverlapReal abs_tol(DaDb*1e-12);
     vec3<OverlapReal> dr = r_ab;
