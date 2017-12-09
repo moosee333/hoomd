@@ -135,7 +135,7 @@ struct OBB
     } __attribute__((aligned(32)));
 
 //! Closest point on OBB
-inline void closestPtPointOBB(const vec3<OverlapReal>& p, const OBB& b, vec3<OverlapReal>& q)
+DEVICE inline void closestPtPointOBB(const vec3<OverlapReal>& p, const OBB& b, vec3<OverlapReal>& q)
     {
     q = vec3<OverlapReal>(0,0,0);
 
