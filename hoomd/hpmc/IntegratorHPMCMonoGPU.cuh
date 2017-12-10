@@ -1248,80 +1248,81 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         if (master && group == 0)
             s_still_searching = 0;
 
+        unsigned int tidx_1d = offset + group_size*group;
+        unsigned int n_overlap_checks = min(min(s_queue_size, max_queue_size),max_gmem_queue_size-s_queue_offset);
+        if (tidx_1d < n_overlap_checks)
+            {
+            #if (__CUDA_ARCH__ > 300)
+            // create a device stream
+            cudaStream_t stream;
+            cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+            if (check_cuda_errors)
+                {
+                cudaError_t status = cudaGetLastError();
+                if (status != cudaSuccess)
+                    {
+                    printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+                    }
+                }
+
+            // NOTE optimization opportunity for parallel shapes (launch more blocks)
+            unsigned int shared_bytes = max_extra_bytes;
+            shared_bytes += num_types*sizeof(Shape::param_type);
+            shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
+
+            unsigned int child_block_size = 32;
+            gpu_hpmc_check_overlaps_kernel<Shape> <<<1,child_block_size,shared_bytes,stream>>>(
+                1,
+                blockIdx.x,
+                s_queue_offset+tidx_1d,
+                d_postype,
+                d_orientation,
+                d_counters,
+                num_types,
+                d_check_overlaps,
+                overlap_idx,
+                box,
+                d_params,
+                max_extra_bytes,
+                queue_idx,
+                d_queue_active_cell_idx,
+                d_queue_postype,
+                d_queue_orientation,
+                d_queue_j,
+                d_cell_overlaps);
+
+            if (check_cuda_errors)
+                {
+                cudaError_t status = cudaGetLastError();
+                if (status != cudaSuccess)
+                    {
+                    printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
+                    }
+                }
+            cudaStreamDestroy(stream);
+            #endif
+            }
+
+        __syncthreads();
         if (master && group == 0)
             {
-            unsigned int n_overlap_checks = min(s_queue_size, max_queue_size);
-            n_overlap_checks =  min(n_overlap_checks, max_gmem_queue_size - s_queue_offset);
-
-            if (n_overlap_checks > 0)
-                {
-                #if (__CUDA_ARCH__ > 300)
-                // create a device stream
-                cudaStream_t stream;
-                cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-                if (check_cuda_errors)
-                    {
-                    cudaError_t status = cudaGetLastError();
-                    if (status != cudaSuccess)
-                        {
-                        printf("Error creating device stream: %s\n", cudaGetErrorString(status));
-                        }
-                    }
-
-                // launch child kernel with same dimensions as this block
-
-                // NOTE optimization opportunity for parallel shapes (launch more blocks)
-                unsigned int shared_bytes = max_extra_bytes;
-                shared_bytes += num_types*sizeof(Shape::param_type);
-                shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
-
-                gpu_hpmc_check_overlaps_kernel<Shape> <<<1,n_groups*group_size,shared_bytes,stream>>>(
-                    n_overlap_checks,
-                    blockIdx.x,
-                    s_queue_offset,
-                    d_postype,
-                    d_orientation,
-                    d_counters,
-                    num_types,
-                    d_check_overlaps,
-                    overlap_idx,
-                    box,
-                    d_params,
-                    max_extra_bytes,
-                    queue_idx,
-                    d_queue_active_cell_idx,
-                    d_queue_postype,
-                    d_queue_orientation,
-                    d_queue_j,
-                    d_cell_overlaps);
-
-                if (check_cuda_errors)
-                    {
-                    cudaError_t status = cudaGetLastError();
-                    if (status != cudaSuccess)
-                        {
-                        printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
-                        }
-                    }
-                cudaStreamDestroy(stream);
-                #endif
-
-                // advance the parallel queue
-                s_queue_offset += n_overlap_checks;
-                }
-
-            if (s_gmem_queue_full)
-                {
-                #if (__CUDA_ARCH__ > 300)
-                // catch up with child kernels
-                cudaDeviceSynchronize();
-                #endif
-
-                // reset queue
-                s_queue_offset = 0;
-                s_gmem_queue_full = false;
-                }
+            // advance the parallel queue
+            s_queue_offset += n_overlap_checks;
             }
+
+        if (master && group==0 && s_gmem_queue_full)
+            {
+            #if (__CUDA_ARCH__ > 300)
+            // catch up with child kernels
+            cudaDeviceSynchronize();
+            #endif
+
+            // reset queue
+            s_queue_offset = 0;
+            s_gmem_queue_full = false;
+            }
+
+        __syncthreads();
 
         if (active && master)
             {
