@@ -743,7 +743,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     __syncthreads();
 
     // initialize extra shared mem
-    char *s_extra = (char *) (s_check_overlaps + overlap_idx.getNumElements()*sizeof(unsigned int));
+    char *s_extra = (char *) (s_check_overlaps + overlap_idx.getNumElements());
 
     unsigned int available_bytes = max_extra_bytes;
     for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
