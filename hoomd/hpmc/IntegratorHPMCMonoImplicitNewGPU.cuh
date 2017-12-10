@@ -81,7 +81,8 @@ struct hpmc_implicit_args_new_t
                 const Scalar *_d_d_max,
                 bool _update_shape_param,
                 Scalar _fugacity,
-                cudaStream_t _stream
+                cudaStream_t _stream,
+                bool _check_cuda_errors
                 )
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
@@ -128,7 +129,8 @@ struct hpmc_implicit_args_new_t
                   d_d_max(_d_d_max),
                   update_shape_param(_update_shape_param),
                   fugacity(_fugacity),
-                  stream(_stream)
+                  stream(_stream),
+                  check_cuda_errors(_check_cuda_errors)
         {
         };
 
@@ -178,6 +180,7 @@ struct hpmc_implicit_args_new_t
     bool update_shape_param;           //!< True if this is the first iteration
     Scalar fugacity;                   //!< Depletant fugacity
     cudaStream_t stream;               //!< CUDA stream for kernel execution
+    bool check_cuda_errors;            //!< Whether to check CUDA errors of child kernel launches
     };
 
 template< class Shape >
@@ -871,7 +874,6 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
         {
         atomicAdd(&d_counters->overlap_checks, 1);
         unsigned int err_count = 0;
-        if (tidx == 0) printf("Checking %d %d (%d)\n",i,j,n_depletants);
         if (circumsphere_overlap && test_overlap(rij, shape_depletant, shape_i_old, err_count))
             {
             overlap_old = true;
@@ -945,12 +947,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                 // read in position, and orientation of neighboring particle
                 #if (__CUDA_ARCH__ > 300)
                 l = __ldg(&d_excell_idx[excli(local_k, my_cell)]);
-                #else
-                l = d_excell_idx[excli(local_k, my_cell)];
                 #endif
-
-                // count unique intersection volumes only
-                if (l <= j) continue;
 
                 // check against neighbor
                 postype_l = texFetchScalar4(d_postype_old, depletants_postype_old_tex, l);
@@ -969,7 +966,8 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                 OverlapReal DaDb = shape_i_old.getCircumsphereDiameter() + shape_l.getCircumsphereDiameter() + Scalar(2.0)*d_dep;
                 circumsphere_overlap = (rsq*OverlapReal(4.0) <= DaDb * DaDb);
 
-                if (!circumsphere_overlap)
+                // count unique intersection volumes only
+                if (!circumsphere_overlap || l <= j)
                     {
                     // fetch next element
                     local_k += group_size;
@@ -1052,8 +1050,8 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                                      unsigned int *d_overlap_cell,
                                      hpmc_implicit_counters_t *d_implicit_counters,
                                      Scalar fugacity,
-                                     cudaStream_t stream,
-                                     unsigned int block_size_overlaps)
+                                     unsigned int block_size_overlaps,
+                                     bool check_cuda_errors)
     {
     // flags to tell what type of thread we are
     unsigned int group = threadIdx.y;
@@ -1205,6 +1203,31 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
         overlap_checks += excell_size;
         }
 
+    #if (__CUDA_ARCH__ > 300)
+    // create two device streams for this tread
+    cudaStream_t stream1, stream2;
+
+    cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking);
+    if (check_cuda_errors)
+        {
+        cudaError_t status = cudaGetLastError();
+        if (status != cudaSuccess)
+            {
+            printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+            }
+        }
+
+    cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking);
+    if (check_cuda_errors)
+        {
+        cudaError_t status = cudaGetLastError();
+        if (status != cudaSuccess)
+            {
+            printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+            }
+        }
+    #endif
+
     // loop while still searching
     while (s_still_searching)
         {
@@ -1273,7 +1296,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                     OverlapReal rsq = dot(r_ij,r_ij);
                     OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter() + Scalar(2.0) * d_dep;
 
-                    if (s_check_overlaps[overlap_idx(depletant_type, type_j)] &&
+                    if (s_check_overlaps[overlap_idx(depletant_type, type_i)] &&
                         s_check_overlaps[overlap_idx(depletant_type, type_j)] &&
                         i != j && rsq*OverlapReal(4.0) <= DaDb * DaDb)
                         {
@@ -1362,75 +1385,100 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             shared_bytes += num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
 
-            gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_i, block_size_overlaps, shared_bytes, stream>>>(
-                n_depletants_i,
-                check_i,
-                check_j,
-                0, // cap i
-                check_active_cell,
-                d_postype,
-                d_orientation,
-                d_counters,
-                d_cell_idx,
-                d_cell_size,
-                d_excell_idx,
-                d_excell_size,
-                ci,
-                cli,
-                excli,
-                cell_dim,
-                ghost_width,
-                d_cell_set,
-                num_types,
-                seed,
-                d_check_overlaps,
-                overlap_idx,
-                timestep,
-                dim,
-                box,
-                select,
-                d_params,
-                max_extra_bytes,
-                depletant_type,
-                d_postype_old,
-                d_orientation_old,
-                d_overlap_cell
-                );
+            // don't try to launch when unnecessary
+            if (n_depletants_i > 0)
+                {
+                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_i, block_size_overlaps, shared_bytes, stream1>>>(
+                    n_depletants_i,
+                    check_i,
+                    check_j,
+                    0, // cap i
+                    check_active_cell,
+                    d_postype,
+                    d_orientation,
+                    d_counters,
+                    d_cell_idx,
+                    d_cell_size,
+                    d_excell_idx,
+                    d_excell_size,
+                    ci,
+                    cli,
+                    excli,
+                    cell_dim,
+                    ghost_width,
+                    d_cell_set,
+                    num_types,
+                    seed,
+                    d_check_overlaps,
+                    overlap_idx,
+                    timestep,
+                    dim,
+                    box,
+                    select,
+                    d_params,
+                    max_extra_bytes,
+                    depletant_type,
+                    d_postype_old,
+                    d_orientation_old,
+                    d_overlap_cell
+                    );
 
-            gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_j, block_size_overlaps, shared_bytes, stream>>>(
-                n_depletants_i,
-                check_i,
-                check_j,
-                1, // cap j
-                check_active_cell,
-                d_postype,
-                d_orientation,
-                d_counters,
-                d_cell_idx,
-                d_cell_size,
-                d_excell_idx,
-                d_excell_size,
-                ci,
-                cli,
-                excli,
-                cell_dim,
-                ghost_width,
-                d_cell_set,
-                num_types,
-                seed,
-                d_check_overlaps,
-                overlap_idx,
-                timestep,
-                dim,
-                box,
-                select,
-                d_params,
-                max_extra_bytes,
-                depletant_type,
-                d_postype_old,
-                d_orientation_old,
-                d_overlap_cell
-                );
+                if (check_cuda_errors)
+                    {
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
+                        {
+                        printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
+                        }
+                    }
+                }
+
+            if (n_depletants_j > 0)
+                {
+                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_j, block_size_overlaps, shared_bytes, stream2>>>(
+                    n_depletants_i,
+                    check_i,
+                    check_j,
+                    1, // cap j
+                    check_active_cell,
+                    d_postype,
+                    d_orientation,
+                    d_counters,
+                    d_cell_idx,
+                    d_cell_size,
+                    d_excell_idx,
+                    d_excell_size,
+                    ci,
+                    cli,
+                    excli,
+                    cell_dim,
+                    ghost_width,
+                    d_cell_set,
+                    num_types,
+                    seed,
+                    d_check_overlaps,
+                    overlap_idx,
+                    timestep,
+                    dim,
+                    box,
+                    select,
+                    d_params,
+                    max_extra_bytes,
+                    depletant_type,
+                    d_postype_old,
+                    d_orientation_old,
+                    d_overlap_cell
+                    );
+
+                if (check_cuda_errors)
+                    {
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
+                        {
+                        printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
+                        }
+                    }
+                }
             #endif
             }
 
@@ -1462,6 +1510,11 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
         // increment number of inserted depletants
         atomicAdd(&d_implicit_counters->insert_count, s_n_inserted);
         }
+
+    #if (__CUDA_ARCH__ > 300)
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    #endif
     }
 
 
@@ -1884,8 +1937,8 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
                                                                  args.d_overlap_cell,
                                                                  args.d_implicit_count,
                                                                  args.fugacity,
-                                                                 args.stream,
-                                                                 block_size_overlaps);
+                                                                 block_size_overlaps,
+                                                                 args.check_cuda_errors);
     return cudaSuccess;
     }
 

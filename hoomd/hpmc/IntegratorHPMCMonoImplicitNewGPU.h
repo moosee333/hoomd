@@ -245,12 +245,15 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     {
     IntegratorHPMC::update(timestep);
 
-    // update poisson distributions
-    if (this->m_need_initialize_poisson)
+    if (this->m_exec_conf->getComputeCapability() < 350)
         {
-        this->updatePoissonParameters();
-        initializePoissonDistribution();
-        this->m_need_initialize_poisson = false;
+        // update poisson distributions
+        if (this->m_need_initialize_poisson)
+            {
+            this->updatePoissonParameters();
+            initializePoissonDistribution();
+            this->m_need_initialize_poisson = false;
+            }
         }
 
         {
@@ -560,7 +563,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 d_d_max.data,
                                 first,
                                 this->getDepletantDensity(),
-                                m_stream);
+                                m_stream,
+                                this->m_exec_conf->isCUDAErrorCheckingEnabled());
 
                         if (this->m_exec_conf->getComputeCapability() < 350)
                             {
@@ -629,7 +633,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 d_d_max.data,
                                 first,
                                 this->getDepletantDensity(),
-                                m_stream),
+                                m_stream,
+                                this->m_exec_conf->isCUDAErrorCheckingEnabled()),
                             params.data());
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
@@ -641,6 +646,9 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                 first = false;
                 } // end loop over cell sets
             } // end loop nselect*particles_per_cell
+
+        // wait for kernels to catch up and release managed memory to host
+        cudaDeviceSynchronize();
 
         // shift particles
         Scalar3 shift = make_scalar3(0,0,0);
@@ -789,8 +797,10 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
 
     // attach the parameters to the kernel stream so that they are visible
     // when other kernels are called
+
     cudaStreamAttachMemAsync(m_stream, this->m_params.data(), 0, cudaMemAttachSingle);
     CHECK_CUDA_ERROR();
+
     #if (CUDART_VERSION >= 8000)
     cudaMemAdvise(this->m_params.data(), this->m_params.size()*sizeof(typename Shape::param_type), cudaMemAdviseSetReadMostly, 0);
     CHECK_CUDA_ERROR();
