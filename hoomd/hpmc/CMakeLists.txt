@@ -97,13 +97,28 @@ endif()
 set_source_files_properties(${_hpmc_sources} ${_hpmc_cu_sources} PROPERTIES COMPILE_DEFINITIONS NO_IMPORT_ARRAY)
 
 if (ENABLE_CUDA)
-CUDA_COMPILE(_CUDA_GENERATED_FILES ${_hpmc_cu_sources} OPTIONS ${CUDA_ADDITIONAL_OPTIONS} SHARED)
+    # for dynamic parallelism, we need separable compilation
+    SET(CUDA_SEPARABLE_COMPILATION ON)
+    CUDA_COMPILE(_CUDA_GENERATED_FILES ${_hpmc_cu_sources} OPTIONS ${CUDA_ADDITIONAL_OPTIONS} SHARED)
+    CUDA_COMPUTE_SEPARABLE_COMPILATION_OBJECT_FILE_NAME(_CUDA_SEPARABLE_OBJECT _hpmc ${_CUDA_GENERATED_FILES})
+
+    # the -fPIC doesn't look super-portable, but I didn't find a pure CMake
+    # way to do it
+    CUDA_LINK_SEPARABLE_COMPILATION_OBJECTS(${_CUDA_SEPARABLE_OBJECT} _hpmc
+        "${CUDA_ADDITIONAL_OPTIONS};--compiler-options=-fPIC"
+        "${_CUDA_GENERATED_FILES}")
 endif (ENABLE_CUDA)
 
-add_library (_hpmc SHARED ${_hpmc_sources} ${_CUDA_GENERATED_FILES})
+add_library (_hpmc SHARED ${_hpmc_sources} ${_CUDA_SEPARABLE_OBJECT}
+    ${_CUDA_GENERATED_FILES} )
 
 # link the library to its dependencies
 target_link_libraries(_hpmc _hoomd ${HOOMD_COMMON_LIBS})
+
+if(ENABLE_CUDA)
+   #needed with separable compilation
+   target_link_libraries(_hpmc ${CUDA_cudadevrt_LIBRARY})
+endif()
 
 # if we are compiling with MPI support built in, set appropriate
 # compiler/linker flags

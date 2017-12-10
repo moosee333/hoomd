@@ -25,6 +25,8 @@ template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeSpheropolyhedron >(con
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_insert_depletants_queue<ShapeSpheropolyhedron >(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
+template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeSpheropolyhedron >(const hpmc_implicit_args_new_t& args,
+                                                  const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeSpheropolyhedron >(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
 

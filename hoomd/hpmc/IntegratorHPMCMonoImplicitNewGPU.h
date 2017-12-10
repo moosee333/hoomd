@@ -454,7 +454,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         this->m_cell_set_indexer.getW(),
                         this->m_pdata->getN(),
                         this->m_pdata->getNTypes(),
-                        this->m_seed + this->m_exec_conf->getRank(),
+                        this->m_seed + this->m_exec_conf->getRank()*this->m_nselect,
                         d_d.data,
                         d_a.data,
                         d_overlaps.data,
@@ -514,10 +514,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
                         m_tuner_implicit->begin();
 
-                        // invoke kernel
-//                        detail::gpu_hpmc_implicit_count_overlaps<Shape>(
-                        detail::gpu_hpmc_insert_depletants_queue<Shape>(
-                            detail::hpmc_implicit_args_new_t(d_postype.data,
+                        // kernel parameters
+                        auto args =   detail::hpmc_implicit_args_new_t(d_postype.data,
                                 d_orientation.data,
                                 d_old_postype.data,
                                 d_old_orientation.data,
@@ -534,7 +532,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 this->m_cell_set_indexer.getW(),
                                 this->m_pdata->getN(),
                                 this->m_pdata->getNTypes(),
-                                this->m_seed + this->m_exec_conf->getRank(),
+                                this->m_seed + this->m_exec_conf->getRank()*this->m_nselect,
                                 d_overlaps.data,
                                 this->m_overlap_idx,
                                 timestep,
@@ -561,8 +559,18 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 d_d_min.data,
                                 d_d_max.data,
                                 first,
-                                m_stream),
-                            params.data());
+                                this->getDepletantDensity(),
+                                m_stream);
+
+                        if (this->m_exec_conf->getComputeCapability() < 350)
+                            {
+                            // no dynamic parallelism
+                            detail::gpu_hpmc_insert_depletants_queue<Shape>(args, params.data());
+                            }
+                        else
+                            {
+                            detail::gpu_hpmc_insert_depletants_dp<Shape>(args, params.data());
+                            }
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                             CHECK_CUDA_ERROR();
@@ -620,6 +628,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 d_d_min.data,
                                 d_d_max.data,
                                 first,
+                                this->getDepletantDensity(),
                                 m_stream),
                             params.data());
 

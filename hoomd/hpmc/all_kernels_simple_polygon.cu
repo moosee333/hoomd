@@ -25,6 +25,8 @@ template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeSimplePolygon>(const h
                                                   const typename ShapeSimplePolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_insert_depletants_queue<ShapeSimplePolygon>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSimplePolygon::param_type *d_params);
+template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeSimplePolygon>(const hpmc_implicit_args_new_t& args,
+                                                  const typename ShapeSimplePolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeSimplePolygon>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSimplePolygon::param_type *d_params);
 

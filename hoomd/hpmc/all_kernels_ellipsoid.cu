@@ -25,6 +25,8 @@ template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeEllipsoid>(const hpmc_
                                                   const typename ShapeEllipsoid::param_type *d_params);
 template cudaError_t gpu_hpmc_insert_depletants_queue<ShapeEllipsoid>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeEllipsoid::param_type *d_params);
+template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeEllipsoid>(const hpmc_implicit_args_new_t& args,
+                                                  const typename ShapeEllipsoid::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeEllipsoid>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeEllipsoid::param_type *d_params);
 

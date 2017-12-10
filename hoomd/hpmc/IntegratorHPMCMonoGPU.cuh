@@ -184,11 +184,11 @@ cudaError_t gpu_hpmc_shift(Scalar4 *d_postype,
  */
 
 //! Texture for reading postype
-scalar4_tex_t postype_tex;
+static scalar4_tex_t postype_tex;
 //! Texture for reading orientation
-scalar4_tex_t orientation_tex;
+static scalar4_tex_t orientation_tex;
 //! Texture for reading cell index data
-texture<unsigned int, 1, cudaReadModeElementType> cell_idx_tex;
+static texture<unsigned int, 1, cudaReadModeElementType> cell_idx_tex;
 
 //! Device function to compute the cell that a particle sits in
 __device__ inline unsigned int computeParticleCell(const Scalar3& p,

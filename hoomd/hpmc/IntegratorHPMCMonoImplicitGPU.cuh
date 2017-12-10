@@ -231,16 +231,16 @@ cudaError_t gpu_hpmc_implicit_accept_reject(const hpmc_implicit_args_t &args, co
  */
 
 //! Texture for reading postype
-scalar4_tex_t implicit_postype_tex;
+static scalar4_tex_t implicit_postype_tex;
 //! Texture for reading orientation
-scalar4_tex_t implicit_orientation_tex;
+static scalar4_tex_t implicit_orientation_tex;
 //! Texture for reading postype
-scalar4_tex_t implicit_postype_old_tex;
+static scalar4_tex_t implicit_postype_old_tex;
 //! Texture for reading orientation
-scalar4_tex_t implicit_orientation_old_tex;
+static scalar4_tex_t implicit_orientation_old_tex;
 
 //! Texture for reading cell index data
-texture<unsigned int, 1, cudaReadModeElementType> implicit_cell_idx_tex;
+static texture<unsigned int, 1, cudaReadModeElementType> implicit_cell_idx_tex;
 
 #if (__CUDA_ARCH__ >= 300)
 //! CTA allreduce
