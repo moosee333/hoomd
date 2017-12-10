@@ -364,6 +364,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         domain_decomposition = true;
 #endif
 
+    bool have_depletants = this->getDepletantDensity() > Scalar(0.0);
+
         {
         // access the particle data
         ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
@@ -424,18 +426,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
         this->m_old_postype.resize(this->m_pdata->getMaxN());
         this->m_old_orientation.resize(this->m_pdata->getMaxN());
-
-        // process as many depletants in parallel as the maximum possible number of depletants
-        Scalar lambda_max(0.0);
-        for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
-            {
-            Scalar lambda = this->m_lambda[i];
-            if (lambda > lambda_max)
-                {
-                lambda_max = lambda;
-                }
-            }
-        unsigned int groups_per_cell = ((unsigned int) lambda_max)+1;
 
         // on first iteration, synchronize GPU execution stream and update shape parameters
         bool first = true;
@@ -514,15 +504,16 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         this->m_exec_conf->dev_prop,
                         first,
                         m_stream,
-                        (lambda_max > 0.0) ? d_active_cell_ptl_idx.data : 0,
-                        (lambda_max > 0.0) ? d_active_cell_accept.data : 0,
-                        (lambda_max > 0.0) ? d_active_cell_move_type_translate.data : 0,
+                        have_depletants ? d_active_cell_ptl_idx.data : 0,
+                        have_depletants ? d_active_cell_accept.data : 0,
+                        have_depletants ? d_active_cell_move_type_translate.data : 0,
                         m_queue_indexer,
                         d_queue_active_cell_idx.data,
                         d_queue_postype.data,
                         d_queue_orientation.data,
                         d_queue_j.data,
                         d_cell_overlaps.data,
+                        m_queue_indexer.getH(),
                         this->m_exec_conf->isCUDAErrorCheckingEnabled());
 
                 if (this->m_exec_conf->getComputeCapability() < 350)
@@ -540,7 +531,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
                 this->m_tuner_update->end();
 
-                if (lambda_max > Scalar(0.0))
+                if (have_depletants)
                     {
                     if (this->m_prof) this->m_prof->push(this->m_exec_conf,"Depletants");
 
@@ -608,7 +599,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 d_implicit_count.data,
                                 d_poisson_dist.data,
                                 d_overlap_cell.data,
-                                groups_per_cell,
                                 d_active_cell_ptl_idx.data,
                                 d_active_cell_accept.data,
                                 d_active_cell_move_type_translate.data,
@@ -678,7 +668,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 d_implicit_count.data,
                                 d_poisson_dist.data,
                                 d_overlap_cell.data,
-                                groups_per_cell,
                                 d_active_cell_ptl_idx.data,
                                 d_active_cell_accept.data,
                                 d_active_cell_move_type_translate.data,

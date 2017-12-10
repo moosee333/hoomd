@@ -80,6 +80,7 @@ struct hpmc_args_t
                 Scalar4 *_d_queue_orientation = NULL,
                 unsigned int *_d_queue_j = NULL,
                 unsigned int *_d_cell_overlaps = NULL,
+                unsigned int _max_gmem_queue_size = 0,
                 bool _check_cuda_errors = false)
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
@@ -126,6 +127,7 @@ struct hpmc_args_t
                   d_queue_orientation(_d_queue_orientation),
                   d_queue_j(_d_queue_j),
                   d_cell_overlaps(_d_cell_overlaps),
+                  max_gmem_queue_size(_max_gmem_queue_size),
                   check_cuda_errors(_check_cuda_errors)
         {
         };
@@ -175,6 +177,7 @@ struct hpmc_args_t
     Scalar4 *d_queue_orientation;     //!< Queue of new particle orientation
     unsigned int *d_queue_j;          //!< Queue of neighboring particle to test for overlap
     unsigned int *d_cell_overlaps;    //!< Result of overlap check per active cell
+    unsigned int max_gmem_queue_size; //!< Maximum length of global memory queue
     bool check_cuda_errors;           //!< True if CUDA error checking in child kernel is enabled
     };
 
@@ -794,6 +797,7 @@ __global__ void gpu_hpmc_mpmc_kernel(Scalar4 *d_postype,
 template<class Shape>
 __global__ void gpu_hpmc_check_overlaps_kernel(
                 unsigned int queue_size,
+                unsigned int i_queue,
                 unsigned int offset,
                 Scalar4 *d_postype,
                 Scalar4 *d_orientation,
@@ -857,7 +861,7 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
     if (threadIdx.x >= queue_size) return;
 
     // fetch from queue
-    unsigned int qidx = queue_idx(offset,threadIdx.x);
+    unsigned int qidx = queue_idx(i_queue,threadIdx.x+offset);
     Scalar4 postype_i = d_queue_postype[qidx];
     Scalar4 orientation_i = d_queue_orientation[qidx];
     unsigned int j = d_queue_j[qidx];
@@ -938,6 +942,7 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                                      Scalar4 *d_queue_orientation,
                                      unsigned int *d_queue_j,
                                      unsigned int *d_cell_overlaps,
+                                     unsigned int max_gmem_queue_size,
                                      bool check_cuda_errors
                                      )
     {
@@ -1139,6 +1144,18 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         overlap_checks += excell_size;
         }
 
+    // current offset into global mem work queue
+    __shared__ unsigned int s_queue_offset;
+    __shared__ bool s_gmem_queue_full;
+
+    if (master && group == 0)
+        {
+        s_queue_offset = 0;
+        s_gmem_queue_full = false;
+        }
+
+    __syncthreads();
+
     // loop while still searching
     while (s_still_searching)
         {
@@ -1161,7 +1178,7 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
 
             // add to the queue as long as the queue is not full, and we have not yet reached the end of our own list
             // and as long as no overlaps have been found
-            while (!s_overlap[group] && s_queue_size < max_queue_size && k < excell_size)
+            while (!s_overlap[group] && s_queue_size < max_queue_size && k < excell_size && !s_gmem_queue_full)
                 {
                 if (k < excell_size)
                     {
@@ -1203,10 +1220,12 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                         {
                         // add this particle to the queue
                         unsigned int insert_point = atomicAdd(&s_queue_size, 1);
+                        if (insert_point + s_queue_offset >= max_gmem_queue_size)
+                            s_gmem_queue_full = true;
 
-                        if (insert_point < max_queue_size)
+                        if (insert_point < max_queue_size && !s_gmem_queue_full)
                             {
-                            unsigned int qidx = queue_idx(blockIdx.x, insert_point);
+                            unsigned int qidx = queue_idx(blockIdx.x, s_queue_offset + insert_point);
                             d_queue_active_cell_idx[qidx] = active_cell_idx;
                             d_queue_postype[qidx] = postype_i;
                             d_queue_orientation[qidx] = orientation_i;
@@ -1233,57 +1252,75 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         if (master && group == 0)
             s_still_searching = 0;
 
-        if (master && group == 0 && s_queue_size > 0)
+        if (master && group == 0)
             {
-            #if (__CUDA_ARCH__ > 300)
-            // create a device stream
-            cudaStream_t stream;
-            cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-            if (check_cuda_errors)
+            if (s_queue_size > 0)
                 {
-                cudaError_t status = cudaGetLastError();
-                if (status != cudaSuccess)
+                #if (__CUDA_ARCH__ > 300)
+                // create a device stream
+                cudaStream_t stream;
+                cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                if (check_cuda_errors)
                     {
-                    printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
+                        {
+                        printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+                        }
                     }
+
+                // launch child kernel with same dimensions as this block
+
+                // NOTE optimization opportunity for parallel shapes (launch more blocks)
+                unsigned int shared_bytes = max_extra_bytes;
+                shared_bytes += num_types*sizeof(Shape::param_type);
+                shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
+
+                gpu_hpmc_check_overlaps_kernel<Shape> <<<1,n_groups*group_size,shared_bytes,stream>>>(
+                    min(s_queue_size, max_gmem_queue_size - s_queue_offset),
+                    blockIdx.x,
+                    s_queue_offset,
+                    d_postype,
+                    d_orientation,
+                    d_counters,
+                    num_types,
+                    d_check_overlaps,
+                    overlap_idx,
+                    box,
+                    d_params,
+                    max_extra_bytes,
+                    queue_idx,
+                    d_queue_active_cell_idx,
+                    d_queue_postype,
+                    d_queue_orientation,
+                    d_queue_j,
+                    d_cell_overlaps);
+
+                if (check_cuda_errors)
+                    {
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
+                        {
+                        printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
+                        }
+                    }
+                cudaStreamDestroy(stream);
+                #endif
+
+                s_queue_offset += s_queue_size;
                 }
 
-            // launch child kernel with same dimensions as this block
-
-            // NOTE optimization opportunity for parallel shapes (launch more blocks)
-            unsigned int shared_bytes = max_extra_bytes;
-            shared_bytes += num_types*sizeof(Shape::param_type);
-            shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
-
-            gpu_hpmc_check_overlaps_kernel<Shape> <<<1,blockDim.x,shared_bytes,stream>>>(
-                s_queue_size,
-                blockIdx.x,
-                d_postype,
-                d_orientation,
-                d_counters,
-                num_types,
-                d_check_overlaps,
-                overlap_idx,
-                box,
-                d_params,
-                max_extra_bytes,
-                queue_idx,
-                d_queue_active_cell_idx,
-                d_queue_postype,
-                d_queue_orientation,
-                d_queue_j,
-                d_cell_overlaps);
-
-            if (check_cuda_errors)
+            if (s_gmem_queue_full)
                 {
-                cudaError_t status = cudaGetLastError();
-                if (status != cudaSuccess)
-                    {
-                    printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
-                    }
+                #if (__CUDA_ARCH__ > 300)
+                // catch up with child kernels
+                cudaDeviceSynchronize();
+                #endif
+
+                // reset queue
+                s_queue_offset = 0;
+                s_gmem_queue_full = false;
                 }
-            cudaStreamDestroy(stream);
-            #endif
             }
 
         if (active && master)
@@ -1608,7 +1645,7 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     static cudaFuncAttributes attr;
     if (max_block_size == -1)
         {
-        cudaFuncGetAttributes(&attr, gpu_hpmc_mpmc_kernel<Shape>);
+        cudaFuncGetAttributes(&attr, gpu_hpmc_mpmc_dp_kernel<Shape>);
         max_block_size = attr.maxThreadsPerBlock;
         }
 
@@ -1618,16 +1655,17 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     // choose a block size based on the max block size by regs (max_block_size) and include dynamic shared memory usage
     unsigned int block_size = min(args.block_size, (unsigned int)max_block_size);
 
-    // determine the maximum block size for the overlaps kernel and clamp the input block size further down
+    // determine the maximum block size for the overlaps kernel and clamp the input block size down further
     static int max_block_size_overlaps = -1;
     static cudaFuncAttributes attr_overlaps;
-    if (max_block_size == -1)
+    if (max_block_size_overlaps == -1)
         {
         cudaFuncGetAttributes(&attr_overlaps, gpu_hpmc_check_overlaps_kernel<Shape>);
         max_block_size_overlaps = attr_overlaps.maxThreadsPerBlock;
         }
 
     // for now, the child kernel uses the same block size as the parent kernel
+    // therefore we have to minimize over the two max block sizes
     block_size = min(block_size, (unsigned int) max_block_size_overlaps);
 
     // the new block size might not fit the group size and stride, decrease group size until it is
@@ -1696,17 +1734,7 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
         }
 
     // setup the grid to run the kernel
-    dim3 threads;
-    if (Shape::isParallel())
-        {
-        // use three-dimensional thread-layout with blockDim.z < 64
-        threads = dim3(stride, group_size, n_groups);
-        }
-    else
-        {
-        threads = dim3(group_size, n_groups,1);
-        }
-
+    dim3 threads(group_size, n_groups,1);
     dim3 grid( args.n_active_cells / n_groups + 1, 1, 1);
 
     gpu_hpmc_mpmc_dp_kernel<Shape><<<grid, threads, shared_bytes, args.stream>>>(args.d_postype,
@@ -1749,6 +1777,7 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
                                                                  args.d_queue_orientation,
                                                                  args.d_queue_j,
                                                                  args.d_cell_overlaps,
+                                                                 args.max_gmem_queue_size,
                                                                  args.check_cuda_errors);
 
     return cudaSuccess;

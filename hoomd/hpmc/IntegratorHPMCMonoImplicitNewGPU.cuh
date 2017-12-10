@@ -73,7 +73,6 @@ struct hpmc_implicit_args_new_t
                 hpmc_implicit_counters_t *_d_implicit_count,
                 const curandDiscreteDistribution_t *_d_poisson,
                 unsigned int *_d_overlap_cell,
-                unsigned int _groups_per_cell,
                 const unsigned int *_d_active_cell_ptl_idx,
                 const unsigned int *_d_active_cell_accept,
                 const unsigned int *_d_active_cell_move_type_translate,
@@ -121,7 +120,6 @@ struct hpmc_implicit_args_new_t
                   d_implicit_count(_d_implicit_count),
                   d_poisson(_d_poisson),
                   d_overlap_cell(_d_overlap_cell),
-                  groups_per_cell(_groups_per_cell),
                   d_active_cell_ptl_idx(_d_active_cell_ptl_idx),
                   d_active_cell_accept(_d_active_cell_accept),
                   d_active_cell_move_type_translate(_d_active_cell_move_type_translate),
@@ -171,7 +169,6 @@ struct hpmc_implicit_args_new_t
     hpmc_implicit_counters_t *d_implicit_count; //!< Active cell acceptance/rejection counts
     const curandDiscreteDistribution_t *d_poisson; //!< Handle for precomputed poisson distribution (per type)
     unsigned int *d_overlap_cell;     //!< Overlap flag per active cell
-    unsigned int groups_per_cell;     //!< Number of groups to process in parallel per cell
     const unsigned int *d_active_cell_ptl_idx; //!< Updated particle index per active cell
     const unsigned int *d_active_cell_accept;//!< =1 if active cell move has been accepted, =0 otherwise
     const unsigned int *d_active_cell_move_type_translate;//!< =1 if active cell move was a translation, =0 if rotation
