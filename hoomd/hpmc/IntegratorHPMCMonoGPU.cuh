@@ -792,7 +792,7 @@ __global__ void gpu_hpmc_mpmc_kernel(Scalar4 *d_postype,
         }
     }
 
-//! Check for overlaps given a queue, and write out acceptance staticstics
+//! Check for overlaps given a queue
 //! This kernel is supposed to be launched as a single thread block from its parent kernel
 template<class Shape>
 __global__ void gpu_hpmc_check_overlaps_kernel(
@@ -877,7 +877,7 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
     // build shape j from global memory
 
     // NOTE tex fetches are not allowed in child kernels (from texture refs), but the code path
-    // resorts to __ldg anyway on compute > 35
+    // resorts to __ldg anyway on compute > 300
     Scalar4 postype_j = texFetchScalar4(d_postype, postype_tex, j);
     unsigned int type_j = __scalar_as_int(postype_j.w);
     Shape shape_j(quat<Scalar>(), s_params[type_j]);
@@ -1057,14 +1057,11 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
 
     // initial implementation just moves one particle per cell (nselect=1).
     // these variables are ugly, but needed to get the updated quantities outside of the scope
-    unsigned int i;
+    unsigned int i = UINT_MAX;
     unsigned int overlap_checks = 0;
     bool move_type_translate = false;
     bool move_active = true;
     int ignore_stats = 0;
-
-    Scalar4 postype_i;
-    Scalar4 orientation_i;
 
     if (active)
         {
@@ -1073,11 +1070,13 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
 
         // select one of the particles randomly from the cell
         unsigned int my_cell_offset = rand_select(rng, my_cell_size-1);
-        i = tex1Dfetch(cell_idx_tex, cli(my_cell_offset, my_cell));
+        #if (__CUDA_ARCH__ > 300)
+        i = __ldg(&d_cell_idx[cli(my_cell_offset, my_cell)]);
+        #endif
 
         // read in the position and orientation of our particle.
-        postype_i = texFetchScalar4(d_postype, postype_tex, i);
-        orientation_i = make_scalar4(1,0,0,0);
+        Scalar4 postype_i = texFetchScalar4(d_postype, postype_tex, i);
+        Scalar4 orientation_i = make_scalar4(1,0,0,0);
 
         unsigned int typ_i = __scalar_as_int(postype_i.w);
         Shape shape_i(quat<Scalar>(orientation_i), s_params[typ_i]);
@@ -1171,8 +1170,6 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                 {
                 #if (__CUDA_ARCH__ > 300)
                 next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
-                #else
-                next_j = d_excell_idx[excli(k, my_cell)];
                 #endif
                 }
 
@@ -1199,8 +1196,6 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                         {
                         #if (__CUDA_ARCH__ > 300)
                         next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
-                        #else
-                        next_j = d_excell_idx[excli(k, my_cell)];
                         #endif
                         }
 
@@ -1227,8 +1222,9 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                             {
                             unsigned int qidx = queue_idx(blockIdx.x, s_queue_offset + insert_point);
                             d_queue_active_cell_idx[qidx] = active_cell_idx;
-                            d_queue_postype[qidx] = postype_i;
-                            d_queue_orientation[qidx] = orientation_i;
+                            Scalar3 pos_i = s_pos_group[group];
+                            d_queue_postype[qidx] = make_scalar4(pos_i.x, pos_i.y, pos_i.z, __int_as_scalar(s_type_group[group]));
+                            d_queue_orientation[qidx] = s_orientation_group[group];
                             d_queue_j[qidx] = j;
                             }
                         else
@@ -1254,7 +1250,10 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
 
         if (master && group == 0)
             {
-            if (s_queue_size > 0)
+            unsigned int n_overlap_checks = min(s_queue_size, max_queue_size);
+            n_overlap_checks =  min(n_overlap_checks, max_gmem_queue_size - s_queue_offset);
+
+            if (n_overlap_checks > 0)
                 {
                 #if (__CUDA_ARCH__ > 300)
                 // create a device stream
@@ -1277,7 +1276,7 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                 shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
 
                 gpu_hpmc_check_overlaps_kernel<Shape> <<<1,n_groups*group_size,shared_bytes,stream>>>(
-                    min(s_queue_size, max_gmem_queue_size - s_queue_offset),
+                    n_overlap_checks,
                     blockIdx.x,
                     s_queue_offset,
                     d_postype,
@@ -1307,7 +1306,8 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                 cudaStreamDestroy(stream);
                 #endif
 
-                s_queue_offset += s_queue_size;
+                // advance the parallel queue
+                s_queue_offset += n_overlap_checks;
                 }
 
             if (s_gmem_queue_full)

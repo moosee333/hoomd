@@ -264,7 +264,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     {
     IntegratorHPMC::update(timestep);
 
-    if (this->m_exec_conf->getComputeCapability() > 300)
+    if (this->m_exec_conf->getComputeCapability() < 350)
         {
         // update poisson distributions
         if (this->m_need_initialize_poisson)
@@ -861,7 +861,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
     // attach the parameters to the kernel stream so that they are visible
     // when other kernels are called
 
-    #if 0
     cudaStreamAttachMemAsync(m_stream, this->m_params.data(), 0, cudaMemAttachSingle);
     CHECK_CUDA_ERROR();
 
@@ -875,7 +874,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
         // attach nested memory regions
         this->m_params[i].attach_to_stream(m_stream);
         }
-    #endif
     }
 
 

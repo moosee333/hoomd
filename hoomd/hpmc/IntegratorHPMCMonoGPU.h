@@ -458,25 +458,21 @@ void IntegratorHPMCMonoGPU< Shape >::updateCellWidth()
     this->m_nominal_width = this->getMaxDiameter();
     this->m_cl->setNominalWidth(this->m_nominal_width);
 
-    #if 0
     // attach the parameters to the kernel stream so that they are visible
     // when other kernels are called
     cudaStreamAttachMemAsync(m_stream, this->m_params.data(), 0, cudaMemAttachSingle);
     CHECK_CUDA_ERROR();
-    #endif
 
     #if (CUDART_VERSION >= 8000)
     cudaMemAdvise(this->m_params.data(), this->m_params.size()*sizeof(typename Shape::param_type), cudaMemAdviseSetReadMostly, 0);
     CHECK_CUDA_ERROR();
     #endif
 
-    #if 0
     for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
         {
         // attach nested memory regions
         this->m_params[i].attach_to_stream(m_stream);
         }
-    #endif
     }
 
 //! Export this hpmc integrator to python
