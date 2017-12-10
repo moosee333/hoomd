@@ -1204,28 +1204,6 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
         }
 
     #if (__CUDA_ARCH__ > 300)
-    // create two device streams for this tread
-    cudaStream_t stream1, stream2;
-
-    cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking);
-    if (check_cuda_errors)
-        {
-        cudaError_t status = cudaGetLastError();
-        if (status != cudaSuccess)
-            {
-            printf("Error creating device stream: %s\n", cudaGetErrorString(status));
-            }
-        }
-
-    cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking);
-    if (check_cuda_errors)
-        {
-        cudaError_t status = cudaGetLastError();
-        if (status != cudaSuccess)
-            {
-            printf("Error creating device stream: %s\n", cudaGetErrorString(status));
-            }
-        }
     #endif
 
     // loop while still searching
@@ -1243,8 +1221,6 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                 {
                 #if (__CUDA_ARCH__ > 300)
                 next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
-                #else
-                next_j = d_excell_idx[excli(k, my_cell)];
                 #endif
                 }
 
@@ -1335,7 +1311,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
         if (tidx_1d < min(s_queue_size, max_queue_size))
             {
             #if (__CUDA_ARCH__ > 300)
-            // need to extract the overlap check to perform out of the shared mem queue
+            // need to extract the intersection volume to perform out of the shared mem queue
             unsigned int check_group = s_queue_gid[tidx_1d];
             unsigned int check_j = s_queue_j[tidx_1d];
             unsigned int check_active_cell = s_active_cell_group[check_group];
@@ -1385,10 +1361,22 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             shared_bytes += num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
 
-            // don't try to launch when unnecessary
+            // only launch when necessary
             if (n_depletants_i > 0)
                 {
-                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_i, block_size_overlaps, shared_bytes, stream1>>>(
+                // create a device stream
+                cudaStream_t stream;
+                cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                if (check_cuda_errors)
+                    {
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
+                        {
+                        printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+                        }
+                    }
+
+                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_i, block_size_overlaps, shared_bytes, stream>>>(
                     n_depletants_i,
                     check_i,
                     check_j,
@@ -1431,11 +1419,24 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                         printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
                         }
                     }
+                cudaStreamDestroy(stream);
                 }
 
             if (n_depletants_j > 0)
                 {
-                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_j, block_size_overlaps, shared_bytes, stream2>>>(
+                // create a device stream
+                cudaStream_t stream;
+                cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                if (check_cuda_errors)
+                    {
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
+                        {
+                        printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+                        }
+                    }
+
+                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_j, block_size_overlaps, shared_bytes, stream>>>(
                     n_depletants_i,
                     check_i,
                     check_j,
@@ -1478,6 +1479,8 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                         printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
                         }
                     }
+
+                cudaStreamDestroy(stream);
                 }
             #endif
             }
@@ -1510,11 +1513,6 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
         // increment number of inserted depletants
         atomicAdd(&d_implicit_counters->insert_count, s_n_inserted);
         }
-
-    #if (__CUDA_ARCH__ > 300)
-    cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
-    #endif
     }
 
 
