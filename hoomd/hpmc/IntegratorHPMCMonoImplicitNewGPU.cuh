@@ -1151,7 +1151,8 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             active = false;
         }
 
-    curandState_t local_state;
+    // this RNG is required for fast initialization performance
+    curandStatePhilox4_32_10_t local_state;
     unsigned int tidx = blockIdx.x * blockDim.x + threadIdx.x;
     curand_init((unsigned long long)(seed+tidx), (unsigned long long)(timestep+UINT_MAX*select), 0, &local_state);
 
