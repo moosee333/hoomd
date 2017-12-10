@@ -19,6 +19,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeConvexPolygon>(const hpmc_free_vo
                                                        const typename ShapeConvexPolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeConvexPolygon>(const hpmc_args_t& args,
                                                   const typename ShapeConvexPolygon::param_type *d_params);
+template cudaError_t gpu_hpmc_update_dp<ShapeConvexPolygon>(const hpmc_args_t& args,
+                                                  const typename ShapeConvexPolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_count_overlaps<ShapeConvexPolygon>(const hpmc_implicit_args_t& args,
                                                   const typename ShapeConvexPolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeConvexPolygon>(const hpmc_implicit_args_t& args,

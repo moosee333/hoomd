@@ -19,6 +19,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeSphere>(const hpmc_free_volume_ar
                                                        const typename ShapeSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSphere>(const hpmc_args_t& args,
                                                   const typename ShapeSphere::param_type *d_params);
+template cudaError_t gpu_hpmc_update_dp<ShapeSphere>(const hpmc_args_t& args,
+                                                  const typename ShapeSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_count_overlaps<ShapeSphere>(const hpmc_implicit_args_t& args,
                                                   const typename ShapeSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeSphere>(const hpmc_implicit_args_t& args,

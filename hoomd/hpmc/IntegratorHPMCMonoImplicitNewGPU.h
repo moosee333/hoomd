@@ -106,6 +106,13 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
 
         cudaStream_t m_stream;                                  //! GPU kernel stream
 
+        Index2D m_queue_indexer;                                //!< Indexer for overlap check queue
+        GPUArray<unsigned int> m_queue_active_cell_idx;         //!< Queue of active cell indices
+        GPUArray<Scalar4> m_queue_postype;                      //!< Queue of new particle positions and indices
+        GPUArray<Scalar4> m_queue_orientation;                   //!< Queue of new particle orientations
+        GPUArray<unsigned int> m_queue_j;                       //!< Queue of particle neighbors to check for overlaps
+        GPUArray<unsigned int> m_cell_overlaps;                 //!< Result of queue overlap checks
+
         //! Take one timestep forward
         virtual void update(unsigned int timestep);
 
@@ -117,6 +124,9 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
 
         //! Set up excell_list
         virtual void initializeExcellMem();
+
+        //! Set up queue
+        virtual void initializeQueueMem();
 
         //! Update the cell width
         virtual void updateCellWidth();
@@ -220,6 +230,15 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     // create a CUDA stream for kernel execution
     cudaStreamCreate(&m_stream);
     CHECK_CUDA_ERROR();
+
+    if (this->m_exec_conf->getComputeCapability() > 300)
+        {
+        GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_queue_active_cell_idx);
+        GPUArray<Scalar4>(0, this->m_exec_conf).swap(m_queue_postype);
+        GPUArray<Scalar4>(0, this->m_exec_conf).swap(m_queue_orientation);
+        GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_queue_j);
+        GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_cell_overlaps);
+        }
     }
 
 //! Destructor
@@ -245,7 +264,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     {
     IntegratorHPMC::update(timestep);
 
-    if (this->m_exec_conf->getComputeCapability() < 350)
+    if (this->m_exec_conf->getComputeCapability() > 300)
         {
         // update poisson distributions
         if (this->m_need_initialize_poisson)
@@ -291,6 +310,11 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         this->initializeCellSets();
         this->initializeExcellMem();
 
+        if (this->m_exec_conf->getComputeCapability() > 300)
+            {
+            this->initializeQueueMem();
+            }
+
         this->m_last_dim = cur_dim;
         this->m_last_nmax = this->m_cl->getNmax();
 
@@ -324,6 +348,12 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     if (this->m_last_nmax != this->m_cl->getNmax())
         {
         this->initializeExcellMem();
+
+        if (this->m_exec_conf->getComputeCapability() > 300)
+            {
+            this->initializeQueueMem();
+            }
+
         this->m_last_nmax = this->m_cl->getNmax();
         }
 
@@ -433,6 +463,13 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
                 ArrayHandle<hpmc_counters_t> d_counters(this->m_count_total, access_location::device, access_mode::readwrite);
 
+                // queue data
+                ArrayHandle<unsigned int> d_queue_active_cell_idx(m_queue_active_cell_idx, access_location::device, access_mode::overwrite);
+                ArrayHandle<Scalar4> d_queue_postype(m_queue_postype, access_location::device, access_mode::overwrite);
+                ArrayHandle<Scalar4> d_queue_orientation(m_queue_orientation, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_queue_j(m_queue_j, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_cell_overlaps(m_cell_overlaps, access_location::device, access_mode::overwrite);
+
                 // move particles
                 this->m_tuner_update->begin();
 
@@ -440,8 +477,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                 unsigned int block_size = param / 1000000;
                 unsigned int stride = (param % 1000000 ) / 100;
                 unsigned int group_size = param % 100;
-                detail::gpu_hpmc_update<Shape> (
-                    detail::hpmc_args_t(d_postype.data,
+
+                auto args = detail::hpmc_args_t(d_postype.data,
                         d_orientation.data,
                         d_counters.data,
                         d_cell_idx.data,
@@ -479,8 +516,24 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         m_stream,
                         (lambda_max > 0.0) ? d_active_cell_ptl_idx.data : 0,
                         (lambda_max > 0.0) ? d_active_cell_accept.data : 0,
-                        (lambda_max > 0.0) ? d_active_cell_move_type_translate.data : 0),
-                    params.data());
+                        (lambda_max > 0.0) ? d_active_cell_move_type_translate.data : 0,
+                        m_queue_indexer,
+                        d_queue_active_cell_idx.data,
+                        d_queue_postype.data,
+                        d_queue_orientation.data,
+                        d_queue_j.data,
+                        d_cell_overlaps.data,
+                        this->m_exec_conf->isCUDAErrorCheckingEnabled());
+
+                if (this->m_exec_conf->getComputeCapability() < 350)
+                    {
+                    // no dynamic parallelism
+                    detail::gpu_hpmc_update<Shape>(args, params.data());
+                    }
+                else
+                    {
+                    detail::gpu_hpmc_update_dp<Shape>(args, params.data());
+                    }
 
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
@@ -786,6 +839,27 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeExcellMem()
     // reallocate memory
     m_excell_idx.resize(m_excell_list_indexer.getNumElements());
     m_excell_size.resize(num_cells);
+    }
+
+template< class Shape >
+void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeQueueMem()
+    {
+    this->m_exec_conf->msg->notice(4) << "hpmc resizing queue" << std::endl;
+
+    unsigned int num_adj = this->m_cl->getCellAdjIndexer().getW();
+    unsigned int num_max = this->m_cl->getNmax();
+
+    unsigned int n_active_cells = this->m_cell_set_indexer.getW();
+
+    // the number of active cells is an upper bound for the number of queues
+    m_queue_indexer = Index2D(n_active_cells, num_max*num_adj);
+
+    m_queue_active_cell_idx.resize(m_queue_indexer.getNumElements());
+    m_queue_postype.resize(m_queue_indexer.getNumElements());
+    m_queue_orientation.resize(m_queue_indexer.getNumElements());
+    m_queue_j.resize(m_queue_indexer.getNumElements());
+
+    m_cell_overlaps.resize(this->m_cell_set_indexer.getW());
     }
 
 template< class Shape >

@@ -20,6 +20,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeUnion<ShapeConvexPolyhedron> >(co
                                                   const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_args_t& args,
                                                   const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
+template cudaError_t gpu_hpmc_update_dp<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_args_t& args,
+                                                  const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_count_overlaps<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_implicit_args_t& args,
                                                   const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_implicit_args_t& args,

@@ -73,7 +73,14 @@ struct hpmc_args_t
                 cudaStream_t _stream,
                 unsigned int *_d_active_cell_ptl_idx = NULL,
                 unsigned int *_d_active_cell_accept = NULL,
-                unsigned int *_d_active_cell_move_type_translate = NULL)
+                unsigned int *_d_active_cell_move_type_translate = NULL,
+                Index2D _queue_idx = Index2D(),
+                unsigned int *_d_queue_active_cell_idx = NULL,
+                Scalar4 *_d_queue_postype = NULL,
+                Scalar4 *_d_queue_orientation = NULL,
+                unsigned int *_d_queue_j = NULL,
+                unsigned int *_d_cell_overlaps = NULL,
+                bool _check_cuda_errors = false)
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
                   d_counters(_d_counters),
@@ -112,7 +119,14 @@ struct hpmc_args_t
                   stream(_stream),
                   d_active_cell_ptl_idx(_d_active_cell_ptl_idx),
                   d_active_cell_accept(_d_active_cell_accept),
-                  d_active_cell_move_type_translate(_d_active_cell_move_type_translate)
+                  d_active_cell_move_type_translate(_d_active_cell_move_type_translate),
+                  queue_idx(_queue_idx),
+                  d_queue_active_cell_idx(_d_queue_active_cell_idx),
+                  d_queue_postype(_d_queue_postype),
+                  d_queue_orientation(_d_queue_orientation),
+                  d_queue_j(_d_queue_j),
+                  d_cell_overlaps(_d_cell_overlaps),
+                  check_cuda_errors(_check_cuda_errors)
         {
         };
 
@@ -155,6 +169,13 @@ struct hpmc_args_t
     unsigned int *d_active_cell_ptl_idx; //!< Updated particle index per active cell (ignore if NULL)
     unsigned int *d_active_cell_accept;//!< =1 if active cell move has been accepted, =0 otherwise (ignore if NULL)
     unsigned int *d_active_cell_move_type_translate;//!< =1 if active cell move was a translation, =0 if rotation
+    Index2D queue_idx;                //!< The indexer for the work queue
+    unsigned int *d_queue_active_cell_idx; //!< Queue of active cell indices
+    Scalar4 *d_queue_postype;         //!< Queue of new particle position (and type)
+    Scalar4 *d_queue_orientation;     //!< Queue of new particle orientation
+    unsigned int *d_queue_j;          //!< Queue of neighboring particle to test for overlap
+    unsigned int *d_cell_overlaps;    //!< Result of overlap check per active cell
+    bool check_cuda_errors;           //!< True if CUDA error checking in child kernel is enabled
     };
 
 cudaError_t gpu_hpmc_excell(unsigned int *d_excell_idx,
@@ -170,6 +191,9 @@ cudaError_t gpu_hpmc_excell(unsigned int *d_excell_idx,
 
 template< class Shape >
 cudaError_t gpu_hpmc_update(const hpmc_args_t& args, const typename Shape::param_type *params);
+
+template< class Shape >
+cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::param_type *params);
 
 cudaError_t gpu_hpmc_shift(Scalar4 *d_postype,
                            int3 *d_image,
@@ -765,6 +789,609 @@ __global__ void gpu_hpmc_mpmc_kernel(Scalar4 *d_postype,
         }
     }
 
+//! Check for overlaps given a queue, and write out acceptance staticstics
+//! This kernel is supposed to be launched as a single thread block from its parent kernel
+template<class Shape>
+__global__ void gpu_hpmc_check_overlaps_kernel(
+                unsigned int queue_size,
+                unsigned int offset,
+                Scalar4 *d_postype,
+                Scalar4 *d_orientation,
+                hpmc_counters_t *d_counters,
+                unsigned int num_types,
+                const unsigned int *d_check_overlaps,
+                const Index2D overlap_idx,
+                const BoxDim box,
+                const typename Shape::param_type *d_params,
+                unsigned int max_extra_bytes,
+                Index2D queue_idx,
+                const unsigned int *d_queue_active_cell_idx,
+                const Scalar4 *d_queue_postype,
+                const Scalar4 *d_queue_orientation,
+                const unsigned int *d_queue_j,
+                unsigned int *d_cell_overlaps)
+    {
+    // load the per type pair parameters into shared memory
+    extern __shared__ char s_data[];
+
+    typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
+    unsigned int *s_check_overlaps = (unsigned int *) (s_params + num_types);
+
+    // copy over parameters one int per thread for fast loads
+        {
+        unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
+        unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
+        unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
+
+        for (unsigned int cur_offset = 0; cur_offset < param_size; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < param_size)
+                {
+                ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
+                }
+            }
+
+        unsigned int ntyppairs = overlap_idx.getNumElements();
+
+        for (unsigned int cur_offset = 0; cur_offset < ntyppairs; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < ntyppairs)
+                {
+                s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
+                }
+            }
+        }
+
+    __syncthreads();
+
+    // initialize extra shared mem
+    char *s_extra = (char *)(s_check_overlaps + overlap_idx.getNumElements());
+
+    unsigned int available_bytes = max_extra_bytes;
+    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+        s_params[cur_type].load_shared(s_extra, available_bytes);
+
+    __syncthreads();
+
+    // return early if no work to do
+    if (threadIdx.x >= queue_size) return;
+
+    // fetch from queue
+    unsigned int qidx = queue_idx(offset,threadIdx.x);
+    Scalar4 postype_i = d_queue_postype[qidx];
+    Scalar4 orientation_i = d_queue_orientation[qidx];
+    unsigned int j = d_queue_j[qidx];
+    unsigned int active_cell_idx = d_queue_active_cell_idx[qidx];
+
+    unsigned int type_i = __scalar_as_int(postype_i.w);
+
+    // perform overlap check
+    Shape shape_i(quat<Scalar>(), s_params[type_i]);
+    if (shape_i.hasOrientation())
+        shape_i.orientation = quat<Scalar>(orientation_i);
+
+    // build shape j from global memory
+
+    // NOTE tex fetches are not allowed in child kernels (from texture refs), but the code path
+    // resorts to __ldg anyway on compute > 35
+    Scalar4 postype_j = texFetchScalar4(d_postype, postype_tex, j);
+    unsigned int type_j = __scalar_as_int(postype_j.w);
+    Shape shape_j(quat<Scalar>(), s_params[type_j]);
+    if (shape_j.hasOrientation())
+        shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, orientation_tex, j));
+
+    // put particle j into the coordinate system of particle i
+    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(postype_i);
+    r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
+
+    unsigned int err_count = 0;
+
+    if (s_check_overlaps[overlap_idx(type_i, type_j)]
+        && test_overlap(r_ij, shape_i, shape_j, err_count))
+        {
+        d_cell_overlaps[active_cell_idx] = 1;
+        }
+
+    if (err_count > 0)
+        atomicAdd(&d_counters->overlap_err_count, err_count);
+    }
+
+//! Update kernel, version with dynamic parallelism
+template< class Shape >
+__global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
+                                     Scalar4 *d_orientation,
+                                     hpmc_counters_t *d_counters,
+                                     const unsigned int *d_cell_idx,
+                                     const unsigned int *d_cell_size,
+                                     const unsigned int *d_excell_idx,
+                                     const unsigned int *d_excell_size,
+                                     const Index3D ci,
+                                     const Index2D cli,
+                                     const Index2D excli,
+                                     const uint3 cell_dim,
+                                     const Scalar3 ghost_width,
+                                     const unsigned int *d_cell_set,
+                                     const unsigned int n_active_cells,
+                                     const unsigned int N,
+                                     const unsigned int num_types,
+                                     const unsigned int seed,
+                                     const Scalar* d_d,
+                                     const Scalar* d_a,
+                                     const unsigned int *d_check_overlaps,
+                                     const Index2D overlap_idx,
+                                     const unsigned int move_ratio,
+                                     const unsigned int timestep,
+                                     const unsigned int dim,
+                                     const BoxDim box,
+                                     const unsigned int select,
+                                     const Scalar3 ghost_fraction,
+                                     const bool domain_decomposition,
+                                     unsigned int *d_active_cell_ptl_idx,
+                                     unsigned int *d_active_cell_accept,
+                                     unsigned int *d_active_cell_move_type_translate,
+                                     const typename Shape::param_type *d_params,
+                                     unsigned int max_queue_size,
+                                     unsigned int max_extra_bytes,
+                                     Index2D queue_idx,
+                                     unsigned int *d_queue_active_cell_idx,
+                                     Scalar4 *d_queue_postype,
+                                     Scalar4 *d_queue_orientation,
+                                     unsigned int *d_queue_j,
+                                     unsigned int *d_cell_overlaps,
+                                     bool check_cuda_errors
+                                     )
+    {
+    // flags to tell what type of thread we are
+    bool active = true;
+
+    unsigned int group = threadIdx.y;
+    unsigned int offset = threadIdx.x;
+    unsigned int group_size = blockDim.x;
+    bool master = (offset == 0);
+    unsigned int n_groups = blockDim.y;
+
+    unsigned int err_count = 0;
+
+    // shared arrays for per type pair parameters
+    __shared__ unsigned int s_translate_accept_count;
+    __shared__ unsigned int s_translate_reject_count;
+    __shared__ unsigned int s_rotate_accept_count;
+    __shared__ unsigned int s_rotate_reject_count;
+    __shared__ unsigned int s_overlap_checks;
+    __shared__ unsigned int s_overlap_err_count;
+
+    __shared__ unsigned int s_queue_size;
+    __shared__ unsigned int s_still_searching;
+
+    // load the per type pair parameters into shared memory
+    extern __shared__ char s_data[];
+
+    typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
+    Scalar4 *s_orientation_group = (Scalar4*)(s_params + num_types);
+    Scalar3 *s_pos_group = (Scalar3*)(s_orientation_group + n_groups);
+    Scalar *s_d = (Scalar *)(s_pos_group + n_groups);
+    Scalar *s_a = (Scalar *)(s_d + num_types);
+    unsigned int *s_check_overlaps = (unsigned int *) (s_a + num_types);
+    unsigned int *s_overlap =   (unsigned int*)(s_check_overlaps + overlap_idx.getNumElements());
+    unsigned int *s_type_group = (unsigned int*)(s_overlap + n_groups);
+
+    // copy over parameters one int per thread for fast loads
+        {
+        unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
+        unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
+        unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
+
+        for (unsigned int cur_offset = 0; cur_offset < param_size; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < param_size)
+                {
+                ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
+                }
+            }
+
+        for (unsigned int cur_offset = 0; cur_offset < num_types; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < num_types)
+                {
+                s_a[cur_offset + tidx] = d_a[cur_offset + tidx];
+                s_d[cur_offset + tidx] = d_d[cur_offset + tidx];
+                }
+            }
+
+        unsigned int ntyppairs = overlap_idx.getNumElements();
+
+        for (unsigned int cur_offset = 0; cur_offset < ntyppairs; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < ntyppairs)
+                {
+                s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
+                }
+            }
+        }
+
+    __syncthreads();
+
+    // initialize the shared memory array for communicating overlaps
+    if (master && group == 0)
+        {
+        s_translate_accept_count = 0;
+        s_translate_reject_count = 0;
+        s_rotate_accept_count = 0;
+        s_rotate_reject_count = 0;
+        s_overlap_checks = 0;
+        s_overlap_err_count = 0;
+        s_queue_size = 0;
+        s_still_searching = 1;
+        }
+    if (master)
+        {
+        s_overlap[group] = 0;
+        }
+
+    // identify the active cell that this thread handles
+    unsigned int active_cell_idx = blockIdx.x * n_groups + group;
+
+    // this thread is inactive if it indexes past the end of the active cell list
+    if (active_cell_idx >= n_active_cells)
+        active = false;
+
+    // pull in the index of our cell
+    unsigned int my_cell = 0;
+    unsigned int my_cell_size = 0;
+    if (active)
+        {
+        my_cell = d_cell_set[active_cell_idx];
+        my_cell_size = d_cell_size[my_cell];
+        }
+
+    // need to deactivate if there are no particles in this cell
+    if (my_cell_size == 0)
+        active = false;
+
+    __syncthreads();
+
+    // initial implementation just moves one particle per cell (nselect=1).
+    // these variables are ugly, but needed to get the updated quantities outside of the scope
+    unsigned int i;
+    unsigned int overlap_checks = 0;
+    bool move_type_translate = false;
+    bool move_active = true;
+    int ignore_stats = 0;
+
+    Scalar4 postype_i;
+    Scalar4 orientation_i;
+
+    if (active)
+        {
+        // one RNG per cell
+        hoomd::detail::Saru rng(my_cell, seed+select, timestep);
+
+        // select one of the particles randomly from the cell
+        unsigned int my_cell_offset = rand_select(rng, my_cell_size-1);
+        i = tex1Dfetch(cell_idx_tex, cli(my_cell_offset, my_cell));
+
+        // read in the position and orientation of our particle.
+        postype_i = texFetchScalar4(d_postype, postype_tex, i);
+        orientation_i = make_scalar4(1,0,0,0);
+
+        unsigned int typ_i = __scalar_as_int(postype_i.w);
+        Shape shape_i(quat<Scalar>(orientation_i), s_params[typ_i]);
+
+        if (shape_i.hasOrientation())
+            orientation_i = texFetchScalar4(d_orientation, orientation_tex, i);
+
+        shape_i.orientation = quat<Scalar>(orientation_i);
+
+        // if this looks funny, that is because it is. Using ignore_stats as a bool setting ignore_stats = ...
+        // causes a compiler bug.
+        if (shape_i.ignoreStatistics())
+            ignore_stats = 1;
+
+        vec3<Scalar> pos_i = vec3<Scalar>(postype_i);
+
+        // for domain decomposition simulations, we need to leave all particles in the inactive region alone
+        // in order to avoid even more divergence, this is done by setting the move_active flag
+        // overlap checks are still processed, but the final move acceptance will be skipped
+        if (domain_decomposition && !isActive(make_scalar3(postype_i.x, postype_i.y, postype_i.z), box, ghost_fraction))
+            move_active = false;
+
+        // make the move
+        unsigned int move_type_select = rng.u32() & 0xffff;
+        move_type_translate = !shape_i.hasOrientation() || (move_type_select < move_ratio);
+
+        if (move_type_translate)
+            {
+            move_translate(pos_i, rng, s_d[typ_i], dim);
+
+            // need to reject any move that puts the particle in the inactive region
+            if (domain_decomposition && !isActive(vec_to_scalar3(pos_i), box, ghost_fraction))
+                move_active = false;
+            }
+        else
+            {
+            move_rotate(shape_i.orientation, rng, s_a[typ_i], dim);
+            }
+
+        // stash the trial move in shared memory so that other threads in this block can process overlap checks
+        if (master)
+            {
+            s_pos_group[group] = make_scalar3(pos_i.x, pos_i.y, pos_i.z);
+            s_type_group[group] = typ_i;
+            s_orientation_group[group] = quat_to_scalar4(shape_i.orientation);
+            }
+        }
+
+    // sync so that s_postype_group and s_orientation are available before other threads might process overlap checks
+    __syncthreads();
+
+    if (active && master)
+        {
+        // reset overlaps flag
+        d_cell_overlaps[active_cell_idx] = 0;
+        }
+
+    // counters to track progress through the loop over potential neighbors
+    unsigned int excell_size;
+    unsigned int k = offset;
+    if (active)
+        {
+        excell_size = d_excell_size[my_cell];
+        overlap_checks += excell_size;
+        }
+
+    // loop while still searching
+    while (s_still_searching)
+        {
+        // stage 1, fill the queue.
+        // loop through particles in the excell list and add them to the queue if they pass the circumsphere check
+
+        // active threads add to the queue
+        if (active)
+            {
+            // prefetch j
+            unsigned int j, next_j = 0;
+            if (k < excell_size)
+                {
+                #if (__CUDA_ARCH__ > 300)
+                next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
+                #else
+                next_j = d_excell_idx[excli(k, my_cell)];
+                #endif
+                }
+
+            // add to the queue as long as the queue is not full, and we have not yet reached the end of our own list
+            // and as long as no overlaps have been found
+            while (!s_overlap[group] && s_queue_size < max_queue_size && k < excell_size)
+                {
+                if (k < excell_size)
+                    {
+                    Scalar4 postype_j;
+                    Scalar4 orientation_j;
+                    vec3<Scalar> r_ij;
+
+                    // build some shapes, but we only need them to get diameters, so don't load orientations
+                    // build shape i from shared memory
+                    Scalar3 pos_i = s_pos_group[group];
+                    Shape shape_i(quat<Scalar>(), s_params[s_type_group[group]]);
+
+                    // prefetch next j
+                    k += group_size;
+                    j = next_j;
+
+                    if (k < excell_size)
+                        {
+                        #if (__CUDA_ARCH__ > 300)
+                        next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
+                        #else
+                        next_j = d_excell_idx[excli(k, my_cell)];
+                        #endif
+                        }
+
+                    // read in position, and orientation of neighboring particle
+                    postype_j = texFetchScalar4(d_postype, postype_tex, j);
+                    Shape shape_j(quat<Scalar>(orientation_j), s_params[__scalar_as_int(postype_j.w)]);
+
+                    // put particle j into the coordinate system of particle i
+                    r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(pos_i);
+                    r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
+
+                    // test circumsphere overlap
+                    OverlapReal rsq = dot(r_ij,r_ij);
+                    OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+
+                    if (i != j && rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                        {
+                        // add this particle to the queue
+                        unsigned int insert_point = atomicAdd(&s_queue_size, 1);
+
+                        if (insert_point < max_queue_size)
+                            {
+                            unsigned int qidx = queue_idx(blockIdx.x, insert_point);
+                            d_queue_active_cell_idx[qidx] = active_cell_idx;
+                            d_queue_postype[qidx] = postype_i;
+                            d_queue_orientation[qidx] = orientation_i;
+                            d_queue_j[qidx] = j;
+                            }
+                        else
+                            {
+                            // or back up if the queue is already full
+                            // we will recheck and insert this on the next time through
+                            k -= group_size;
+                            }
+                        }
+
+                    } // end if k < excell_size
+                } // end while (s_queue_size < max_queue_size && k < excell_size)
+            } // end if active
+
+        // sync to make sure all threads in the block are caught up
+        __syncthreads();
+
+        // when we get here, all threads have either finished their list, or encountered a full queue
+        // either way, it is time to process overlaps
+        // need to clear the still searching flag and sync first
+        if (master && group == 0)
+            s_still_searching = 0;
+
+        if (master && group == 0 && s_queue_size > 0)
+            {
+            #if (__CUDA_ARCH__ > 300)
+            // create a device stream
+            cudaStream_t stream;
+            cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+            if (check_cuda_errors)
+                {
+                cudaError_t status = cudaGetLastError();
+                if (status != cudaSuccess)
+                    {
+                    printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+                    }
+                }
+
+            // launch child kernel with same dimensions as this block
+
+            // NOTE optimization opportunity for parallel shapes (launch more blocks)
+            unsigned int shared_bytes = max_extra_bytes;
+            shared_bytes += num_types*sizeof(Shape::param_type);
+            shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
+
+            gpu_hpmc_check_overlaps_kernel<Shape> <<<1,blockDim.x,shared_bytes,stream>>>(
+                s_queue_size,
+                blockIdx.x,
+                d_postype,
+                d_orientation,
+                d_counters,
+                num_types,
+                d_check_overlaps,
+                overlap_idx,
+                box,
+                d_params,
+                max_extra_bytes,
+                queue_idx,
+                d_queue_active_cell_idx,
+                d_queue_postype,
+                d_queue_orientation,
+                d_queue_j,
+                d_cell_overlaps);
+
+            if (check_cuda_errors)
+                {
+                cudaError_t status = cudaGetLastError();
+                if (status != cudaSuccess)
+                    {
+                    printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
+                    }
+                }
+            cudaStreamDestroy(stream);
+            #endif
+            }
+
+        if (active && master)
+            {
+            // early exit via global mem race condition
+            s_overlap[group] = d_cell_overlaps[active_cell_idx];
+            }
+
+        // threads that need to do more looking set the still_searching flag
+        __syncthreads();
+        if (master && group == 0)
+            s_queue_size = 0;
+
+        if (active && !s_overlap[group] && k < excell_size)
+            atomicAdd(&s_still_searching, 1);
+        __syncthreads();
+
+        } // end while (s_still_searching)
+
+    #if (__CUDA_ARCH__ > 300)
+    // catch up with child kernels launched by this block
+    cudaDeviceSynchronize();
+    #endif
+
+    // update the data if accepted
+    if (master)
+        {
+        if (active && move_active)
+            {
+            // first need to check if the particle remains in its cell
+            Scalar3 xnew_i = s_pos_group[group];
+            unsigned int new_cell = computeParticleCell(xnew_i, box, ghost_width, cell_dim, ci);
+            bool accepted=true;
+            if (d_cell_overlaps[active_cell_idx])
+                accepted=false;
+            if (new_cell != my_cell)
+                accepted=false;
+
+            if (accepted)
+                {
+                // write out the updated position and orientation
+                d_postype[i] = make_scalar4(xnew_i.x, xnew_i.y, xnew_i.z, __int_as_scalar(s_type_group[group]));
+                d_orientation[i] = s_orientation_group[group];
+                }
+
+            if (d_active_cell_accept)
+                {
+                // store particle index
+                d_active_cell_ptl_idx[active_cell_idx] = i;
+                }
+
+            if (d_active_cell_accept)
+                {
+                // store accept flag
+                d_active_cell_accept[active_cell_idx] = accepted ? 1 : 0;
+                }
+
+            if (d_active_cell_move_type_translate)
+                {
+                // store move type
+                d_active_cell_move_type_translate[active_cell_idx] = move_type_translate ? 1 : 0;
+                }
+
+            // if an auxillary array was provided, defer writing out statistics
+            if (d_active_cell_ptl_idx)
+                {
+                ignore_stats = 1;
+                }
+
+            if (!ignore_stats && accepted && move_type_translate)
+                atomicAdd(&s_translate_accept_count, 1);
+            if (!ignore_stats && accepted && !move_type_translate)
+                atomicAdd(&s_rotate_accept_count, 1);
+            if (!ignore_stats && !accepted && move_type_translate)
+                atomicAdd(&s_translate_reject_count, 1);
+            if (!ignore_stats && !accepted && !move_type_translate)
+                atomicAdd(&s_rotate_reject_count, 1);
+            }
+        else // active && move_active
+            {
+            if (d_active_cell_ptl_idx && active_cell_idx < n_active_cells)
+                {
+                // indicate that no particle was selected
+                d_active_cell_ptl_idx[active_cell_idx] = UINT_MAX;
+                }
+            }
+
+        // count the overlap checks
+        atomicAdd(&s_overlap_checks, overlap_checks);
+        }
+
+    if (err_count > 0)
+        atomicAdd(&s_overlap_err_count, err_count);
+
+    __syncthreads();
+
+    // final tally into global mem
+    if (master && group == 0)
+        {
+        atomicAdd(&d_counters->translate_accept_count, s_translate_accept_count);
+        atomicAdd(&d_counters->translate_reject_count, s_translate_reject_count);
+        atomicAdd(&d_counters->rotate_accept_count, s_rotate_accept_count);
+        atomicAdd(&d_counters->rotate_reject_count, s_rotate_reject_count);
+        atomicAdd(&d_counters->overlap_checks, s_overlap_checks);
+        atomicAdd(&d_counters->overlap_err_count, s_overlap_err_count);
+        }
+    }
+
 //! Kernel driver for gpu_update_hpmc_kernel()
 /*! \param args Bundled arguments
     \param d_params Per-type shape parameters
@@ -954,6 +1581,175 @@ cudaError_t gpu_hpmc_update(const hpmc_args_t& args, const typename Shape::param
                                                                  params,
                                                                  max_queue_size,
                                                                  max_extra_bytes);
+
+    return cudaSuccess;
+    }
+
+//! Kernel driver for gpu_update_hpmc_dp_kernel()
+template< class Shape >
+cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::param_type *params)
+    {
+    assert(args.d_postype);
+    assert(args.d_orientation);
+    assert(args.d_counters);
+    assert(args.d_cell_idx);
+    assert(args.d_cell_size);
+    assert(args.d_excell_idx);
+    assert(args.d_excell_size);
+    assert(args.d_cell_set);
+    assert(args.d_d);
+    assert(args.d_a);
+    assert(args.d_check_overlaps);
+    assert(args.group_size >= 1);
+    assert(args.stride >= 1);
+
+    // determine the maximum block size and clamp the input block size down
+    static int max_block_size = -1;
+    static cudaFuncAttributes attr;
+    if (max_block_size == -1)
+        {
+        cudaFuncGetAttributes(&attr, gpu_hpmc_mpmc_kernel<Shape>);
+        max_block_size = attr.maxThreadsPerBlock;
+        }
+
+    // might need to modify group_size to make the kernel runnable
+    unsigned int group_size = args.group_size;
+
+    // choose a block size based on the max block size by regs (max_block_size) and include dynamic shared memory usage
+    unsigned int block_size = min(args.block_size, (unsigned int)max_block_size);
+
+    // determine the maximum block size for the overlaps kernel and clamp the input block size further down
+    static int max_block_size_overlaps = -1;
+    static cudaFuncAttributes attr_overlaps;
+    if (max_block_size == -1)
+        {
+        cudaFuncGetAttributes(&attr_overlaps, gpu_hpmc_check_overlaps_kernel<Shape>);
+        max_block_size_overlaps = attr_overlaps.maxThreadsPerBlock;
+        }
+
+    // for now, the child kernel uses the same block size as the parent kernel
+    block_size = min(block_size, (unsigned int) max_block_size_overlaps);
+
+    // the new block size might not fit the group size and stride, decrease group size until it is
+    unsigned int stride = min(block_size, args.stride);
+    while (stride*group_size > block_size)
+        {
+        group_size--;
+        }
+
+    unsigned int n_groups = block_size / (group_size * stride);
+    unsigned int max_queue_size = n_groups*group_size;
+    unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
+                                args.num_types * (sizeof(typename Shape::param_type) + 2*sizeof(Scalar)) +
+                                args.overlap_idx.getNumElements() * sizeof(unsigned int);
+
+    unsigned int min_shared_bytes = args.num_types * (sizeof(typename Shape::param_type) + 2*sizeof(Scalar)) +
+               args.overlap_idx.getNumElements() * sizeof(unsigned int);
+
+    if (min_shared_bytes >= args.devprop.sharedMemPerBlock)
+        throw std::runtime_error("Insufficient shared memory for HPMC kernel: reduce number of particle types or size of shape parameters");
+
+    while (shared_bytes + attr.sharedSizeBytes >= args.devprop.sharedMemPerBlock)
+        {
+        block_size -= args.devprop.warpSize;
+        if (block_size == 0)
+            throw std::runtime_error("Insufficient shared memory for HPMC kernel");
+
+        // the new block size might not fit the group size and stride, decrease group size until it is
+        stride = args.stride;
+        group_size = args.group_size;
+
+        unsigned int stride = min(block_size, args.stride);
+        while (stride*group_size > block_size)
+            {
+            group_size--;
+            }
+
+        n_groups = block_size / (group_size * stride);
+        max_queue_size = n_groups*group_size;
+        shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
+                       min_shared_bytes;
+        }
+
+    unsigned int shared_bytes_overlaps = args.num_types*sizeof(typename Shape::param_type)
+        + args.overlap_idx.getNumElements()*sizeof(unsigned int);
+
+    static unsigned int base_shared_bytes = UINT_MAX;
+    bool shared_bytes_changed = base_shared_bytes != shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
+    base_shared_bytes = shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
+
+    unsigned int max_extra_bytes = args.devprop.sharedMemPerBlock - base_shared_bytes;
+    static unsigned int extra_bytes = UINT_MAX;
+    if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
+        {
+        // required for memory coherency
+        cudaDeviceSynchronize();
+
+        // determine dynamically requested shared memory
+        char *ptr = (char *)nullptr;
+        unsigned int available_bytes = max_extra_bytes;
+        for (unsigned int i = 0; i < args.num_types; ++i)
+            {
+            params[i].load_shared(ptr, available_bytes);
+            }
+        extra_bytes = max_extra_bytes - available_bytes;
+        }
+
+    // setup the grid to run the kernel
+    dim3 threads;
+    if (Shape::isParallel())
+        {
+        // use three-dimensional thread-layout with blockDim.z < 64
+        threads = dim3(stride, group_size, n_groups);
+        }
+    else
+        {
+        threads = dim3(group_size, n_groups,1);
+        }
+
+    dim3 grid( args.n_active_cells / n_groups + 1, 1, 1);
+
+    gpu_hpmc_mpmc_dp_kernel<Shape><<<grid, threads, shared_bytes, args.stream>>>(args.d_postype,
+                                                                 args.d_orientation,
+                                                                 args.d_counters,
+                                                                 args.d_cell_idx,
+                                                                 args.d_cell_size,
+                                                                 args.d_excell_idx,
+                                                                 args.d_excell_size,
+                                                                 args.ci,
+                                                                 args.cli,
+                                                                 args.excli,
+                                                                 args.cell_dim,
+                                                                 args.ghost_width,
+                                                                 args.d_cell_set,
+                                                                 args.n_active_cells,
+                                                                 args.N,
+                                                                 args.num_types,
+                                                                 args.seed,
+                                                                 args.d_d,
+                                                                 args.d_a,
+                                                                 args.d_check_overlaps,
+                                                                 args.overlap_idx,
+                                                                 args.move_ratio,
+                                                                 args.timestep,
+                                                                 args.dim,
+                                                                 args.box,
+                                                                 args.select,
+                                                                 args.ghost_fraction,
+                                                                 args.domain_decomposition,
+                                                                 args.d_active_cell_ptl_idx,
+                                                                 args.d_active_cell_accept,
+                                                                 args.d_active_cell_move_type_translate,
+                                                                 params,
+                                                                 max_queue_size,
+                                                                 max_extra_bytes,
+                                                                 args.queue_idx,
+                                                                 args.d_queue_active_cell_idx,
+                                                                 args.d_queue_postype,
+                                                                 args.d_queue_orientation,
+                                                                 args.d_queue_j,
+                                                                 args.d_cell_overlaps,
+                                                                 args.check_cuda_errors);
 
     return cudaSuccess;
     }

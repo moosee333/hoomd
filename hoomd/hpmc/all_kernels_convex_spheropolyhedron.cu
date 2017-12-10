@@ -19,6 +19,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeSpheropolyhedron >(const hpmc_fre
                                                        const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSpheropolyhedron >(const hpmc_args_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
+template cudaError_t gpu_hpmc_update_dp<ShapeSpheropolyhedron >(const hpmc_args_t& args,
+                                                  const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_count_overlaps<ShapeSpheropolyhedron >(const hpmc_implicit_args_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeSpheropolyhedron >(const hpmc_implicit_args_t& args,
