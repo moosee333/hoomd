@@ -44,7 +44,7 @@
   */
 
 // uncomment for parallel overlap checks
-//#define LEAVES_AGAINST_TREE_TRAVERSAL
+#define LEAVES_AGAINST_TREE_TRAVERSAL
 
 namespace hpmc
 {
@@ -169,7 +169,7 @@ struct ShapePolyhedron
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
     HOSTDEVICE static bool isParallel()
         {
-        #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
+        #if 0 && defined(LEAVES_AGAINST_TREE_TRAVERSAL)
         return true;
         #else
         return false;
@@ -796,8 +796,8 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
     #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
     #ifdef NVCC
     // Parallel tree traversal
-    unsigned int offset = threadIdx.x;
-    unsigned int stride = blockDim.x;
+    unsigned int offset = threadIdx.x + blockIdx.x*blockDim.x;
+    unsigned int stride = gridDim.x*blockDim.x;
     #else
     unsigned int offset = 0;
     unsigned int stride = 1;

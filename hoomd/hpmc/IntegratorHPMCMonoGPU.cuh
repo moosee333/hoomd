@@ -796,7 +796,6 @@ __global__ void gpu_hpmc_mpmc_kernel(Scalar4 *d_postype,
 //! This kernel is supposed to be launched as a single thread block from its parent kernel
 template<class Shape>
 __global__ void gpu_hpmc_check_overlaps_kernel(
-                unsigned int queue_size,
                 unsigned int i_queue,
                 unsigned int offset,
                 Scalar4 *d_postype,
@@ -857,11 +856,8 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
 
     __syncthreads();
 
-    // return early if no work to do
-    if (threadIdx.x >= queue_size) return;
-
     // fetch from queue
-    unsigned int qidx = queue_idx(i_queue,threadIdx.x+offset);
+    unsigned int qidx = queue_idx(i_queue,offset);
     Scalar4 postype_i = d_queue_postype[qidx];
     Scalar4 orientation_i = d_queue_orientation[qidx];
     unsigned int j = d_queue_j[qidx];
@@ -1270,9 +1266,8 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
             shared_bytes += num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
 
-            unsigned int child_block_size = 32;
+            unsigned int child_block_size = 256;
             gpu_hpmc_check_overlaps_kernel<Shape> <<<1,child_block_size,shared_bytes,stream>>>(
-                1,
                 blockIdx.x,
                 s_queue_offset+tidx_1d,
                 d_postype,

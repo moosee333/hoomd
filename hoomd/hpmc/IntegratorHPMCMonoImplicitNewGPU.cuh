@@ -749,7 +749,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     __syncthreads();
 
     // index of depletant we handle
-    unsigned int tidx = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int tidx = blockIdx.y*blockDim.y + threadIdx.y;
 
     // exit early if there is nothing to do
     if (tidx >= n_depletants) return;
@@ -1352,8 +1352,11 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             n_inserted += n_depletants_i + n_depletants_j;
 
             // check depletant overlaps in sub-kernels
-            unsigned int n_blocks_i = n_depletants_i / block_size_overlaps + 1;
-            unsigned int n_blocks_j = n_depletants_j / block_size_overlaps + 1;
+
+            // for now, no shape-parallelism (blockDim.x==1, gridDim.x == 1)
+            dim3 grid_i(1,n_depletants_i / block_size_overlaps + 1,1);
+            dim3 grid_j(1,n_depletants_j / block_size_overlaps + 1,1);
+            dim3 threads(1,block_size_overlaps,1);
 
             unsigned int shared_bytes = extra_bytes;
             shared_bytes += num_types*sizeof(Shape::param_type);
@@ -1374,7 +1377,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                         }
                     }
 
-                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_i, block_size_overlaps, shared_bytes, stream>>>(
+                gpu_check_depletant_overlaps_kernel<Shape><<< grid_i, threads, shared_bytes, stream>>>(
                     n_depletants_i,
                     check_i,
                     check_j,
@@ -1434,7 +1437,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                         }
                     }
 
-                gpu_check_depletant_overlaps_kernel<Shape><<< n_blocks_j, block_size_overlaps, shared_bytes, stream>>>(
+                gpu_check_depletant_overlaps_kernel<Shape><<< grid_j, threads, shared_bytes, stream>>>(
                     n_depletants_i,
                     check_i,
                     check_j,
