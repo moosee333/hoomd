@@ -755,9 +755,6 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     // index of depletant we handle
     unsigned int tidx = blockIdx.y*blockDim.y + threadIdx.y;
 
-    // exit early if there is nothing to do
-    if (tidx >= n_depletants) return;
-
     // catch an opportunity at early exit using a global mem race
     __shared__ bool s_early_exit;
     if (threadIdx.x == 0 && threadIdx.y == 0)
@@ -772,6 +769,9 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
     if (s_early_exit)
         return;
+
+    // exit early if there is nothing to do
+    if (tidx >= n_depletants) return;
 
     // generate a unique seed first from particle indices i and j and the depletant index
     hoomd::detail::Saru rng_seed(i,j, tidx);
@@ -838,11 +838,11 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     // draw a radial coordinate uniformly distributed in the spherical cap
     Scalar u = rng.template s<Scalar>();
     Scalar Rmh = R-h;
-    Scalar arg = 2.0*u*h*h*(3*R-h)/(Rmh*Rmh*Rmh)-1.0;
+    Scalar arg = 2.0*u*h*h*(3.0*R-h)/(Rmh*Rmh*Rmh)-1.0;
     Scalar r;
     if (arg > 1.0)
         {
-        r = Scalar(0.5)*Rmh*(1.0+2.0*cosh(log(arg+fast::sqrt(arg*arg-1))/3.0));
+        r = Scalar(0.5)*Rmh*(1.0+2.0*cosh(log(arg+fast::sqrt(arg*arg-1.0))/3.0));
         }
     else
         {
@@ -1100,8 +1100,8 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
     unsigned int *s_reject = (unsigned int *)(s_queue_gid + max_queue_size);
 
     // copy over parameters one int per thread for fast loads
+    unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
         {
-        unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
         unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
         unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
 
@@ -1174,9 +1174,8 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             active = false;
         }
 
-    // this RNG is required for fast initialization performance
+    // initialize one RNG per thread (Philox4_32_10 is used for fast initialization)
     curandStatePhilox4_32_10_t local_state;
-    unsigned int tidx = blockIdx.x * blockDim.x + threadIdx.x;
     curand_init((unsigned long long)(seed+tidx), (unsigned long long)(timestep+UINT_MAX*select), 0, &local_state);
 
     unsigned int overlap_checks = 0;
@@ -1442,6 +1441,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             #endif
             }
 
+        #if 0
         if (master && group == 0)
             {
             #if (__CUDA_ARCH__ > 300)
@@ -1456,6 +1456,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             // early exit via global mem race condition
             s_reject[group] = d_overlap_cell[active_cell_idx];
             }
+        #endif
 
         // threads that need to do more looking set the still_searching flag
         __syncthreads();

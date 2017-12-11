@@ -768,10 +768,14 @@ inline bool BVHCollision(const ShapePolyhedron& a, const ShapePolyhedron &b,
  */
 DEVICE inline unsigned int get_num_requested_threads(const ShapePolyhedron& a, const ShapePolyhedron& b)
     {
+    #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
     if (a.tree.getNumLeaves() < b.tree.getNumLeaves())
         return a.tree.getNumLeaves();
     else
         return b.tree.getNumLeaves();
+    #else
+    return 1;
+    #endif
     }
 
 //! Polyhedron overlap test

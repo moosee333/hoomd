@@ -868,7 +868,7 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
 
     // catch an opportunity at early exit using a global mem race
     __shared__ bool s_early_exit;
-    if (threadIdx.x == 0)
+    if (threadIdx.x == 0 && threadIdx.y == 0)
         s_early_exit = false;
     __syncthreads();
 
