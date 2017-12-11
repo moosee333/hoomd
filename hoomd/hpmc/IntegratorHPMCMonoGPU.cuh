@@ -863,6 +863,21 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
     unsigned int j = d_queue_j[qidx];
     unsigned int active_cell_idx = d_queue_active_cell_idx[qidx];
 
+    // catch an opportunity at early exit using a global mem race
+    __shared__ bool s_early_exit;
+    if (threadIdx.x == 0)
+        s_early_exit = false;
+    __syncthreads();
+
+    if (d_cell_overlaps[active_cell_idx])
+        {
+        s_early_exit = true;
+        }
+    __syncthreads();
+
+    if (s_early_exit)
+        return;
+
     unsigned int type_i = __scalar_as_int(postype_i.w);
 
     // perform overlap check
