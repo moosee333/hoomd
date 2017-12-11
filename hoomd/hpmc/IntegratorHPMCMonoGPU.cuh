@@ -1173,6 +1173,20 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
 
     __syncthreads();
 
+    #if (__CUDA_ARCH__ > 300)
+    // create a device stream
+    cudaStream_t stream;
+    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    if (check_cuda_errors)
+        {
+        cudaError_t status = cudaGetLastError();
+        if (status != cudaSuccess)
+            {
+            printf("Error creating device stream: %s\n", cudaGetErrorString(status));
+            }
+        }
+    #endif
+
     // loop while still searching
     while (s_still_searching)
         {
@@ -1277,19 +1291,6 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         if (tidx_1d < n_overlap_checks)
             {
             #if (__CUDA_ARCH__ > 300)
-            // create a device stream
-            cudaStream_t stream;
-            cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-            if (check_cuda_errors)
-                {
-                cudaError_t status = cudaGetLastError();
-                if (status != cudaSuccess)
-                    {
-                    printf("Error creating device stream: %s\n", cudaGetErrorString(status));
-                    }
-                }
-
-            // NOTE optimization opportunity for parallel shapes (launch more blocks)
             unsigned int shared_bytes = max_extra_bytes;
             shared_bytes += num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
@@ -1335,7 +1336,6 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                     printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
                     }
                 }
-            cudaStreamDestroy(stream);
             #endif
             }
 
@@ -1351,6 +1351,15 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
             #if (__CUDA_ARCH__ > 300)
             // catch up with child kernels
             cudaDeviceSynchronize();
+
+            if (check_cuda_errors)
+                {
+                cudaError_t status = cudaGetLastError();
+                if (status != cudaSuccess)
+                    {
+                    printf("Error on cudaDeviceSynchronize(): %s\n", cudaGetErrorString(status));
+                    }
+                }
             #endif
 
             // reset queue
@@ -1383,8 +1392,22 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         {
         // catch up with child kernels launched by this block
         cudaDeviceSynchronize();
+
+        if (check_cuda_errors)
+            {
+            cudaError_t status = cudaGetLastError();
+            if (status != cudaSuccess)
+                {
+                printf("Error on cudaDeviceSynchronize(): %s\n", cudaGetErrorString(status));
+                }
+            }
         }
     #endif
+
+    #if (__CUDA_ARCH__ > 300)
+    cudaStreamDestroy(stream);
+    #endif
+
     __syncthreads();
 
     // update the data if accepted
@@ -1704,10 +1727,6 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
         cudaFuncGetAttributes(&attr_overlaps, gpu_hpmc_check_overlaps_kernel<Shape>);
         max_block_size_overlaps = attr_overlaps.maxThreadsPerBlock;
         }
-
-    // for now, the child kernel uses the same block size as the parent kernel
-    // therefore we have to minimize over the two max block sizes
-    block_size = min(block_size, (unsigned int) max_block_size_overlaps);
 
     // the new block size might not fit the group size, decrease group size until it is
     while (block_size % group_size)
