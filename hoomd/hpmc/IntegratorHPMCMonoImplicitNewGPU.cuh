@@ -757,6 +757,21 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     // exit early if there is nothing to do
     if (tidx >= n_depletants) return;
 
+    // catch an opportunity at early exit using a global mem race
+    __shared__ bool s_early_exit;
+    if (threadIdx.x == 0)
+        s_early_exit = false;
+    __syncthreads();
+
+    if (d_overlap_cell[active_cell_idx])
+        {
+        s_early_exit = true;
+        }
+    __syncthreads();
+
+    if (s_early_exit)
+        return;
+
     // generate a unique seed first from particle indices i and j and the depletant index
     hoomd::detail::Saru rng_seed(i,j, tidx);
 
