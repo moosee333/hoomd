@@ -1363,7 +1363,8 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         if (active && master)
             {
             // early exit via global mem race condition
-            s_overlap[group] = d_cell_overlaps[active_cell_idx];
+            if (d_cell_overlaps[active_cell_idx])
+                s_overlap[group] = true;
             }
 
         // threads that need to do more looking set the still_searching flag
@@ -1378,9 +1379,13 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         } // end while (s_still_searching)
 
     #if (__CUDA_ARCH__ > 300)
-    // catch up with child kernels launched by this block
-    cudaDeviceSynchronize();
+    if (group == 0 && master)
+        {
+        // catch up with child kernels launched by this block
+        cudaDeviceSynchronize();
+        }
     #endif
+    __syncthreads();
 
     // update the data if accepted
     if (master)
