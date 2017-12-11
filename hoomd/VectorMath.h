@@ -371,20 +371,6 @@ DEVICE inline Scalar3 vec_to_scalar3(const vec3<Scalar>& a)
     return make_scalar3(a.x, a.y, a.z);
     }
 
-//! Convenience function for converting a vec3 to a float3
-DEVICE inline float3 vec_to_float3(const vec3<Scalar>& a)
-    {
-    return make_float3(a.x, a.y, a.z);
-    }
-
-#ifndef SINGLE_PRECISION
-//! Convenience function for converting a vec3<float> to a float3
-DEVICE inline float3 vec_to_float3(const vec3<float>& a)
-    {
-    return make_float3(a.x, a.y, a.z);
-    }
-#endif
-
 //! Convenience function for converting a vec3 and a w to a Scalar4
 DEVICE inline Scalar4 vec_to_scalar4(const vec3<Scalar>& a, Scalar w)
     {
