@@ -680,7 +680,8 @@ template< class Shape >
 __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                                      unsigned int i,
                                      unsigned int j,
-                                     unsigned int cap_j,
+                                     Scalar Vcap_i,
+                                     Scalar Vcap_j,
                                      unsigned int active_cell_idx,
                                      Scalar4 *d_postype,
                                      Scalar4 *d_orientation,
@@ -825,10 +826,13 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     Scalar hj = (Ri*Ri - (d-Rj)*(d-Rj))/(2*d);
 
     // choose a cap
-    Scalar R = cap_j ? Rj : Ri;
-    Scalar h = cap_j ? hj : hi;
+    Scalar s = rng.template s<Scalar>();
+    bool cap_i = s < Vcap_i/(Vcap_i+Vcap_j);
 
-    if (cap_j) rij = -rij;
+    Scalar R = cap_i ? Ri : Rj;
+    Scalar h = cap_i ? hi : hj;
+
+    if (!cap_i) rij = -rij;
 
     // generate a depletant position in the spherical cap
     // draw a radial coordinate uniformly distributed in the spherical cap
@@ -873,7 +877,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     vec3<Scalar> r_cone = n1*fast::sqrt(r*r-z*z)*fast::cos(theta)+n2*fast::sqrt(r*r-z*z)*fast::sin(theta)+n*z;
 
     // test depletant position
-    vec3<Scalar> pos_test(cap_j ? pos_j_old : pos_i_old);
+    vec3<Scalar> pos_test(cap_i ? pos_i_old : pos_j_old);
     pos_test += r_cone;
 
     // check if old configuration of particle i generates an overlap
@@ -1363,17 +1367,14 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             Scalar Vcap_i = Scalar(M_PI/3.0)*hi*hi*(3*Ri-hi);
             Scalar Vcap_j = Scalar(M_PI/3.0)*hj*hj*(3*Rj-hj);
 
-            // draw poisson random numbers with two different means
-            unsigned int n_depletants_i = curand_poisson(&local_state, fugacity*Vcap_i);
-            unsigned int n_depletants_j = curand_poisson(&local_state, fugacity*Vcap_j);
-
-            n_inserted += n_depletants_i + n_depletants_j;
+            // draw poisson random number
+            unsigned int n_depletants = curand_poisson(&local_state, fugacity*(Vcap_i+Vcap_j));
+            n_inserted += n_depletants;
 
             // check depletant overlaps in sub-kernels
 
             // for now, no shape-parallelism (blockDim.x==1, gridDim.x == 1)
-            dim3 grid_i(1,n_depletants_i / block_size_overlaps + 1,1);
-            dim3 grid_j(1,n_depletants_j / block_size_overlaps + 1,1);
+            dim3 grid(1,n_depletants / block_size_overlaps + 1,1);
             dim3 threads(1,block_size_overlaps,1);
 
             unsigned int shared_bytes = extra_bytes;
@@ -1381,7 +1382,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
 
             // only launch when necessary
-            if (n_depletants_i > 0)
+            if (n_depletants > 0)
                 {
                 // create a device stream
                 cudaStream_t stream;
@@ -1395,11 +1396,12 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                         }
                     }
 
-                gpu_check_depletant_overlaps_kernel<Shape><<< grid_i, threads, shared_bytes, stream>>>(
-                    n_depletants_i,
+                gpu_check_depletant_overlaps_kernel<Shape><<< grid, threads, shared_bytes, stream>>>(
+                    n_depletants,
                     check_i,
                     check_j,
-                    0, // cap i
+                    Vcap_i,
+                    Vcap_j,
                     check_active_cell,
                     d_postype,
                     d_orientation,
@@ -1438,67 +1440,6 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                         printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
                         }
                     }
-                cudaStreamDestroy(stream);
-                }
-
-            if (n_depletants_j > 0)
-                {
-                // create a device stream
-                cudaStream_t stream;
-                cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-                if (check_cuda_errors)
-                    {
-                    cudaError_t status = cudaGetLastError();
-                    if (status != cudaSuccess)
-                        {
-                        printf("Error creating device stream: %s\n", cudaGetErrorString(status));
-                        }
-                    }
-
-                gpu_check_depletant_overlaps_kernel<Shape><<< grid_j, threads, shared_bytes, stream>>>(
-                    n_depletants_i,
-                    check_i,
-                    check_j,
-                    1, // cap j
-                    check_active_cell,
-                    d_postype,
-                    d_orientation,
-                    d_counters,
-                    d_cell_idx,
-                    d_cell_size,
-                    d_excell_idx,
-                    d_excell_size,
-                    ci,
-                    cli,
-                    excli,
-                    cell_dim,
-                    ghost_width,
-                    d_cell_set,
-                    num_types,
-                    seed,
-                    d_check_overlaps,
-                    overlap_idx,
-                    timestep,
-                    dim,
-                    box,
-                    select,
-                    d_params,
-                    max_extra_bytes,
-                    depletant_type,
-                    d_postype_old,
-                    d_orientation_old,
-                    d_overlap_cell
-                    );
-
-                if (check_cuda_errors)
-                    {
-                    cudaError_t status = cudaGetLastError();
-                    if (status != cudaSuccess)
-                        {
-                        printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
-                        }
-                    }
-
                 cudaStreamDestroy(stream);
                 }
             #endif
