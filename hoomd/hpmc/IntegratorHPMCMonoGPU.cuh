@@ -972,9 +972,12 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
     Scalar3 *s_pos_group = (Scalar3*)(s_orientation_group + n_groups);
     Scalar *s_d = (Scalar *)(s_pos_group + n_groups);
     Scalar *s_a = (Scalar *)(s_d + num_types);
+
     unsigned int *s_check_overlaps = (unsigned int *) (s_a + num_types);
-    unsigned int *s_overlap =   (unsigned int*)(s_check_overlaps + overlap_idx.getNumElements());
-    unsigned int *s_type_group = (unsigned int*)(s_overlap + n_groups);
+    unsigned int *s_queue_type_j =   (unsigned int*)(s_check_overlaps + overlap_idx.getNumElements());
+    unsigned int *s_overlap =   (unsigned int*)(s_queue_type_j + max_queue_size);
+    unsigned int *s_queue_gid = (unsigned int*)(s_overlap + n_groups);
+    unsigned int *s_type_group = (unsigned int*)(s_queue_gid + max_queue_size);
 
     // copy over parameters one int per thread for fast loads
         {
@@ -1197,7 +1200,8 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
 
                     // read in position, and orientation of neighboring particle
                     postype_j = texFetchScalar4(d_postype, postype_tex, j);
-                    Shape shape_j(quat<Scalar>(orientation_j), s_params[__scalar_as_int(postype_j.w)]);
+                    unsigned int type_j = __scalar_as_int(postype_j.w);
+                    Shape shape_j(quat<Scalar>(orientation_j), s_params[type_j]);
 
                     // put particle j into the coordinate system of particle i
                     r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(pos_i);
@@ -1216,12 +1220,17 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
 
                         if (insert_point < max_queue_size && !s_gmem_queue_full)
                             {
+                            // global mem queue
                             unsigned int qidx = queue_idx(blockIdx.x, s_queue_offset + insert_point);
                             d_queue_active_cell_idx[qidx] = active_cell_idx;
                             Scalar3 pos_i = s_pos_group[group];
                             d_queue_postype[qidx] = make_scalar4(pos_i.x, pos_i.y, pos_i.z, __int_as_scalar(s_type_group[group]));
                             d_queue_orientation[qidx] = s_orientation_group[group];
                             d_queue_j[qidx] = j;
+
+                            // shared mem queue
+                            s_queue_gid[insert_point] = group;
+                            s_queue_type_j[insert_point] = type_j;
                             }
                         else
                             {
@@ -1266,8 +1275,23 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
             shared_bytes += num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
 
-            unsigned int child_block_size = 256;
-            gpu_hpmc_check_overlaps_kernel<Shape> <<<1,child_block_size,shared_bytes,stream>>>(
+            // get requested launch configuration
+            unsigned int check_group = s_queue_gid[tidx_1d];
+            unsigned int check_type_i = s_type_group[check_group];
+            unsigned int check_type_j = s_queue_type_j[tidx_1d];
+
+            Shape shape_i(quat<Scalar>(), s_params[check_type_i]);
+            Shape shape_j(quat<Scalar>(), s_params[check_type_j]);
+
+            unsigned int n_threads = get_num_requested_threads(shape_i, shape_j);
+
+            unsigned int child_block_size = 256; // for now
+
+            // shape parallelism in .x index
+            dim3 grid(n_threads/child_block_size+1, 1,1);
+            dim3 threads(child_block_size, 1, 1);
+
+            gpu_hpmc_check_overlaps_kernel<Shape> <<<grid,threads,shared_bytes,stream>>>(
                 blockIdx.x,
                 s_queue_offset+tidx_1d,
                 d_postype,
@@ -1674,6 +1698,7 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     unsigned int n_groups = block_size / (group_size * stride);
     unsigned int max_queue_size = n_groups*group_size;
     unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
+                                max_queue_size * 2 * sizeof(unsigned int) + 
                                 args.num_types * (sizeof(typename Shape::param_type) + 2*sizeof(Scalar)) +
                                 args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
@@ -1702,6 +1727,7 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
         n_groups = block_size / (group_size * stride);
         max_queue_size = n_groups*group_size;
         shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
+                       max_queue_size * 2 * sizeof(unsigned int) +
                        min_shared_bytes;
         }
 

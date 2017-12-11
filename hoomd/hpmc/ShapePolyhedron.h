@@ -761,6 +761,18 @@ inline bool BVHCollision(const ShapePolyhedron& a, const ShapePolyhedron &b,
     }
 #endif
 
+//! Returns the number of GPU threads requested for the overlap check
+/*! \param a first shape
+    \param b second shape
+ */
+DEVICE inline unsigned int get_num_requested_threads(const ShapePolyhedron& a, const ShapePolyhedron& b)
+    {
+    if (a.tree.getNumLeaves() < b.tree.getNumLeaves())
+        return a.tree.getNumLeaves();
+    else
+        return b.tree.getNumLeaves();
+    }
+
 //! Polyhedron overlap test
 /*! \param r_ab Vector defining the position of shape b relative to shape a (r_b - r_a)
     \param a first shape
