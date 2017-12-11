@@ -760,7 +760,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
     // catch an opportunity at early exit using a global mem race
     __shared__ bool s_early_exit;
-    if (threadIdx.x == 0)
+    if (threadIdx.x == 0 && threadIdx.y == 0)
         s_early_exit = false;
     __syncthreads();
 
@@ -822,8 +822,8 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     Scalar d = fast::sqrt(dot(rij,rij));
 
     // heights spherical caps that constitute the intersection volume
-    Scalar hi = (Rj*Rj - (d-Ri)*(d-Ri))/(2*d);
-    Scalar hj = (Ri*Ri - (d-Rj)*(d-Rj))/(2*d);
+    Scalar hi = (Rj*Rj - (d-Ri)*(d-Ri))/(2.0*d);
+    Scalar hj = (Ri*Ri - (d-Rj)*(d-Rj))/(2.0*d);
 
     // choose a cap
     Scalar s = rng.template s<Scalar>();
@@ -838,16 +838,16 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     // draw a radial coordinate uniformly distributed in the spherical cap
     Scalar u = rng.template s<Scalar>();
     Scalar Rmh = R-h;
-    Scalar arg = 2*u*h*h*(3*R-h)/(Rmh*Rmh*Rmh)-1;
+    Scalar arg = 2.0*u*h*h*(3*R-h)/(Rmh*Rmh*Rmh)-1.0;
     Scalar r;
     if (arg > 1.0)
         {
-        r = Scalar(0.5)*Rmh*(1+2*cosh(log(arg+fast::sqrt(arg*arg-1))/3));
+        r = Scalar(0.5)*Rmh*(1.0+2.0*cosh(log(arg+fast::sqrt(arg*arg-1))/3.0));
         }
     else
         {
         // principal branch of acos
-        r = Scalar(0.5)*Rmh*(1+2*fast::cos(fast::acos(arg)/3));
+        r = Scalar(0.5)*Rmh*(1.0+2.0*fast::cos(fast::acos(arg)/3.0));
         }
 
     // draw a random unit vector in a zone of height h_prime in the spherical cap
@@ -952,6 +952,8 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     unsigned int group_size = 1; // for now
     unsigned int offset = 0; //for now
 
+    bool ignore = false;
+
     for (unsigned int k = 0; k < excell_size; k += group_size)
         {
         unsigned int local_k = k + offset;
@@ -976,30 +978,35 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                     shape_l.orientation = quat<Scalar>(texFetchScalar4(d_orientation_old, depletants_orientation_old_tex, l));
                     }
 
-                // rl - ri
-                rij = vec3<Scalar>(postype_l) - pos_i_old;
+                // rl - r_dep
+                rij = vec3<Scalar>(postype_l) - pos_test;
                 rij = vec3<Scalar>(box.minImage(vec_to_scalar3(rij)));
 
-                // test overlap of depletant-excluded volumes
+                // test overlap of depletant with circumsphere
                 OverlapReal rsq = dot(rij,rij);
-                OverlapReal DaDb = shape_i_old.getCircumsphereDiameter() + shape_l.getCircumsphereDiameter() + Scalar(2.0)*d_dep;
+                OverlapReal DaDb = d_dep + shape_l.getCircumsphereDiameter();
                 circumsphere_overlap = (rsq*OverlapReal(4.0) <= DaDb * DaDb);
 
                 // count unique intersection volumes only
-                if (!circumsphere_overlap || l <= j)
+                if (circumsphere_overlap && l < j && l != i)
+                    {
+                    ignore = true;
+                    break;
+                    }
+
+                if (!circumsphere_overlap || l == i)
                     {
                     // fetch next element
                     local_k += group_size;
                     k += group_size;
                     }
-                } while(!circumsphere_overlap && (local_k < excell_size));
+                } while((!circumsphere_overlap || l == i) && (local_k < excell_size));
 
-            if (circumsphere_overlap)
+            if (ignore)
+                break;
+
+            if (circumsphere_overlap && i != l)
                 {
-                // r_depletant - rl
-                rij = vec3<Scalar>(postype_l) - pos_test;
-                rij = vec3<Scalar>(box.minImage(vec_to_scalar3(rij)));
-
                 // test depletant intersection with particle l
                 unsigned int typ_l = __scalar_as_int(postype_l.w);
                 Shape shape_l(quat<Scalar>(), s_params[typ_l]);
@@ -1018,9 +1025,6 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
                     if (err_count)
                         atomicAdd(&d_counters->overlap_err_count, err_count);
-
-                    if (in_intersection_volume)
-                        break;
                     }
                 }
             }
@@ -1028,7 +1032,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
         } // end loop over neighbors
 
     // if it overlaps with a neighbor in the old config, flag rejection in global mem
-    if (in_intersection_volume)
+    if (in_intersection_volume && !ignore)
         d_overlap_cell[active_cell_idx] = 1;
     }
 
@@ -1246,13 +1250,6 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
 
             // add to the queue as long as the queue is not full, and we have not yet reached the end of our own list
             // and as long as no overlaps have been found
-            if (master)
-                {
-                // early exit via global mem race condition
-                s_reject[group] = d_overlap_cell[active_cell_idx];
-                }
-            __syncthreads();
-
             while (!s_reject[group] && s_queue_size < max_queue_size && k < excell_size)
                 {
                 if (k < excell_size)
@@ -1444,6 +1441,15 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                 }
             #endif
             }
+
+        if (master && group == 0)
+            {
+            #if (__CUDA_ARCH__ > 300)
+            cudaDeviceSynchronize();
+            #endif
+            }
+
+        __syncthreads();
 
         if (active && master)
             {
