@@ -43,8 +43,9 @@
   uncommenting the below line.
   */
 
-// uncomment for parallel overlap checks
+#ifdef NVCC
 #define LEAVES_AGAINST_TREE_TRAVERSAL
+#endif
 
 namespace hpmc
 {
