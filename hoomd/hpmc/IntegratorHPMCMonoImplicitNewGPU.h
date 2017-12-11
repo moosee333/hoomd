@@ -178,40 +178,14 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
 
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
 
-    if (Shape::isParallel())
-        {
-        for (unsigned int block_size =dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size +=dev_prop.warpSize)
-            {
-            unsigned int s=1;
-            while (s <= (unsigned int)dev_prop.warpSize)
-                {
-                unsigned int stride = 1;
-                while (stride <= block_size)
-                    {
-                    // for parallel overlap checks, use 3d-layout where blockDim.z is limited
-                    if (block_size % (s*stride) == 0 && block_size/(s*stride) <= (unsigned int) dev_prop.maxThreadsDim[2])
-                        valid_params.push_back(block_size*1000000 + stride*100 + s);
+    unsigned int stride = 1;
 
-                    // increment stride in powers of two
-                    stride *= 2;
-                    }
-                s++;
-                }
-            }
-        }
-    else
+    for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
         {
-        // for serial overlap checks, force stride=1. And groups no longer need to evenly divide into warps: only into
-        // blocks
-        unsigned int stride = 1;
-
-        for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
+        for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
             {
-            for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
-                {
-                if ((block_size % group_size) == 0)
-                    valid_params.push_back(block_size*1000000 + stride*100 + group_size);
-                }
+            if ((block_size % group_size) == 0)
+                valid_params.push_back(block_size*1000000 + stride*100 + group_size);
             }
         }
 
@@ -468,6 +442,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                 unsigned int stride = (param % 1000000 ) / 100;
                 unsigned int group_size = param % 100;
 
+                unsigned int block_size_overlaps = 512; // for now
+
                 auto args = detail::hpmc_args_t(d_postype.data,
                         d_orientation.data,
                         d_counters.data,
@@ -514,7 +490,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         d_queue_j.data,
                         d_cell_overlaps.data,
                         m_queue_indexer.getH(),
-                        this->m_exec_conf->isCUDAErrorCheckingEnabled());
+                        this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                        block_size_overlaps);
 
                 if (this->m_exec_conf->getComputeCapability() < 350)
                     {
@@ -560,6 +537,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         unsigned int group_size = param % 100;
 
                         m_tuner_implicit->begin();
+
+                        unsigned int block_size_overlaps = 512; // for now
 
                         // kernel parameters
                         auto args =   detail::hpmc_implicit_args_new_t(d_postype.data,
@@ -607,7 +586,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 first,
                                 this->getDepletantDensity(),
                                 m_stream,
-                                this->m_exec_conf->isCUDAErrorCheckingEnabled());
+                                this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                                block_size_overlaps);
 
                         if (this->m_exec_conf->getComputeCapability() < 350)
                             {
@@ -676,7 +656,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 first,
                                 this->getDepletantDensity(),
                                 m_stream,
-                                this->m_exec_conf->isCUDAErrorCheckingEnabled()),
+                                this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                                block_size_overlaps),
                             params.data());
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())

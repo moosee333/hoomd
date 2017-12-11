@@ -81,7 +81,8 @@ struct hpmc_args_t
                 unsigned int *_d_queue_j = NULL,
                 unsigned int *_d_cell_overlaps = NULL,
                 unsigned int _max_gmem_queue_size = 0,
-                bool _check_cuda_errors = false)
+                bool _check_cuda_errors = false,
+                unsigned int _block_size_overlaps = 0)
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
                   d_counters(_d_counters),
@@ -128,7 +129,8 @@ struct hpmc_args_t
                   d_queue_j(_d_queue_j),
                   d_cell_overlaps(_d_cell_overlaps),
                   max_gmem_queue_size(_max_gmem_queue_size),
-                  check_cuda_errors(_check_cuda_errors)
+                  check_cuda_errors(_check_cuda_errors),
+                  block_size_overlaps(_block_size_overlaps)
         {
         };
 
@@ -179,6 +181,7 @@ struct hpmc_args_t
     unsigned int *d_cell_overlaps;    //!< Result of overlap check per active cell
     unsigned int max_gmem_queue_size; //!< Maximum length of global memory queue
     bool check_cuda_errors;           //!< True if CUDA error checking in child kernel is enabled
+    unsigned int block_size_overlaps; //!< Block size for overlap check kernel
     };
 
 cudaError_t gpu_hpmc_excell(unsigned int *d_excell_idx,
@@ -954,7 +957,8 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                                      unsigned int *d_queue_j,
                                      unsigned int *d_cell_overlaps,
                                      unsigned int max_gmem_queue_size,
-                                     bool check_cuda_errors
+                                     bool check_cuda_errors,
+                                     unsigned int child_block_size
                                      )
     {
     // flags to tell what type of thread we are
@@ -1299,8 +1303,6 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
             Shape shape_j(quat<Scalar>(), s_params[check_type_j]);
 
             unsigned int n_threads = get_num_requested_threads(shape_i, shape_j);
-
-            unsigned int child_block_size = 256; // for now
 
             // shape parallelism in .x index
             dim3 grid(n_threads/child_block_size+1, 1,1);
@@ -1673,7 +1675,6 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     assert(args.d_a);
     assert(args.d_check_overlaps);
     assert(args.group_size >= 1);
-    assert(args.stride >= 1);
 
     // determine the maximum block size and clamp the input block size down
     static int max_block_size = -1;
@@ -1703,14 +1704,13 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     // therefore we have to minimize over the two max block sizes
     block_size = min(block_size, (unsigned int) max_block_size_overlaps);
 
-    // the new block size might not fit the group size and stride, decrease group size until it is
-    unsigned int stride = min(block_size, args.stride);
-    while (stride*group_size > block_size)
+    // the new block size might not fit the group size, decrease group size until it is
+    while (block_size % group_size)
         {
         group_size--;
         }
 
-    unsigned int n_groups = block_size / (group_size * stride);
+    unsigned int n_groups = block_size / group_size;
     unsigned int max_queue_size = n_groups*group_size;
     unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
                                 max_queue_size * 2 * sizeof(unsigned int) + 
@@ -1729,17 +1729,15 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
         if (block_size == 0)
             throw std::runtime_error("Insufficient shared memory for HPMC kernel");
 
-        // the new block size might not fit the group size and stride, decrease group size until it is
-        stride = args.stride;
+        // the new block size might not fit the group size, decrease group size until it is
         group_size = args.group_size;
 
-        unsigned int stride = min(block_size, args.stride);
-        while (stride*group_size > block_size)
+        while (block_size % group_size)
             {
             group_size--;
             }
 
-        n_groups = block_size / (group_size * stride);
+        n_groups = block_size / group_size;
         max_queue_size = n_groups*group_size;
         shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
                        max_queue_size * 2 * sizeof(unsigned int) +
@@ -1773,6 +1771,8 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     // setup the grid to run the kernel
     dim3 threads(group_size, n_groups,1);
     dim3 grid( args.n_active_cells / n_groups + 1, 1, 1);
+
+    unsigned int block_size_overlaps = min(args.block_size_overlaps, max_block_size_overlaps);
 
     gpu_hpmc_mpmc_dp_kernel<Shape><<<grid, threads, shared_bytes, args.stream>>>(args.d_postype,
                                                                  args.d_orientation,
@@ -1815,7 +1815,8 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
                                                                  args.d_queue_j,
                                                                  args.d_cell_overlaps,
                                                                  args.max_gmem_queue_size,
-                                                                 args.check_cuda_errors);
+                                                                 args.check_cuda_errors,
+                                                                 block_size_overlaps);
 
     return cudaSuccess;
     }

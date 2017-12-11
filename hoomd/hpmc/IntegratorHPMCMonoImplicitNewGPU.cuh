@@ -81,7 +81,8 @@ struct hpmc_implicit_args_new_t
                 bool _update_shape_param,
                 Scalar _fugacity,
                 cudaStream_t _stream,
-                bool _check_cuda_errors
+                bool _check_cuda_errors,
+                unsigned int _block_size_overlaps
                 )
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
@@ -128,7 +129,8 @@ struct hpmc_implicit_args_new_t
                   update_shape_param(_update_shape_param),
                   fugacity(_fugacity),
                   stream(_stream),
-                  check_cuda_errors(_check_cuda_errors)
+                  check_cuda_errors(_check_cuda_errors),
+                  block_size_overlaps(_block_size_overlaps)
         {
         };
 
@@ -178,6 +180,7 @@ struct hpmc_implicit_args_new_t
     Scalar fugacity;                   //!< Depletant fugacity
     cudaStream_t stream;               //!< CUDA stream for kernel execution
     bool check_cuda_errors;            //!< Whether to check CUDA errors of child kernel launches
+    unsigned int block_size_overlaps;  //!< Block size for overlap check kernel
     };
 
 template< class Shape >
@@ -1762,7 +1765,6 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     assert(args.d_cell_set);
     assert(args.d_check_overlaps);
     assert(args.group_size >= 1);
-    assert(args.stride >= 1);
 
     // determine the maximum block size and clamp the input block size down
     static int max_block_size = -1;
@@ -1779,22 +1781,15 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     // choose a block size based on the max block size by regs (max_block_size) and include dynamic shared memory usage
     unsigned int block_size = min(args.block_size, (unsigned int)max_block_size);
 
-    // ensure block_size is a multiple of stride
-    unsigned int stride = args.stride;
-    while (block_size % stride)
-        {
-        stride--;
-        }
-
     // the new block size might not be a multiple of group size, decrease group size until it is
     group_size = args.group_size;
 
-    while (block_size % (stride*group_size))
+    while (block_size % (group_size))
         {
         group_size--;
         }
 
-    unsigned int n_groups = block_size / (group_size * stride);
+    unsigned int n_groups = block_size / (group_size);
     unsigned int max_queue_size = n_groups*group_size;
 
     unsigned int min_shared_bytes = args.num_types * sizeof(typename Shape::param_type) +
@@ -1813,15 +1808,12 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
         if (block_size == 0)
             throw std::runtime_error("Insufficient shared memory for HPMC kernel");
 
-        group_size = args.group_size;
-
-        stride = min(block_size, args.stride);
-        while (stride*group_size > block_size)
+        while (block_size % group_size)
             {
             group_size--;
             }
 
-        n_groups = block_size / (group_size * stride);
+        n_groups = block_size / (group_size);
         max_queue_size = n_groups*group_size;
         shared_bytes = n_groups * 3*sizeof(unsigned int) +
                        max_queue_size*(sizeof(unsigned int) + sizeof(unsigned int)) +
@@ -1837,7 +1829,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
         }
 
     // clamp down child kernel block size
-    unsigned int block_size_overlaps = min(max_block_size_overlaps, 512); // 512 for now
+    unsigned int block_size_overlaps = min(max_block_size_overlaps, args.block_size_overlaps);
 
     // manage extra shared memory in nested kernel
     static unsigned int base_shared_bytes = UINT_MAX;

@@ -169,7 +169,7 @@ struct ShapePolyhedron
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
     HOSTDEVICE static bool isParallel()
         {
-        #if 0 && defined(LEAVES_AGAINST_TREE_TRAVERSAL)
+        #if defined(LEAVES_AGAINST_TREE_TRAVERSAL)
         return true;
         #else
         return false;
