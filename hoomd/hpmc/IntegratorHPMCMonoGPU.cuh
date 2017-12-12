@@ -82,7 +82,8 @@ struct hpmc_args_t
                 unsigned int *_d_cell_overlaps = NULL,
                 unsigned int _max_gmem_queue_size = 0,
                 bool _check_cuda_errors = false,
-                unsigned int _block_size_overlaps = 0)
+                unsigned int _block_size_overlaps = 0,
+                bool _load_shared = false)
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
                   d_counters(_d_counters),
@@ -130,7 +131,8 @@ struct hpmc_args_t
                   d_cell_overlaps(_d_cell_overlaps),
                   max_gmem_queue_size(_max_gmem_queue_size),
                   check_cuda_errors(_check_cuda_errors),
-                  block_size_overlaps(_block_size_overlaps)
+                  block_size_overlaps(_block_size_overlaps),
+                  load_shared(_load_shared)
         {
         };
 
@@ -182,6 +184,7 @@ struct hpmc_args_t
     unsigned int max_gmem_queue_size; //!< Maximum length of global memory queue
     bool check_cuda_errors;           //!< True if CUDA error checking in child kernel is enabled
     unsigned int block_size_overlaps; //!< Block size for overlap check kernel
+    bool load_shared;                 //!< Whether to load extra shape data into shared mem or fetch from managed mem
     };
 
 cudaError_t gpu_hpmc_excell(unsigned int *d_excell_idx,
@@ -815,7 +818,8 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
                 const Scalar4 *d_queue_postype,
                 const Scalar4 *d_queue_orientation,
                 const unsigned int *d_queue_j,
-                unsigned int *d_cell_overlaps)
+                unsigned int *d_cell_overlaps,
+                bool load_shared)
     {
     // fetch from queue
     unsigned int qidx = queue_idx(i_queue,offset);
@@ -871,14 +875,17 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
 
     __syncthreads();
 
-    // initialize extra shared mem
-    char *s_extra = (char *)(s_check_overlaps + overlap_idx.getNumElements());
+    if (load_shared)
+        {
+        // initialize extra shared mem
+        char *s_extra = (char *)(s_check_overlaps + overlap_idx.getNumElements());
 
-    unsigned int available_bytes = max_extra_bytes;
-    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
-        s_params[cur_type].load_shared(s_extra, available_bytes);
+        unsigned int available_bytes = max_extra_bytes;
+        for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+            s_params[cur_type].load_shared(s_extra, available_bytes);
 
-    __syncthreads();
+        __syncthreads();
+        }
 
     // load from queue
     Scalar4 postype_i = d_queue_postype[qidx];
@@ -953,6 +960,7 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                                      unsigned int *d_active_cell_move_type_translate,
                                      const typename Shape::param_type *d_params,
                                      unsigned int max_queue_size,
+                                     unsigned int extra_bytes,
                                      unsigned int max_extra_bytes,
                                      Index2D queue_idx,
                                      unsigned int *d_queue_active_cell_idx,
@@ -962,7 +970,8 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                                      unsigned int *d_cell_overlaps,
                                      unsigned int max_gmem_queue_size,
                                      bool check_cuda_errors,
-                                     unsigned int child_block_size
+                                     unsigned int child_block_size,
+                                     bool load_shared
                                      )
     {
     // flags to tell what type of thread we are
@@ -1295,9 +1304,9 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
         if (tidx_1d < n_overlap_checks)
             {
             #if (__CUDA_ARCH__ > 300)
-            unsigned int shared_bytes = max_extra_bytes;
-            shared_bytes += num_types*sizeof(Shape::param_type);
+            unsigned int shared_bytes = num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
+            if (load_shared) shared_bytes += extra_bytes;
 
             // get requested launch configuration
             unsigned int check_group = s_queue_gid[tidx_1d];
@@ -1330,7 +1339,8 @@ __global__ void gpu_hpmc_mpmc_dp_kernel(Scalar4 *d_postype,
                 d_queue_postype,
                 d_queue_orientation,
                 d_queue_j,
-                d_cell_overlaps);
+                d_cell_overlaps,
+                load_shared);
 
             if (check_cuda_errors)
                 {
@@ -1783,19 +1793,23 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     // http://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
     unsigned int max_extra_bytes = max(0,32768 - base_shared_bytes);
     static unsigned int extra_bytes = UINT_MAX;
-    if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
-        {
-        // required for memory coherency
-        cudaDeviceSynchronize();
 
-        // determine dynamically requested shared memory
-        char *ptr = (char *)nullptr;
-        unsigned int available_bytes = max_extra_bytes;
-        for (unsigned int i = 0; i < args.num_types; ++i)
+    if (args.load_shared)
+        {
+        if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
             {
-            params[i].load_shared(ptr, available_bytes);
+            // required for memory coherency
+            cudaDeviceSynchronize();
+
+            // determine dynamically requested shared memory
+            char *ptr = (char *)nullptr;
+            unsigned int available_bytes = max_extra_bytes;
+            for (unsigned int i = 0; i < args.num_types; ++i)
+                {
+                params[i].load_shared(ptr, available_bytes);
+                }
+            extra_bytes = max_extra_bytes - available_bytes;
             }
-        extra_bytes = max_extra_bytes - available_bytes;
         }
 
     // setup the grid to run the kernel
@@ -1837,6 +1851,7 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
                                                                  args.d_active_cell_move_type_translate,
                                                                  params,
                                                                  max_queue_size,
+                                                                 extra_bytes,
                                                                  max_extra_bytes,
                                                                  args.queue_idx,
                                                                  args.d_queue_active_cell_idx,
@@ -1846,7 +1861,8 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
                                                                  args.d_cell_overlaps,
                                                                  args.max_gmem_queue_size,
                                                                  args.check_cuda_errors,
-                                                                 block_size_overlaps);
+                                                                 block_size_overlaps,
+                                                                 args.load_shared);
 
     return cudaSuccess;
     }

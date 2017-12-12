@@ -82,7 +82,8 @@ struct hpmc_implicit_args_new_t
                 Scalar _fugacity,
                 cudaStream_t _stream,
                 bool _check_cuda_errors,
-                unsigned int _block_size_overlaps
+                unsigned int _block_size_overlaps,
+                bool _load_shared
                 )
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
@@ -130,7 +131,8 @@ struct hpmc_implicit_args_new_t
                   fugacity(_fugacity),
                   stream(_stream),
                   check_cuda_errors(_check_cuda_errors),
-                  block_size_overlaps(_block_size_overlaps)
+                  block_size_overlaps(_block_size_overlaps),
+                  load_shared(_load_shared)
         {
         };
 
@@ -181,6 +183,7 @@ struct hpmc_implicit_args_new_t
     cudaStream_t stream;               //!< CUDA stream for kernel execution
     bool check_cuda_errors;            //!< Whether to check CUDA errors of child kernel launches
     unsigned int block_size_overlaps;  //!< Block size for overlap check kernel
+    bool load_shared;                  //!< Whether to load extra shape data into shared mem or fetch from managed memory
     };
 
 template< class Shape >
@@ -709,7 +712,8 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                                      unsigned int depletant_type,
                                      const Scalar4 *d_postype_old,
                                      const Scalar4 *d_orientation_old,
-                                     unsigned int *d_overlap_cell)
+                                     unsigned int *d_overlap_cell,
+                                     bool load_shared)
     {
     extern __shared__ char s_data[];
 
@@ -743,14 +747,17 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
     __syncthreads();
 
-    // initialize extra shared mem
-    char *s_extra = (char *) (s_check_overlaps + overlap_idx.getNumElements());
+    if (load_shared)
+        {
+        // initialize extra shared mem
+        char *s_extra = (char *) (s_check_overlaps + overlap_idx.getNumElements());
 
-    unsigned int available_bytes = max_extra_bytes;
-    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
-        s_params[cur_type].load_shared(s_extra, available_bytes);
+        unsigned int available_bytes = max_extra_bytes;
+        for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+            s_params[cur_type].load_shared(s_extra, available_bytes);
 
-    __syncthreads();
+        __syncthreads();
+        }
 
     // index of depletant we handle
     unsigned int tidx = blockIdx.y*blockDim.y + threadIdx.y;
@@ -1074,7 +1081,8 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                                      hpmc_implicit_counters_t *d_implicit_counters,
                                      Scalar fugacity,
                                      unsigned int block_size_overlaps,
-                                     bool check_cuda_errors)
+                                     bool check_cuda_errors,
+                                     bool load_shared)
     {
     // flags to tell what type of thread we are
     unsigned int group = threadIdx.y;
@@ -1373,9 +1381,9 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             dim3 grid(1,n_depletants / block_size_overlaps + 1,1);
             dim3 threads(1,block_size_overlaps,1);
 
-            unsigned int shared_bytes = extra_bytes;
-            shared_bytes += num_types*sizeof(Shape::param_type);
+            unsigned int shared_bytes = num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
+            if (load_shared) shared_bytes += extra_bytes;
 
             // only launch when necessary
             if (n_depletants > 0)
@@ -1425,7 +1433,8 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                     depletant_type,
                     d_postype_old,
                     d_orientation_old,
-                    d_overlap_cell
+                    d_overlap_cell,
+                    load_shared
                     );
 
                 if (check_cuda_errors)
@@ -1801,23 +1810,27 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     bool shared_bytes_changed = base_shared_bytes != shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
     base_shared_bytes = shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
 
-    // NVIDIA recommends not using more than 32k of shared memory per block
-    // http://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
     unsigned int max_extra_bytes = max(0,32768 - base_shared_bytes);
     static unsigned int extra_bytes = UINT_MAX;
-    if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
-        {
-        // required for memory coherency
-        cudaDeviceSynchronize();
 
-        // determine dynamically requested shared memory
-        char *ptr = (char *) nullptr;
-        unsigned int available_bytes = max_extra_bytes;
-        for (unsigned int i = 0; i < args.num_types; ++i)
+    if (args.load_shared)
+        {
+        // NVIDIA recommends not using more than 32k of shared memory per block
+        // http://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
+        if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
             {
-            params[i].load_shared(ptr, available_bytes);
+            // required for memory coherency
+            cudaDeviceSynchronize();
+
+            // determine dynamically requested shared memory
+            char *ptr = (char *) nullptr;
+            unsigned int available_bytes = max_extra_bytes;
+            for (unsigned int i = 0; i < args.num_types; ++i)
+                {
+                params[i].load_shared(ptr, available_bytes);
+                }
+            extra_bytes = max_extra_bytes - available_bytes;
             }
-        extra_bytes = max_extra_bytes - available_bytes;
         }
 
     // setup the grid to run the kernel
@@ -1894,7 +1907,8 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
                                                                  args.d_implicit_count,
                                                                  args.fugacity,
                                                                  block_size_overlaps,
-                                                                 args.check_cuda_errors);
+                                                                 args.check_cuda_errors,
+                                                                 args.load_shared);
     return cudaSuccess;
     }
 

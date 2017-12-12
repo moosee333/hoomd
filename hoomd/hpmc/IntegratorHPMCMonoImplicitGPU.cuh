@@ -98,8 +98,7 @@ struct hpmc_implicit_args_t
                 const Scalar *_d_d_max,
                 bool _update_shape_param,
                 mgpu::ContextPtr _mgpu_context,
-                cudaStream_t _stream
-                )
+                cudaStream_t _stream)
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
                   d_postype_old(_d_postype_old),

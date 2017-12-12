@@ -178,16 +178,20 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
 
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
 
-    // may need to make outer loop contingent on whether shape is parallel
-    for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
-        block_size_overlaps += dev_prop.warpSize)
+    // whether to load extra data into shared mem or fetch directly from global mem
+    for (unsigned int load_shared = 0; load_shared < 2; ++load_shared)
         {
-        for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
+        // may need this loop contingent on whether shape is parallel
+        for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
+            block_size_overlaps += dev_prop.warpSize)
             {
-            for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+            for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
                 {
-                if ((block_size % group_size) == 0)
-                    valid_params.push_back(block_size*1000000 + block_size_overlaps*100 + group_size);
+                for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+                    {
+                    if ((block_size % group_size) == 0)
+                        valid_params.push_back(block_size*1000000 + block_size_overlaps*100 + group_size + load_shared * dev_prop.warpSize);
+                    }
                 }
             }
         }
@@ -440,10 +444,13 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                 // move particles
                 this->m_tuner_update->begin();
 
+                auto dev_prop = this->m_exec_conf->dev_prop;
+
                 unsigned int param = this->m_tuner_update->getParam();
                 unsigned int block_size = param / 1000000;
                 unsigned int block_size_overlaps = (param % 1000000 ) / 100;
-                unsigned int group_size = param % 100;
+                unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
+                bool load_shared = ((param % 100)-1) / (dev_prop.warpSize);
 
                 auto args = detail::hpmc_args_t(d_postype.data,
                         d_orientation.data,
@@ -478,7 +485,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         group_size,
                         this->m_hasOrientation,
                         this->m_pdata->getMaxN(),
-                        this->m_exec_conf->dev_prop,
+                        dev_prop,
                         first,
                         m_stream,
                         have_depletants ? d_active_cell_ptl_idx.data : 0,
@@ -492,7 +499,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         d_cell_overlaps.data,
                         m_queue_indexer.getH(),
                         this->m_exec_conf->isCUDAErrorCheckingEnabled(),
-                        block_size_overlaps);
+                        block_size_overlaps,
+                        load_shared);
 
                 if (this->m_exec_conf->getComputeCapability() < 350)
                     {
@@ -535,7 +543,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         unsigned int param = m_tuner_implicit->getParam();
                         unsigned int block_size = param / 1000000;
                         unsigned int stride = (param % 1000000) / 100;
-                        unsigned int group_size = param % 100;
+                        unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
+                        bool load_shared = ((param % 100)-1) / (dev_prop.warpSize);
 
                         m_tuner_implicit->begin();
 
@@ -588,7 +597,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 this->getDepletantDensity(),
                                 m_stream,
                                 this->m_exec_conf->isCUDAErrorCheckingEnabled(),
-                                block_size_overlaps);
+                                block_size_overlaps,
+                                load_shared);
 
                         if (this->m_exec_conf->getComputeCapability() < 350)
                             {
@@ -658,7 +668,9 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 this->getDepletantDensity(),
                                 m_stream,
                                 this->m_exec_conf->isCUDAErrorCheckingEnabled(),
-                                block_size_overlaps),
+                                block_size_overlaps,
+                                false // load_shared
+                                ),
                             params.data());
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
