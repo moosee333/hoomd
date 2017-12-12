@@ -232,7 +232,7 @@ class polyhedron_params(_hpmc.polyhedron_param_proxy, _param):
         string = "polyhedron(vertices = {}, faces = {}, overlap = {}, colors= {}, sweep_radius = {}, capacity = {}, origin = {})".format(self.vertices, self.faces, self.overlap, self.colors, self.sweep_radius, self.capacity, self.hull_only);
         return string;
 
-    def make_param(self, vertices, faces, sweep_radius=0.0, ignore_statistics=False, origin=(0,0,0), capacity=4, hull_only=True, overlap=None, parallel_depth=0):
+    def make_param(self, vertices, faces, sweep_radius=0.0, ignore_statistics=False, origin=(0,0,0), capacity=4, hull_only=True, overlap=None, entry_depth=-1):
         face_offs = []
         face_verts = []
         offs = 0
@@ -267,7 +267,7 @@ class polyhedron_params(_hpmc.polyhedron_param_proxy, _param):
                             capacity,
                             self.ensure_list(origin),
                             int(hull_only),
-                            int(parallel_depth),
+                            int(entry_depth),
                             hoomd.context.current.system_definition.getParticleData().getExecConf());
 
 class faceted_sphere_params(_hpmc.faceted_sphere_param_proxy, _param):

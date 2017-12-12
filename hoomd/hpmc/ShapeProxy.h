@@ -159,7 +159,7 @@ inline ShapePolyhedron::param_type make_poly3d_data(pybind11::list verts,pybind1
                              unsigned int leaf_capacity,
                              pybind11::list origin,
                              unsigned int hull_only,
-                             int parallel_depth,
+                             int entry_depth,
                              std::shared_ptr<ExecutionConfiguration> exec_conf)
     {
     ShapePolyhedron::param_type result;
@@ -266,16 +266,13 @@ inline ShapePolyhedron::param_type make_poly3d_data(pybind11::list verts,pybind1
 
     OBBTree tree;
     tree.buildTree(obbs, internal_coordinates, result.sweep_radius, len(face_offs)-1, leaf_capacity, is_sphere);
+    result.tree = GPUTree(tree, exec_conf->isCUDAEnabled(), entry_depth);
 
-    if (parallel_depth > 0 && (unsigned int) parallel_depth > tree.getMaxBalancedDepth())
+    if (result.tree.getNumEntryPoints() == 0)
         {
         // if the shape's tree isn't deep enough, warn the user
-        exec_conf->msg->warning() << "Balanced tree depth smaller than requested parallel depth. Disabling parallel tree traversal." << std::endl;
+        exec_conf->msg->warning() << "Tree depth smaller than requested entry depth. Disabling parallel tree traversal." << std::endl;
         result.tree = GPUTree(tree, exec_conf->isCUDAEnabled(), 0);
-        }
-    else
-        {
-        result.tree = GPUTree(tree, exec_conf->isCUDAEnabled(), parallel_depth);
         }
 
     delete [] obbs;
