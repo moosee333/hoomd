@@ -258,6 +258,11 @@ class GPUTree
             return obb;
             }
 
+        DEVICE inline vec3<OverlapReal> getCenter(unsigned int idx) const
+            {
+            return m_center[idx];
+            }
+
         #ifdef ENABLE_CUDA
         //! Attach managed memory to CUDA stream
         void attach_to_stream(cudaStream_t stream) const
@@ -341,7 +346,7 @@ class GPUTree
     \param b_ascent Number of ascents in b (return variable)
  */
 DEVICE inline void findAscent(unsigned int a_count, unsigned int b_count, unsigned long int &stack,
-    unsigned int& a_ascent, unsigned int& b_ascent)
+    unsigned int& a_ascent, unsigned int& b_ascent, unsigned long int &swap_a, unsigned long int &swap_b)
     {
     a_ascent = 0;
     b_ascent = 0;
@@ -353,6 +358,7 @@ DEVICE inline void findAscent(unsigned int a_count, unsigned int b_count, unsign
             if (a_count > 0)
                 {
                 stack >>= 1; // pop
+                swap_a >>=1; // pop
                 a_count--;
                 a_ascent++;
                 }
@@ -364,6 +370,7 @@ DEVICE inline void findAscent(unsigned int a_count, unsigned int b_count, unsign
             if (b_count > 0)
                 {
                 stack >>= 1; // pop
+                swap_b >>=1; // pop
                 b_count--;
                 b_ascent++;
                 }
@@ -401,7 +408,8 @@ DEVICE inline void findAscent(unsigned int a_count, unsigned int b_count, unsign
  *     }
  */
 DEVICE inline bool traverseBinaryStack(const GPUTree& a, const GPUTree &b, unsigned int& cur_node_a, unsigned int& cur_node_b,
-    unsigned long int &stack, OBB& obb_a, OBB& obb_b, const quat<OverlapReal>& q, const vec3<OverlapReal>& dr)
+    unsigned long int &stack, unsigned long int& swap_a, unsigned long int &swap_b,
+    OBB& obb_a, OBB& obb_b, const quat<OverlapReal>& q, const vec3<OverlapReal>& dr)
     {
     bool leaf = false;
     bool ascend = true;
@@ -422,13 +430,28 @@ DEVICE inline bool traverseBinaryStack(const GPUTree& a, const GPUTree &b, unsig
 
             if (descend_A)
                 {
-                cur_node_a = a.getLeftChild(cur_node_a);
                 stack <<= 1; // push A
+                cur_node_a = a.getLeftChild(cur_node_a);
+                unsigned int right = a.getEscapeIndex(cur_node_a);
+
+                // descend in the direction that moves closer to b
+                vec3<OverlapReal> dr_left(obb_b.center-a.getCenter(cur_node_a));
+                vec3<OverlapReal> dr_right(obb_b.center-a.getCenter(right));
+
+                swap_a <<= dot(dr_left,dr_left) > dot(dr_right,dr_right);
                 }
             else
                 {
                 cur_node_b = b.getLeftChild(cur_node_b);
                 stack <<= 1; stack |= 1; // push B
+
+                unsigned int right = b.getEscapeIndex(cur_node_b);
+
+                // descend in the direction that moves closer to a
+                vec3<OverlapReal> dr_left(obb_a.center-b.getCenter(cur_node_b));
+                vec3<OverlapReal> dr_right(obb_a.center-b.getCenter(right));
+
+                swap_b <<= dot(dr_left,dr_left) > dot(dr_right,dr_right);
                 }
             ascend = false;
             }
@@ -441,7 +464,8 @@ DEVICE inline bool traverseBinaryStack(const GPUTree& a, const GPUTree &b, unsig
         unsigned int b_count = b.getNumAncestors(cur_node_b);
 
         unsigned int a_ascent, b_ascent;
-        findAscent(a_count, b_count, stack, a_ascent, b_ascent);
+        findAscent(a_count, b_count, stack, a_ascent, b_ascent,
+            swap_a, swap_b);
 
         if ((stack & 1) == 0) // top of stack == A
             {
@@ -457,16 +481,54 @@ DEVICE inline bool traverseBinaryStack(const GPUTree& a, const GPUTree &b, unsig
             cur_node_b = b.getEscapeIndex(cur_node_b);
             }
         }
-    if (cur_node_a < a.getNumNodes() && cur_node_b < b.getNumNodes())
+
+    // pre-fetch OBBs
+    if (old_a != cur_node_a)
         {
-        // pre-fetch OBBs
-        if (old_a != cur_node_a)
+        unsigned int real_node_a = cur_node_a;
+        if (swap_a & 1)
             {
-            obb_a = a.getOBB(cur_node_a);
+            // swap left and right
+            if (a.getNumAncestors(cur_node_a))
+                {
+                // is right node, return left node
+                real_node_a = cur_node_a-1;
+                }
+            else
+                {
+                real_node_a = a.getEscapeIndex(cur_node_a);
+                }
+            }
+
+        if (real_node_a < a.getNumNodes())
+            {
+            obb_a = a.getOBB(real_node_a);
             obb_a.affineTransform(q, dr);
             }
-        if (old_b != cur_node_b)
-            obb_b = b.getOBB(cur_node_b);
+        }
+
+    if (old_b != cur_node_b)
+        {
+        unsigned int real_node_b = cur_node_b;
+
+        if (swap_b & 1)
+            {
+            // swap left and right
+            if (b.getNumAncestors(cur_node_b))
+                {
+                // is right node, return left node
+                real_node_b = cur_node_b-1;
+                }
+            else
+                {
+                real_node_b = b.getEscapeIndex(cur_node_b);
+                }
+            }
+
+        if (real_node_b < b.getNumNodes())
+            {
+            obb_b = b.getOBB(real_node_b);
+            }
         }
 
     return leaf;

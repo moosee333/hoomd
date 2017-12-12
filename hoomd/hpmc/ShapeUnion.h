@@ -306,6 +306,9 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
     #else
     // perform a tandem tree traversal
     unsigned long int stack = 0;
+    unsigned long int swap_a = 0;
+    unsigned long int swap_b = 0;
+
     unsigned int cur_node_a = 0;
     unsigned int cur_node_b = 0;
 
@@ -322,7 +325,7 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
         unsigned int query_node_a = cur_node_a;
         unsigned int query_node_b = cur_node_b;
 
-        if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, obb_a, obb_b, q, dr_rot)
+        if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, swap_a, swap_b, obb_a, obb_b, q, dr_rot)
             && test_narrow_phase_overlap(r_ab, a, b, query_node_a, query_node_b)) return true;
         }
     #endif
