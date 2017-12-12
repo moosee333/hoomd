@@ -1188,13 +1188,6 @@ class polyhedron(mode_hpmc):
 
         * .. versionadded:: 2.2
 
-    * *entry_depth* (**default: -1**) - on the GPU, the choice of tree entry depth determines at which level
-        parallelism is used in checking collisions. If 0, no parallelism is exploited (entry at root node),
-        if -1 full parallelism over the leaf nodes of one of the shapes is used. With finite values,
-        parallel performance can be tweaked. The depth of the tree is affected by the leaf node **capacity**.
-
-        * .. versionadded:: 2.2
-
     Warning:
         HPMC does not check that all requirements are met. Undefined behavior will result if they are
         violated.

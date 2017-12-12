@@ -33,16 +33,15 @@ class GPUTree
     public:
         //! Empty constructor
         GPUTree()
-            : m_num_nodes(0), m_num_leaves(0), m_num_entry_points(0), m_leaf_capacity(0)
+            : m_num_nodes(0), m_num_leaves(0), m_leaf_capacity(0)
             { }
 
         #ifndef NVCC
         //! Constructor
         /*! \param tree OBBTree to construct from
          *  \param managed True if we use CUDA managed memory
-            \param level Level of tree entry points, if -1 use all leaf nodes
          */
-        GPUTree(const OBBTree &tree, bool managed=false, int level = -1)
+        GPUTree(const OBBTree &tree, bool managed=false)
             {
             // allocate
             m_num_nodes = tree.getNumNodes();
@@ -59,7 +58,6 @@ class GPUTree
 
             unsigned int n = 0;
             m_num_leaves = 0;
-            m_num_entry_points = 0;
 
             // load data from AABTree
             for (unsigned int i = 0; i < tree.getNumNodes(); ++i)
@@ -80,23 +78,16 @@ class GPUTree
                     {
                     m_num_leaves++;
                     }
-
-                if ((level >=0 && tree.getLevel(i) == level) ||
-                    (level < 0 && m_left[i] == OBB_INVALID_NODE))
-                    {
-                    m_num_entry_points++;
-                    }
                 }
             m_leaf_ptr[tree.getNumNodes()] = n;
 
-            m_entry_obb_ptr = ManagedArray<unsigned int>(m_num_entry_points, managed);
-            m_num_entry_points = 0;
+            m_leaf_obb_ptr = ManagedArray<unsigned int>(m_num_leaves, managed);
+            m_num_leaves = 0;
             for (unsigned int i =0; i < tree.getNumNodes(); ++i)
                 {
-                if ((level >=0 && tree.getLevel(i) == level) ||
-                    (level < 0 && m_left[i] == OBB_INVALID_NODE))
+                if (m_left[i] == OBB_INVALID_NODE)
                     {
-                    m_entry_obb_ptr[m_num_entry_points++] = i;
+                    m_leaf_obb_ptr[m_num_leaves++] = i;
                     }
                 }
 
@@ -219,21 +210,15 @@ class GPUTree
             }
 
         //! Return the ith leaf node
-        DEVICE inline unsigned int getEntryNode(unsigned int i) const
+        DEVICE inline unsigned int getLeafNode(unsigned int i) const
             {
-            return m_entry_obb_ptr[i];
+            return m_leaf_obb_ptr[i];
             }
 
         //! Return the number of leaf nodes
         DEVICE inline unsigned int getNumLeaves() const
             {
             return m_num_leaves;
-            }
-
-        //! Return the number of entry points
-        DEVICE inline unsigned int getNumEntryPoints() const
-            {
-            return m_num_entry_points;
             }
 
         DEVICE inline unsigned int getParticle(unsigned int node, unsigned int i) const
@@ -289,8 +274,8 @@ class GPUTree
             m_ancestors.attach_to_stream(stream);
 
             m_leaf_ptr.attach_to_stream(stream);
+            m_leaf_obb_ptr.attach_to_stream(stream);
             m_particles.attach_to_stream(stream);
-            m_entry_obb_ptr.attach_to_stream(stream);
             }
         #endif
 
@@ -311,8 +296,8 @@ class GPUTree
             m_ancestors.load_shared(ptr, available_bytes);
 
             m_leaf_ptr.load_shared(ptr, available_bytes);
+            m_leaf_obb_ptr.load_shared(ptr, available_bytes);
             m_particles.load_shared(ptr, available_bytes);
-            m_entry_obb_ptr.load_shared(ptr, available_bytes);
             }
 
         //! Get the capacity of leaf nodes
@@ -329,8 +314,8 @@ class GPUTree
         ManagedArray<unsigned int> m_is_sphere;
 
         ManagedArray<unsigned int> m_leaf_ptr; //!< Pointer to leaf node contents
+        ManagedArray<unsigned int> m_leaf_obb_ptr; //!< Pointer to leaf node OBBs
         ManagedArray<unsigned int> m_particles;        //!< Stores the leaf nodes' indices
-        ManagedArray<unsigned int> m_entry_obb_ptr;    //!< Pointer to entry point node OBBs
 
         ManagedArray<unsigned int> m_left;    //!< Left nodes
         ManagedArray<unsigned int> m_escape;  //!< Escape indices
@@ -338,7 +323,6 @@ class GPUTree
 
         unsigned int m_num_nodes;             //!< Number of nodes in the tree
         unsigned int m_num_leaves;            //!< Number of leaf nodes
-        unsigned int m_num_entry_points;      //!< Number of entry points or leaf nodes
         unsigned int m_leaf_capacity;         //!< Capacity of OBB leaf nodes
     };
 
