@@ -44,7 +44,7 @@
   */
 
 #ifdef NVCC
-//#define LEAVES_AGAINST_TREE_TRAVERSAL
+#define LEAVES_AGAINST_TREE_TRAVERSAL
 #endif
 
 namespace hpmc
@@ -874,11 +874,8 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
     #ifndef NVCC
     if (BVHCollision(a,b,0,0, q, dr_rot, err, abs_tol)) return true;
     #else
-    // traversal on GPU
+    // stackless traversal on GPU
     unsigned long int stack = 0;
-    unsigned long int swap_a = 0;
-    unsigned long int swap_b = 0;
-
     unsigned int cur_node_a = 0;
     unsigned int cur_node_b = 0;
 
@@ -887,12 +884,13 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
 
     detail::OBB obb_b = tree_b.getOBB(cur_node_b);
 
+
     while (cur_node_a != tree_a.getNumNodes() && cur_node_b != tree_b.getNumNodes())
         {
         unsigned int query_node_a = cur_node_a;
         unsigned int query_node_b = cur_node_b;
 
-        if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, swap_a, swap_b, obb_a, obb_b, q,dr_rot)
+        if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, obb_a, obb_b, q,dr_rot)
             && test_narrow_phase_overlap(dr_rot, a, b, query_node_a, query_node_b, err, abs_tol)) return true;
         }
     #endif
