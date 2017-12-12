@@ -178,14 +178,17 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
 
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
 
-    unsigned int stride = 1;
-
-    for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
+    // may need to make outer loop contingent on whether shape is parallel
+    for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
+        block_size_overlaps += dev_prop.warpSize)
         {
-        for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+        for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
             {
-            if ((block_size % group_size) == 0)
-                valid_params.push_back(block_size*1000000 + stride*100 + group_size);
+            for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+                {
+                if ((block_size % group_size) == 0)
+                    valid_params.push_back(block_size*1000000 + block_size_overlaps*100 + group_size);
+                }
             }
         }
 
@@ -439,10 +442,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
                 unsigned int param = this->m_tuner_update->getParam();
                 unsigned int block_size = param / 1000000;
-                unsigned int stride = (param % 1000000 ) / 100;
+                unsigned int block_size_overlaps = (param % 1000000 ) / 100;
                 unsigned int group_size = param % 100;
-
-                unsigned int block_size_overlaps = 512; // for now
 
                 auto args = detail::hpmc_args_t(d_postype.data,
                         d_orientation.data,
@@ -473,7 +474,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         ghost_fraction,
                         domain_decomposition,
                         block_size,
-                        stride,
+                        1, //stride
                         group_size,
                         this->m_hasOrientation,
                         this->m_pdata->getMaxN(),
@@ -533,7 +534,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         // Kernel driver arguments
                         unsigned int param = m_tuner_implicit->getParam();
                         unsigned int block_size = param / 1000000;
-                        unsigned int stride = (param % 1000000 ) / 100;
+                        unsigned int stride = (param % 1000000) / 100;
                         unsigned int group_size = param % 100;
 
                         m_tuner_implicit->begin();
