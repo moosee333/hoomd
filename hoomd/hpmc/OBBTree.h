@@ -52,6 +52,7 @@ struct OBBNode
         {
         left = right = parent = OBB_INVALID_NODE;
         escape = 0;
+        level = 0;
         }
 
     OBB obb;           //!< The box bounding this node's volume
@@ -59,6 +60,7 @@ struct OBBNode
     unsigned int right;  //!< Index of the right child
     unsigned int parent; //!< Index of the parent node
     unsigned int escape; //!< Index of next node in in-order traversal
+    int level;           //!< The node level
 
     std::vector<unsigned int> particles;      //!< Indices of the particles contained in the node
     };
@@ -147,6 +149,14 @@ class OBBTree
             return (m_nodes[node].escape);
             }
 
+        //! Get the depth of a given node
+        /*! \param node Index of the node (not the particle) to query
+        */
+        inline int getLevel(unsigned int node) const
+            {
+            return m_nodes[node].level;
+            }
+
         //! Get the left child of a given node
         /*! \param node Index of the node (not the particle) to query
         */
@@ -199,6 +209,9 @@ class OBBTree
 
         //! Update the escape index for a node
         inline void updateEscapeIndex(unsigned int idx, unsigned int parent_idx);
+
+        //!< Update the level counters
+        inline void updateLevel(unsigned int idx, unsigned int level);
     };
 
 
@@ -239,6 +252,7 @@ inline void OBBTree::buildTree(OBB *obbs, std::vector<std::vector<vec3<OverlapRe
 
     m_root = buildNode(obbs, internal_coordinates, vertex_radii, idx, 0, N, OBB_INVALID_NODE, sphere_tree);
     updateEscapeIndex(m_root,getNumNodes());
+    updateLevel(m_root,0);
     }
 
 /*! \param obbs List of OBBs for each particle (must be 32-byte aligned)
@@ -277,6 +291,7 @@ inline void OBBTree::buildTree(OBB *obbs, unsigned int N, unsigned int leaf_capa
 
     m_root = buildNode(obbs, internal_coordinates, vertex_radii, idx, 0, N, OBB_INVALID_NODE, sphere_tree);
     updateEscapeIndex(m_root, getNumNodes());
+    updateLevel(m_root, 0);
     }
 
 
@@ -423,7 +438,7 @@ inline unsigned int OBBTree::buildNode(OBB *obbs,
 /*! \param idx Index of the node to update
 
     updateEscapeIndex() pdates the escape index of every node in the tree. The escape index is used in the stackless
-    implementation of query. Each node's escape index points to the next node on the same level.
+    implementation of query.
 */
 inline void OBBTree::updateEscapeIndex(unsigned int idx, unsigned int escape)
     {
@@ -437,6 +452,24 @@ inline void OBBTree::updateEscapeIndex(unsigned int idx, unsigned int escape)
     updateEscapeIndex(right_idx, escape);
     updateEscapeIndex(left_idx, right_idx);
     }
+
+/*! \param idx Index of the node to update
+
+    Update the depth information for every node recursively
+*/
+inline void OBBTree::updateLevel(unsigned int idx, unsigned int level)
+    {
+    unsigned int left_idx = m_nodes[idx].left;
+    unsigned int right_idx = m_nodes[idx].right;
+
+    m_nodes[idx].level = level;
+
+    if (isNodeLeaf(idx)) return;
+
+    updateLevel(right_idx, level+1);
+    updateLevel(left_idx, level+1);
+    }
+
 
 /*! Allocates a new node in the tree
 */

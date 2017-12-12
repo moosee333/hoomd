@@ -44,7 +44,7 @@
   */
 
 #ifdef NVCC
-#define LEAVES_AGAINST_TREE_TRAVERSAL
+#define PARALLEL_TRAVERSAL
 #endif
 
 namespace hpmc
@@ -170,7 +170,7 @@ struct ShapePolyhedron
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
     HOSTDEVICE static bool isParallel()
         {
-        #if defined(LEAVES_AGAINST_TREE_TRAVERSAL)
+        #if defined(PARALLEL_TRAVERSAL)
         return true;
         #else
         return false;
@@ -778,11 +778,11 @@ inline bool BVHCollision(const ShapePolyhedron& a, const ShapePolyhedron &b,
  */
 DEVICE inline unsigned int get_num_requested_threads(const ShapePolyhedron& a, const ShapePolyhedron& b)
     {
-    #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
-    if (a.tree.getNumLeaves() < b.tree.getNumLeaves())
-        return a.tree.getNumLeaves();
+    #ifdef PARALLEL_TRAVERSAL
+    if (a.tree.getNumEntryPoints() < b.tree.getNumEntryPoints())
+        return max(1,a.tree.getNumEntryPoints());
     else
-        return b.tree.getNumLeaves();
+        return max(1,b.tree.getNumEntryPoints());
     #else
     return 1;
     #endif
@@ -815,12 +815,12 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
      * a) an edge of one polyhedron intersects the face of the other
      * b) the center of mass of one polyhedron is contained in the other
      */
-    #if defined(NVCC) || defined(LEAVES_AGAINST_TREE_TRAVERSAL)
+    #if defined(NVCC) || defined(PARALLEL_TRAVERSAL)
     const detail::GPUTree& tree_a = a.tree;
     const detail::GPUTree& tree_b = b.tree;
     #endif
 
-    #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
+    #ifdef PARALLEL_TRAVERSAL
     #ifdef NVCC
     // Parallel tree traversal
     unsigned int offset = threadIdx.x + blockIdx.x*blockDim.x;
@@ -830,40 +830,65 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
     unsigned int stride = 1;
     #endif
 
-    if (tree_a.getNumLeaves() <= tree_b.getNumLeaves())
+    if (tree_a.getNumEntryPoints() <= tree_b.getNumEntryPoints())
         {
-        for (unsigned int cur_leaf_a = offset; cur_leaf_a < tree_a.getNumLeaves(); cur_leaf_a += stride)
+        for (unsigned int cur_entry_a = offset; cur_entry_a < tree_a.getNumEntryPoints(); cur_entry_a += stride)
             {
-            unsigned int cur_node_a = tree_a.getLeafNode(cur_leaf_a);
+            unsigned int cur_node_a = tree_a.getEntryNode(cur_entry_a);
             hpmc::detail::OBB obb_a = tree_a.getOBB(cur_node_a);
+
+            unsigned int escape_a = tree_a.getEscapeIndex(cur_node_a);
+
             // rotate and translate a's obb into b's body frame
             vec3<OverlapReal> dr_rot(rotate(conj(b.orientation),-r_ab));
-            obb_a.affineTransform(conj(b.orientation)*a.orientation, dr_rot);
+            quat<OverlapReal> q(conj(b.orientation)*a.orientation);
 
-            unsigned cur_node_b = 0;
-            while (cur_node_b < tree_b.getNumNodes())
+            obb_a.affineTransform(q, dr_rot);
+
+            // stackless binary traversal of subtree against full other tree
+            unsigned long int stack = 0;
+            unsigned int cur_node_b = 0;
+
+            detail::OBB obb_b = tree_b.getOBB(cur_node_b);
+
+            while (cur_node_a != escape_a && cur_node_b != tree_b.getNumNodes())
                 {
-                unsigned int query_node = cur_node_b;
-                if (tree_b.queryNode(obb_a, cur_node_b) && test_narrow_phase_overlap(dr_rot, a, b, cur_node_a, query_node, err, abs_tol)) return true;
+                unsigned int query_node_a = cur_node_a;
+                unsigned int query_node_b = cur_node_b;
+
+                if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, obb_a, obb_b, q,dr_rot)
+                    && test_narrow_phase_overlap(dr_rot, a, b, query_node_a, query_node_b, err, abs_tol)) return true;
                 }
             }
         }
     else
         {
-        for (unsigned int cur_leaf_b = offset; cur_leaf_b < tree_b.getNumLeaves(); cur_leaf_b += stride)
+        for (unsigned int cur_entry_b = offset; cur_entry_b < tree_b.getNumEntryPoints(); cur_entry_b += stride)
             {
-            unsigned int cur_node_b = tree_b.getLeafNode(cur_leaf_b);
+            unsigned int cur_node_b = tree_b.getEntryNode(cur_entry_b);
             hpmc::detail::OBB obb_b = tree_b.getOBB(cur_node_b);
+
+            unsigned int escape_b = tree_b.getEscapeIndex(cur_node_b);
 
             // rotate and translate b's obb into a's body frame
             vec3<OverlapReal> dr_rot(rotate(conj(a.orientation),r_ab));
-            obb_b.affineTransform(conj(a.orientation)*b.orientation, dr_rot);
+            quat<OverlapReal> q(conj(a.orientation)*b.orientation);
 
-            unsigned cur_node_a = 0;
-            while (cur_node_a < tree_a.getNumNodes())
+            obb_b.affineTransform(q, dr_rot);
+
+            // stackless binary traversal of subtree against full other tree
+            unsigned long int stack = 0;
+            unsigned int cur_node_a = 0;
+
+            detail::OBB obb_a = tree_a.getOBB(cur_node_a);
+
+            while (cur_node_a != tree_a.getNumNodes() && cur_node_b != escape_b)
                 {
-                unsigned int query_node = cur_node_a;
-                if (tree_a.queryNode(obb_b, cur_node_a) && test_narrow_phase_overlap(dr_rot, b, a, cur_node_b, query_node, err,abs_tol)) return true;
+                unsigned int query_node_a = cur_node_a;
+                unsigned int query_node_b = cur_node_b;
+
+                if (detail::traverseBinaryStack(tree_b, tree_a, cur_node_b, cur_node_a, stack, obb_b, obb_a, q,dr_rot)
+                    && test_narrow_phase_overlap(dr_rot, b, a, query_node_b, query_node_a, err, abs_tol)) return true;
                 }
             }
         }
@@ -871,29 +896,8 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
     vec3<OverlapReal> dr_rot(rotate(conj(b.orientation),-r_ab));
     quat<OverlapReal> q(conj(b.orientation)*a.orientation);
 
-    #ifndef NVCC
+    // use recursive traversal
     if (BVHCollision(a,b,0,0, q, dr_rot, err, abs_tol)) return true;
-    #else
-    // stackless traversal on GPU
-    unsigned long int stack = 0;
-    unsigned int cur_node_a = 0;
-    unsigned int cur_node_b = 0;
-
-    detail::OBB obb_a = tree_a.getOBB(cur_node_a);
-    obb_a.affineTransform(q, dr_rot);
-
-    detail::OBB obb_b = tree_b.getOBB(cur_node_b);
-
-
-    while (cur_node_a != tree_a.getNumNodes() && cur_node_b != tree_b.getNumNodes())
-        {
-        unsigned int query_node_a = cur_node_a;
-        unsigned int query_node_b = cur_node_b;
-
-        if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, obb_a, obb_b, q,dr_rot)
-            && test_narrow_phase_overlap(dr_rot, a, b, query_node_a, query_node_b, err, abs_tol)) return true;
-        }
-    #endif
     #endif
 
     // no intersecting edge, check if one polyhedron is contained in the other
