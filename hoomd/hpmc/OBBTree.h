@@ -90,7 +90,7 @@ class OBBTree
     public:
         //! Construct an OBBTree
         OBBTree()
-            : m_nodes(0), m_num_nodes(0), m_node_capacity(0), m_leaf_capacity(0), m_root(0)
+            : m_nodes(0), m_num_nodes(0), m_node_capacity(0), m_leaf_capacity(0), m_root(0), m_max_balanced_depth(0)
             {
             }
 
@@ -188,12 +188,19 @@ class OBBTree
             return m_leaf_capacity;
             }
 
+        //! Get the max depth at which the tree is balanced
+        unsigned int getMaxBalancedDepth() const
+            {
+            return m_max_balanced_depth;
+            }
+
     private:
         OBBNode *m_nodes;                  //!< The nodes of the tree
         unsigned int m_num_nodes;           //!< Number of nodes
         unsigned int m_node_capacity;       //!< Capacity of the nodes array
         unsigned int m_leaf_capacity;       //!< Number of particles in leaf nodes
         unsigned int m_root;                //!< Index to the root node of the tree
+        unsigned int m_max_balanced_depth;  //!< Deepest level at which the tree is balanced
 
         //! Initialize the tree to hold N particles
         inline void init(unsigned int N);
@@ -211,7 +218,9 @@ class OBBTree
         inline void updateEscapeIndex(unsigned int idx, unsigned int parent_idx);
 
         //!< Update the level counters
-        inline void updateLevel(unsigned int idx, unsigned int level);
+        /*! \returns the deepest level at which the tree is fully balanced
+         */
+        inline unsigned updateLevel(unsigned int idx, unsigned int level);
     };
 
 
@@ -252,7 +261,7 @@ inline void OBBTree::buildTree(OBB *obbs, std::vector<std::vector<vec3<OverlapRe
 
     m_root = buildNode(obbs, internal_coordinates, vertex_radii, idx, 0, N, OBB_INVALID_NODE, sphere_tree);
     updateEscapeIndex(m_root,getNumNodes());
-    updateLevel(m_root,0);
+    m_max_balanced_depth =  updateLevel(m_root,0);
     }
 
 /*! \param obbs List of OBBs for each particle (must be 32-byte aligned)
@@ -291,7 +300,7 @@ inline void OBBTree::buildTree(OBB *obbs, unsigned int N, unsigned int leaf_capa
 
     m_root = buildNode(obbs, internal_coordinates, vertex_radii, idx, 0, N, OBB_INVALID_NODE, sphere_tree);
     updateEscapeIndex(m_root, getNumNodes());
-    updateLevel(m_root, 0);
+    m_max_balanced_depth =  updateLevel(m_root,0);
     }
 
 
@@ -457,17 +466,16 @@ inline void OBBTree::updateEscapeIndex(unsigned int idx, unsigned int escape)
 
     Update the depth information for every node recursively
 */
-inline void OBBTree::updateLevel(unsigned int idx, unsigned int level)
+inline unsigned int OBBTree::updateLevel(unsigned int idx, unsigned int level)
     {
     unsigned int left_idx = m_nodes[idx].left;
     unsigned int right_idx = m_nodes[idx].right;
 
     m_nodes[idx].level = level;
 
-    if (isNodeLeaf(idx)) return;
+    if (isNodeLeaf(idx)) return level;
 
-    updateLevel(right_idx, level+1);
-    updateLevel(left_idx, level+1);
+    return min(updateLevel(right_idx, level+1),updateLevel(left_idx, level+1));
     }
 
 
