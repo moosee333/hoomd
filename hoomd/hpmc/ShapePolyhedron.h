@@ -44,7 +44,7 @@
   */
 
 #ifdef NVCC
-//#define LEAVES_AGAINST_TREE_TRAVERSAL
+#define LEAVES_AGAINST_TREE_TRAVERSAL
 #endif
 
 namespace hpmc
