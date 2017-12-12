@@ -567,6 +567,7 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
         unsigned int next_offs_end = 0;
         unsigned int next_offs = 0;
         unsigned int next_mask = 0;
+        unsigned int next_v0, next_v1, next_v2;
         if (nb > 0)
             {
             unsigned int jface = b.tree.getParticle(cur_node_b, 0);
@@ -574,6 +575,10 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
             next_offs = b.data.face_offs[jface];
             next_offs_end = b.data.face_offs[jface+1];
             next_mask = b.data.face_overlap[jface];
+
+            next_v0 = b.data.face_verts[next_offs];
+            next_v1 = b.data.face_verts[next_offs+1];
+            next_v2 = b.data.face_verts[next_offs+2];
             }
 
         // loop through faces of cur_node_b
@@ -584,6 +589,10 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
             unsigned int offs_b = next_offs;
             unsigned int mask_b = next_mask;
 
+            unsigned int v0 = next_v0;
+            unsigned int v1 = next_v1;
+            unsigned int v2 = next_v2;
+
             if (j + 1 < nb)
                 {
                 // prefetch
@@ -592,6 +601,10 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
                 next_offs = b.data.face_offs[jface];
                 next_offs_end = b.data.face_offs[jface + 1];
                 next_mask = b.data.face_overlap[jface];
+
+                next_v0 = b.data.face_verts[next_offs];
+                next_v1 = b.data.face_verts[next_offs+1];
+                next_v2 = b.data.face_verts[next_offs+2];
                 }
 
             // only check overlaps if required
@@ -600,9 +613,7 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
             if (nverts_a > 2 && nverts_b > 2)
                 {
                 // check collision between triangles
-                if (NoDivTriTriIsect((float *)&b.data.verts[b.data.face_verts[offs_b]].x,
-                                     (float *)&b.data.verts[b.data.face_verts[offs_b+1]].x,
-                                     (float *)&b.data.verts[b.data.face_verts[offs_b+2]].x,
+                if (NoDivTriTriIsect((float *)&b.data.verts[v0].x, (float *)&b.data.verts[v1].x, (float *)&b.data.verts[v2].x,
                     (float *)&u0.x,(float *)&u1.x,(float *)&u2.x,abs_tol))
                     {
                     return true;
