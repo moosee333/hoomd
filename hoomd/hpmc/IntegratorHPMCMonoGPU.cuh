@@ -817,6 +817,27 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
                 const unsigned int *d_queue_j,
                 unsigned int *d_cell_overlaps)
     {
+    // fetch from queue
+    unsigned int qidx = queue_idx(i_queue,offset);
+    unsigned int active_cell_idx = d_queue_active_cell_idx[qidx];
+
+    // catch an opportunity at early exit using a global mem race
+    __shared__ bool s_early_exit;
+    if (threadIdx.x == 0 && threadIdx.y == 0)
+        s_early_exit = false;
+    __syncthreads();
+
+    if (d_cell_overlaps[active_cell_idx])
+        {
+        s_early_exit = true;
+        }
+    __syncthreads();
+
+    // if early exit, the entire thread block has to leave at once
+    // so that we are not hitting an incomplete barrier below
+    if (s_early_exit)
+        return;
+
     // load the per type pair parameters into shared memory
     extern __shared__ char s_data[];
 
@@ -859,27 +880,10 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
 
     __syncthreads();
 
-    // fetch from queue
-    unsigned int qidx = queue_idx(i_queue,offset);
+    // load from queue
     Scalar4 postype_i = d_queue_postype[qidx];
     Scalar4 orientation_i = d_queue_orientation[qidx];
     unsigned int j = d_queue_j[qidx];
-    unsigned int active_cell_idx = d_queue_active_cell_idx[qidx];
-
-    // catch an opportunity at early exit using a global mem race
-    __shared__ bool s_early_exit;
-    if (threadIdx.x == 0 && threadIdx.y == 0)
-        s_early_exit = false;
-    __syncthreads();
-
-    if (d_cell_overlaps[active_cell_idx])
-        {
-        s_early_exit = true;
-        }
-    __syncthreads();
-
-    if (s_early_exit)
-        return;
 
     unsigned int type_i = __scalar_as_int(postype_i.w);
 
