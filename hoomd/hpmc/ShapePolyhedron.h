@@ -564,17 +564,35 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
             u2 = make_float3(v.x,v.y,v.z);
             }
 
+        unsigned int next_offs_end = 0;
+        unsigned int next_offs = 0;
+        unsigned int next_mask = 0;
+        if (nb > 0)
+            {
+            unsigned int jface = b.tree.getParticle(cur_node_b, 0);
+
+            next_offs = b.data.face_offs[jface];
+            next_offs_end = b.data.face_offs[jface+1];
+            next_mask = b.data.face_overlap[jface];
+            }
+
         // loop through faces of cur_node_b
         for (unsigned int j= 0; j< nb; j++)
             {
-            unsigned int nverts_b, offs_b;
-
-            unsigned int jface = b.tree.getParticle(cur_node_b, j);
-
             // fetch next face of particle b
-            nverts_b = b.data.face_offs[jface + 1] - b.data.face_offs[jface];
-            offs_b = b.data.face_offs[jface];
-            unsigned int mask_b = b.data.face_overlap[jface];
+            unsigned int nverts_b = next_offs-next_offs_end;
+            unsigned int offs_b = next_offs;
+            unsigned int mask_b = next_mask;
+
+            if (j + 1 < nb)
+                {
+                // prefetch
+                unsigned int jface = b.tree.getParticle(cur_node_b, j + 1);
+
+                next_offs = b.data.face_offs[jface];
+                next_offs_end = b.data.face_offs[jface + 1];
+                next_mask = b.data.face_overlap[jface];
+                }
 
             // only check overlaps if required
             if (! (mask_a & mask_b)) continue;
