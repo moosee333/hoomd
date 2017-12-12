@@ -852,15 +852,17 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
         {
         unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
         unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
-        unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
 
+        #if (__CUDA_ARCH__ > 300)
+        unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
         for (unsigned int cur_offset = 0; cur_offset < param_size; cur_offset += block_size)
             {
             if (cur_offset + tidx < param_size)
                 {
-                ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
+                ((int *)s_params)[cur_offset + tidx] = __ldg(&((int *)d_params)[cur_offset + tidx]);
                 }
             }
+        #endif
 
         unsigned int ntyppairs = overlap_idx.getNumElements();
 
