@@ -1839,34 +1839,6 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     // 1 block per active cell
     dim3 grid( args.n_active_cells/n_groups+1, 1, 1);
 
-    // bind the textures
-    depletants_postype_tex.normalized = false;
-    depletants_postype_tex.filterMode = cudaFilterModePoint;
-    cudaError_t error = cudaBindTexture(0, depletants_postype_tex, args.d_postype, sizeof(Scalar4)*args.max_n);
-    if (error != cudaSuccess)
-        return error;
-
-    depletants_postype_old_tex.normalized = false;
-    depletants_postype_old_tex.filterMode = cudaFilterModePoint;
-    error = cudaBindTexture(0, depletants_postype_old_tex, args.d_postype_old, sizeof(Scalar4)*args.max_n);
-    if (error != cudaSuccess)
-        return error;
-
-    if (args.has_orientation)
-        {
-        depletants_orientation_tex.normalized = false;
-        depletants_orientation_tex.filterMode = cudaFilterModePoint;
-        error = cudaBindTexture(0, depletants_orientation_tex, args.d_orientation, sizeof(Scalar4)*args.max_n);
-        if (error != cudaSuccess)
-            return error;
-
-        depletants_orientation_old_tex.normalized = false;
-        depletants_orientation_old_tex.filterMode = cudaFilterModePoint;
-        error = cudaBindTexture(0, depletants_orientation_old_tex, args.d_orientation_old, sizeof(Scalar4)*args.max_n);
-        if (error != cudaSuccess)
-            return error;
-        }
-
     // reset counters
     cudaMemsetAsync(args.d_overlap_cell,0, sizeof(unsigned int)*args.n_active_cells,args.stream);
 
