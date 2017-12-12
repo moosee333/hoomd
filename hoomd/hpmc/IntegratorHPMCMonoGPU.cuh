@@ -1775,7 +1775,9 @@ cudaError_t gpu_hpmc_update_dp(const hpmc_args_t& args, const typename Shape::pa
     bool shared_bytes_changed = base_shared_bytes != shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
     base_shared_bytes = shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
 
-    unsigned int max_extra_bytes = args.devprop.sharedMemPerBlock - base_shared_bytes;
+    // NVIDIA recommends not using more than 32k of shared memory per block
+    // http://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
+    unsigned int max_extra_bytes = max(0,32768 - base_shared_bytes);
     static unsigned int extra_bytes = UINT_MAX;
     if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
         {
