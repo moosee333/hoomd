@@ -843,13 +843,16 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
         return;
 
     // load the per type pair parameters into shared memory
-    extern __shared__ char s_data[];
+    unsigned int *s_check_overlaps;
+    typename Shape::param_type *s_params;
 
-    typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
-    unsigned int *s_check_overlaps = (unsigned int *) (s_params + num_types);
-
-    // copy over parameters one int per thread for fast loads
+    if (load_shared)
         {
+        extern __shared__ char s_data[];
+        s_params = (typename Shape::param_type *)(&s_data[0]);
+        s_check_overlaps = (unsigned int *) (s_params + num_types);
+
+        // copy over parameters one int per thread for fast loads
         unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
         unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
 
@@ -885,9 +888,9 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
         unsigned int available_bytes = max_extra_bytes;
         for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
             s_params[cur_type].load_shared(s_extra, available_bytes);
-
-        __syncthreads();
         }
+
+    __syncthreads();
 
     // load from queue
     Scalar4 postype_i = d_queue_postype[qidx];
@@ -897,7 +900,7 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
     unsigned int type_i = __scalar_as_int(postype_i.w);
 
     // perform overlap check
-    Shape shape_i(quat<Scalar>(), s_params[type_i]);
+    Shape shape_i(quat<Scalar>(), load_shared ? s_params[type_i] : d_params[type_i]);
     if (shape_i.hasOrientation())
         shape_i.orientation = quat<Scalar>(orientation_i);
 
@@ -907,7 +910,7 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
     // resorts to __ldg anyway on compute > 300
     Scalar4 postype_j = texFetchScalar4(d_postype, postype_tex, j);
     unsigned int type_j = __scalar_as_int(postype_j.w);
-    Shape shape_j(quat<Scalar>(), s_params[type_j]);
+    Shape shape_j(quat<Scalar>(), load_shared ? s_params[type_j] : d_params[type_j]);
     if (shape_j.hasOrientation())
         shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, orientation_tex, j));
 
@@ -917,7 +920,8 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
 
     unsigned int err_count = 0;
 
-    if (s_check_overlaps[overlap_idx(type_i, type_j)]
+    if (((load_shared && s_check_overlaps[overlap_idx(type_i, type_j)])
+        ||(!load_shared) && d_check_overlaps[overlap_idx(type_i, type_j)])
         && test_overlap(r_ij, shape_i, shape_j, err_count))
         {
         d_cell_overlaps[active_cell_idx] = 1;
