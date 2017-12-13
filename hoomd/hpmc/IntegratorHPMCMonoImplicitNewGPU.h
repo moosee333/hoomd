@@ -788,7 +788,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
             // loop over cell sets in a shuffled order
             this->m_cell_set_order.shuffle(timestep,i);
 
-            ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.get(), access_location::host, access_mode::read);
+            ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.get(), access_location::device, access_mode::read);
 
             // propose moves
             ArrayHandle<hpmc_counters_t> d_counters(this->m_count_total, access_location::device, access_mode::readwrite);
@@ -867,7 +867,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
             // check for overlaps between old and old, and old and new configuration
             m_tuner_check_overlaps->begin();
 
-            unsigned int param = this->m_tuner_update->getParam();
+            unsigned int param = this->m_tuner_check_overlaps->getParam();
             block_size = param / 1000000;
             unsigned int block_size_overlaps = (param % 1000000 ) / 100;
             unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
@@ -895,7 +895,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                 // move particles
                 this->m_tuner_accept->begin();
 
-                param = this->m_tuner_update->getParam();
+                param = this->m_tuner_accept->getParam();
                 block_size = param / 1000000;
                 group_size = param % 100;
 

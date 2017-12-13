@@ -1461,7 +1461,8 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     Scalar4 *s_orientation_group = (Scalar4*)(s_params + num_types);
     Scalar3 *s_pos_group = (Scalar3*)(s_orientation_group + n_groups);
-    unsigned int *s_queue_type_j =   (unsigned int*)(s_pos_group + n_groups);
+    unsigned int *s_update_order_group = (unsigned int *)(s_pos_group + n_groups);
+    unsigned int *s_queue_type_j =   (unsigned int*)(s_update_order_group + n_groups);
     unsigned int *s_queue_excell_idx = (unsigned int *)(s_queue_type_j + max_queue_size);
     unsigned int *s_overlap =   (unsigned int*)(s_queue_excell_idx + max_queue_size);
     unsigned int *s_queue_gid = (unsigned int*)(s_overlap + n_groups);
@@ -1537,16 +1538,11 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
         s_pos_group[group] = make_scalar3(trial_postype.x, trial_postype.y, trial_postype.z);
         s_type_group[group] = __scalar_as_int(trial_postype.w);
         s_orientation_group[group] = d_trial_orientation[i];
+        s_update_order_group[group] = d_update_order[cur_set];
         }
 
     // sync so that s_postype_group and s_orientation are available before other threads might process overlap checks
     __syncthreads();
-
-    #if (__CUDA_ARCH__ > 300) // quench a warning
-    unsigned int update_order_i = UINT_MAX;
-    if (active)
-        update_order_i = d_update_order[cur_set];
-    #endif
 
     bool move_active = true;
 
@@ -1775,7 +1771,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             // if that particle strictly precedes the current one in the chain and it has been updated
             unsigned int check_j = d_excell_idx[check_excell_idx];
             bool j_has_been_updated = d_trial_updated[check_j];
-            if (j_has_been_updated && check_update_order < update_order_i)
+            if (j_has_been_updated && check_update_order < s_update_order_group[check_group])
                 {
                 // check against old configuration of j
                 gpu_hpmc_check_overlaps_kernel<Shape> <<<grid,threads,shared_bytes,stream>>>(
@@ -1879,6 +1875,10 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
         {
         atomicAdd(&d_counters->overlap_checks, s_overlap_checks);
         }
+
+    #if (__CUDA_ARCH__ > 300)
+    cudaStreamDestroy(stream);
+    #endif
     }
 
 
@@ -2286,7 +2286,7 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
 
     unsigned int n_groups = block_size / group_size;
     unsigned int max_queue_size = n_groups*group_size;
-    unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
+    unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*3 + sizeof(Scalar4) + sizeof(Scalar3)) +
                                 max_queue_size * 3 * sizeof(unsigned int) +
                                 args.num_types * sizeof(typename Shape::param_type);
 
@@ -2311,7 +2311,7 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
 
         n_groups = block_size / group_size;
         max_queue_size = n_groups*group_size;
-        shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
+        shared_bytes = n_groups * (sizeof(unsigned int)*3 + sizeof(Scalar4) + sizeof(Scalar3)) +
                        max_queue_size * 3 * sizeof(unsigned int) +
                        min_shared_bytes;
         }
@@ -2348,7 +2348,7 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
 
     // setup the grid to run the kernel
     dim3 threads(group_size, n_groups,1);
-    dim3 grid( args.n_active_cells / n_groups + 1, 1, 1);
+    dim3 grid( args.csi.getNumElements() / n_groups + 1, 1, 1);
 
     unsigned int block_size_overlaps = min(args.block_size_overlaps, max_block_size_overlaps);
 
