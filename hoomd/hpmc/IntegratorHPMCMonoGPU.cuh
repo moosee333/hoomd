@@ -2293,13 +2293,13 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
     unsigned int min_shared_bytes = args.num_types * sizeof(typename Shape::param_type);
 
     if (min_shared_bytes >= args.devprop.sharedMemPerBlock)
-        throw std::runtime_error("Insufficient shared memory for HPMC kernel: reduce number of particle types or size of shape parameters");
+        throw std::runtime_error("Insufficient shared memory for gpu_hpmc_schedule_overlaps_kernel kernel: reduce number of particle types or size of shape parameters");
 
     while (shared_bytes + attr.sharedSizeBytes >= args.devprop.sharedMemPerBlock)
         {
         block_size -= args.devprop.warpSize;
         if (block_size == 0)
-            throw std::runtime_error("Insufficient shared memory for HPMC kernel");
+            throw std::runtime_error("Insufficient shared memory for gpu_hpmc_schedule_overlaps_kernel kernel");
 
         // the new block size might not fit the group size, decrease group size until it is
         group_size = args.group_size;
@@ -2451,13 +2451,13 @@ cudaError_t gpu_hpmc_accept(const hpmc_args_t& args, const typename Shape::param
     unsigned int min_shared_bytes = args.num_types * sizeof(typename Shape::param_type);
 
     if (min_shared_bytes >= args.devprop.sharedMemPerBlock)
-        throw std::runtime_error("Insufficient shared memory for HPMC kernel: reduce number of particle types or size of shape parameters");
+        throw std::runtime_error("Insufficient shared memory for gpu_hpmc_accept_kernel: reduce number of particle types or size of shape parameters");
 
     while (shared_bytes + attr.sharedSizeBytes >= args.devprop.sharedMemPerBlock)
         {
         block_size -= args.devprop.warpSize;
         if (block_size == 0)
-            throw std::runtime_error("Insufficient shared memory for HPMC kernel");
+            throw std::runtime_error("Insufficient shared memory for gpu_hpmc_accept_kernel");
 
         // the new block size might not fit the group size, decrease group size until it is
         group_size = args.group_size;
@@ -2467,6 +2467,7 @@ cudaError_t gpu_hpmc_accept(const hpmc_args_t& args, const typename Shape::param
             group_size--;
             }
 
+        n_groups = block_size / group_size;
         max_queue_size = n_groups*group_size;
         shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
                        max_queue_size * 2 * sizeof(unsigned int) +
