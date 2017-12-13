@@ -56,7 +56,7 @@ class UpdateOrder
             \param N number of integers to shuffle
         */
         UpdateOrder(std::shared_ptr<const ExecutionConfiguration> exec_conf, unsigned int seed, unsigned int N=0)
-            : m_seed(seed), m_update_order(exec_conf)
+            : m_seed(seed), m_is_reversed(false), m_update_order(exec_conf), m_reverse_update_order(exec_conf)
             {
             resize(N);
             }
@@ -69,8 +69,13 @@ class UpdateOrder
             {
             // initialize the update order
             m_update_order.resize(N);
+            m_reverse_update_order.resize(N);
             for (unsigned int i = 0; i < N; i++)
+                {
                 m_update_order[i] = i;
+                m_reverse_update_order[i] = N - i - 1;
+                }
+            m_is_reversed = false;
             }
 
         //! Shuffle the order
@@ -86,33 +91,28 @@ class UpdateOrder
             // reverse the order with 1/2 probability
             if (r > 0.5f)
                 {
-                unsigned int N = m_update_order.size();
-                for (unsigned int i = 0; i < N; i++)
-                    m_update_order[i] = N - i - 1;
-                }
-            else
-                {
-                unsigned int N = m_update_order.size();
-                for (unsigned int i = 0; i < N; i++)
-                    m_update_order[i] = i;
+                m_is_reversed = ! m_is_reversed;
                 }
             }
 
         //! Access element of the shuffled order
         unsigned int operator[](unsigned int i)
             {
-            return m_update_order[i];
+            return m_is_reversed ? m_reverse_update_order[i] : m_update_order[i];
             }
 
         //! Access the underlying GPUVector
-        const GPUVector<unsigned int> & get() const
+        const GPUVector<unsigned int> & getInverse() const
             {
-            return m_update_order;
+            // with ascending/descending update order, the permutation is self-inverse
+            return m_is_reversed ? m_reverse_update_order : m_update_order;
             }
 
     private:
-        unsigned int m_seed;                       //!< Random number seed
-        GPUVector<unsigned int> m_update_order;    //!< Update order
+        unsigned int m_seed;                               //!< Random number seed
+        bool m_is_reversed;                                //!< True if order is reversed
+        GPUVector<unsigned int> m_update_order;            //!< Update order
+        GPUVector<unsigned int> m_reverse_update_order;    //!< Inverse permutation
     };
 
 }; // end namespace detail

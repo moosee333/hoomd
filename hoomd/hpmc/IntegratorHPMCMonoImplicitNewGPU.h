@@ -402,7 +402,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         // access the particle data
         ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
         ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::readwrite);
-        ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::readwrite);
 
         ArrayHandle< unsigned int > d_cell_sets(this->m_cell_sets, access_location::device, access_mode::read);
 
@@ -704,7 +703,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         // access the particle data
         ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
         ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::readwrite);
-        ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::readwrite);
 
         ArrayHandle< unsigned int > d_cell_sets(this->m_cell_sets, access_location::device, access_mode::read);
 
@@ -734,7 +732,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
             // cell sets
             ArrayHandle<unsigned int> d_inverse_cell_set(this->m_inverse_cell_set, access_location::device, access_mode::read);
-            ArrayHandle<unsigned int> d_excell_cell_set(this->m_excell_cell_set, access_location::device, access_mode::overwrite);
 
             // update the expanded cells and update order flags
             this->m_tuner_excell_block_size->begin();
@@ -778,7 +775,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         ArrayHandle<Scalar4> d_queue_orientation(m_queue_orientation, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_queue_excell_idx(m_queue_excell_idx, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_cell_overlaps(m_cell_overlaps, access_location::device, access_mode::overwrite);
-        ArrayHandle<unsigned int> d_excell_overlap(m_cell_overlaps, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_excell_overlap(m_excell_overlap, access_location::device, access_mode::overwrite);
 
         // on first iteration, synchronize GPU execution stream and update shape parameters
         bool first = true;
@@ -788,7 +785,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
             // loop over cell sets in a shuffled order
             this->m_cell_set_order.shuffle(timestep,i);
 
-            ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.get(), access_location::device, access_mode::read);
+            ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.getInverse(), access_location::device, access_mode::read);
 
             // propose moves
             ArrayHandle<hpmc_counters_t> d_counters(this->m_count_total, access_location::device, access_mode::readwrite);
@@ -1029,6 +1026,9 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeCellSets()
     unsigned int ox[] = {0, 1, 0, 1, 0, 1, 0, 1};
     unsigned int oy[] = {0, 0, 1, 1, 0, 0, 1, 1};
     unsigned int oz[] = {0, 0, 0, 0, 1, 1, 1, 1};
+
+    // set inverse cell set to a defined value for ghost cells
+    memset(h_inverse_cell_set.data, UINT_MAX, sizeof(unsigned int)*cell_indexer.getNumElements());
 
     for (unsigned int cur_set = 0; cur_set < n_sets; cur_set++)
         {
