@@ -13,6 +13,8 @@
 #include <iomanip>
 #include <sstream>
 
+#include "hoomd/GPUVector.h"
+
 #include "hoomd/Integrator.h"
 #include "HPMCPrecisionSetup.h"
 #include "IntegratorHPMC.h"
@@ -53,8 +55,8 @@ class UpdateOrder
         /*! \param seed Random number seed
             \param N number of integers to shuffle
         */
-        UpdateOrder(unsigned int seed, unsigned int N=0)
-            : m_seed(seed)
+        UpdateOrder(std::shared_ptr<const ExecutionConfiguration> exec_conf, unsigned int seed, unsigned int N=0)
+            : m_seed(seed), m_update_order(exec_conf)
             {
             resize(N);
             }
@@ -63,7 +65,7 @@ class UpdateOrder
         /*! \param N new size
             \post The order is 0, 1, 2, ... N-1
         */
-    void resize(unsigned int N)
+        void resize(unsigned int N)
             {
             // initialize the update order
             m_update_order.resize(N);
@@ -101,9 +103,16 @@ class UpdateOrder
             {
             return m_update_order[i];
             }
+
+        //! Access the underlying GPUVector
+        const GPUVector<unsigned int> & get() const
+            {
+            return m_update_order;
+            }
+
     private:
         unsigned int m_seed;                       //!< Random number seed
-        std::vector<unsigned int> m_update_order; //!< Update order
+        GPUVector<unsigned int> m_update_order;    //!< Update order
     };
 
 }; // end namespace detail
@@ -328,7 +337,7 @@ template <class Shape>
 IntegratorHPMCMono<Shape>::IntegratorHPMCMono(std::shared_ptr<SystemDefinition> sysdef,
                                                    unsigned int seed)
             : IntegratorHPMC(sysdef, seed),
-              m_update_order(seed+m_exec_conf->getRank(), m_pdata->getN()),
+              m_update_order(m_exec_conf, seed+m_exec_conf->getRank(), m_pdata->getN()),
               m_image_list_is_initialized(false),
               m_image_list_valid(false),
               m_hasOrientation(true),

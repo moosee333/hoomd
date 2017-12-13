@@ -96,7 +96,7 @@ template< class Shape >
 IntegratorHPMCMonoGPU< Shape >::IntegratorHPMCMonoGPU(std::shared_ptr<SystemDefinition> sysdef,
                                                                    std::shared_ptr<CellList> cl,
                                                                    unsigned int seed)
-    : IntegratorHPMCMono<Shape>(sysdef, seed), m_cl(cl), m_cell_set_order(seed+this->m_exec_conf->getRank())
+    : IntegratorHPMCMono<Shape>(sysdef, seed), m_cl(cl), m_cell_set_order(this->m_exec_conf, seed+this->m_exec_conf->getRank())
     {
     this->m_cl->setRadius(1);
     this->m_cl->setComputeTDB(false);
@@ -309,6 +309,8 @@ void IntegratorHPMCMonoGPU< Shape >::update(unsigned int timestep)
                                                                 d_cell_idx.data,
                                                                 d_cell_size.data,
                                                                 d_excell_idx.data,
+                                                                0, // cell set
+                                                                0, // overlap
                                                                 d_excell_size.data,
                                                                 this->m_cl->getCellIndexer(),
                                                                 this->m_cl->getCellListIndexer(),
