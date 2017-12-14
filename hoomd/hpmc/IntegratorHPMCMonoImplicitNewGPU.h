@@ -133,7 +133,6 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         GPUArray<Scalar4> m_queue_postype;                      //!< Queue of new particle positions and types
         GPUArray<Scalar4> m_queue_orientation;                  //!< Queue of new particle orientations
         GPUArray<unsigned int> m_queue_excell_idx;              //!< Queue of excell indices of neighbors
-        GPUArray<unsigned int> m_queue_j;                       //!< Queue of particle neighbors to check for overlaps
         GPUArray<unsigned int> m_cell_overlaps;                 //!< Result of queue overlap checks
 
         //! Take one timestep forward
@@ -265,7 +264,6 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
         GPUArray<Scalar4>(0, this->m_exec_conf).swap(m_queue_postype);
         GPUArray<Scalar4>(0, this->m_exec_conf).swap(m_queue_orientation);
         GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_queue_excell_idx);
-        GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_queue_j);
         GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_cell_overlaps);
         }
     }
@@ -1074,16 +1072,13 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeQueueMem()
     unsigned int num_adj = this->m_cl->getCellAdjIndexer().getW();
     unsigned int num_max = this->m_cl->getNmax();
 
-    unsigned int n_active_cells = this->m_cell_set_indexer.getW();
-
     // the number of active cells is an upper bound for the number of queues
-    m_queue_indexer = Index2D(n_active_cells, num_max*num_adj);
+    m_queue_indexer = Index2D(this->m_cell_set_indexer.getNumElements(), num_max*num_adj);
 
     m_queue_active_cell_idx.resize(m_queue_indexer.getNumElements());
     m_queue_postype.resize(m_queue_indexer.getNumElements());
     m_queue_orientation.resize(m_queue_indexer.getNumElements());
     m_queue_excell_idx.resize(m_queue_indexer.getNumElements());
-    m_queue_j.resize(m_queue_indexer.getNumElements());
 
     m_cell_overlaps.resize(this->m_cell_set_indexer.getW());
     }

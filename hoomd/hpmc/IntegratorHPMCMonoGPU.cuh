@@ -911,16 +911,14 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
         unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
         unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
 
-        #if (__CUDA_ARCH__ > 300)
         unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
         for (unsigned int cur_offset = 0; cur_offset < param_size; cur_offset += block_size)
             {
             if (cur_offset + tidx < param_size)
                 {
-                ((int *)s_params)[cur_offset + tidx] = __ldg(&((int *)d_params)[cur_offset + tidx]);
+                ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
                 }
             }
-        #endif
 
         unsigned int ntyppairs = overlap_idx.getNumElements();
 
@@ -974,14 +972,12 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
 
     unsigned int err_count = 0;
 
-    if (s_check_overlaps[overlap_idx(type_i, type_j)]
-        && test_overlap(r_ij, shape_i, shape_j, err_count))
+    if ((s_check_overlaps[overlap_idx(type_i, type_j)] && test_overlap(r_ij, shape_i, shape_j, err_count)))
         {
         // NOTE if we are only checking against the old config, we could provide an early
         // exit code path here
 
         //d_cell_overlaps[active_cell_idx] = 1;
-
         atomicOr(&d_excell_overlap[excell_idx], new_config ? OVERLAP_IN_NEW_CONFIG : OVERLAP_IN_OLD_CONFIG);
         }
 
@@ -1503,12 +1499,17 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
         active = false;
 
     // get the active cell and the current cell set
-    unsigned int cur_set = cell_set_idx / csi.getW();
-    unsigned int active_cell_idx = cell_set_idx % csi.getW();
+    unsigned int cur_set = UINT_MAX;
+    unsigned int active_cell_idx = UINT_MAX;
+    if (active)
+        {
+        cur_set = cell_set_idx / csi.getW();
+        active_cell_idx = cell_set_idx % csi.getW();
+        }
 
     // pull in the index of our cell
-    unsigned int my_cell = 0;
-    unsigned int my_cell_size = 0;
+    unsigned int my_cell = UINT_MAX;
+    unsigned int my_cell_size = UINT_MAX;
     if (active)
         {
         my_cell = d_cell_set[csi(active_cell_idx,cur_set)];
@@ -1610,13 +1611,10 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             {
             // prefetch j
             unsigned int j, next_j = 0;
-            unsigned int excell_idx, next_excell_idx = 0;
-
             if (k < excell_size)
                 {
                 #if (__CUDA_ARCH__ > 300)
-                next_excell_idx = excli(k, my_cell);
-                next_j = __ldg(&d_excell_idx[next_excell_idx]);
+                next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
                 #endif
                 }
 
@@ -1636,15 +1634,14 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                     Shape shape_i(quat<Scalar>(), s_params[s_type_group[group]]);
 
                     // prefetch next j
+                    unsigned int excell_idx = excli(k,my_cell);
                     k += group_size;
                     j = next_j;
-                    excell_idx = next_excell_idx;
 
                     if (k < excell_size)
                         {
                         #if (__CUDA_ARCH__ > 300)
-                        next_excell_idx = excli(k, my_cell);
-                        next_j = __ldg(&d_excell_idx[next_excell_idx]);
+                        next_j = __ldg(&d_excell_idx[excli(k,my_cell)]);
                         #endif
                         }
 
@@ -1785,6 +1782,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             // if that particle strictly precedes the current one in the chain and it has been updated
             unsigned int check_j = d_excell_idx[check_excell_idx];
             bool j_has_been_updated = d_trial_updated[check_j];
+
             if (j_has_been_updated && check_update_order < s_update_order_group[check_group])
                 {
                 // circumsphere check
