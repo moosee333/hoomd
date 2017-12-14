@@ -1080,10 +1080,13 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeQueueMem()
     // the number of active cells is an upper bound for the number of queues
     m_queue_indexer = Index2D(this->m_cell_set_indexer.getNumElements(), num_max*num_adj);
 
-    m_queue_active_cell_idx.resize(m_queue_indexer.getNumElements());
-    m_queue_postype.resize(m_queue_indexer.getNumElements());
-    m_queue_orientation.resize(m_queue_indexer.getNumElements());
-    m_queue_excell_idx.resize(m_queue_indexer.getNumElements());
+    if (Shape::isParallel())
+        {
+        m_queue_active_cell_idx.resize(m_queue_indexer.getNumElements());
+        m_queue_postype.resize(m_queue_indexer.getNumElements());
+        m_queue_orientation.resize(m_queue_indexer.getNumElements());
+        m_queue_excell_idx.resize(m_queue_indexer.getNumElements());
+        }
 
     m_cell_overlaps.resize(this->m_cell_set_indexer.getW());
     }
