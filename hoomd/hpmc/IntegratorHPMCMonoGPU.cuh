@@ -1455,9 +1455,10 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     Scalar4 *s_orientation_group = (Scalar4*)(s_params + num_types);
     Scalar3 *s_pos_group = (Scalar3*)(s_orientation_group + n_groups);
-    unsigned int *s_update_order_group = (unsigned int *)(s_pos_group + n_groups);
-    unsigned int *s_queue_type_j =   (unsigned int*)(s_update_order_group + n_groups);
-    unsigned int *s_queue_excell_idx = (unsigned int *)(s_queue_type_j + max_queue_size);
+    unsigned int *s_check_overlaps = (unsigned int *)(s_pos_group + n_groups);
+    unsigned int *s_update_order_group = (unsigned int *)(s_check_overlaps + overlap_idx.getNumElements());
+    unsigned int *s_queue_old_config_j =   (unsigned int*)(s_update_order_group + n_groups);
+    unsigned int *s_queue_excell_idx = (unsigned int *)(s_queue_old_config_j + max_queue_size);
     unsigned int *s_overlap =   (unsigned int*)(s_queue_excell_idx + max_queue_size);
     unsigned int *s_queue_gid = (unsigned int*)(s_overlap + n_groups);
     unsigned int *s_type_group = (unsigned int*)(s_queue_gid + max_queue_size);
@@ -1475,9 +1476,30 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                 ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
                 }
             }
+
+        unsigned int ntyppairs = overlap_idx.getNumElements();
+        for (unsigned int cur_offset = 0; cur_offset < ntyppairs; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < ntyppairs)
+                {
+                s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
+                }
+            }
         }
 
     __syncthreads();
+
+    if (! Shape::isParallel() && load_shared)
+        {
+        // initialize extra shared mem
+        char *s_extra = (char *)(s_type_group + n_groups);
+
+        unsigned int available_bytes = max_extra_bytes;
+        for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+            s_params[cur_type].load_shared(s_extra, available_bytes);
+
+        __syncthreads();
+        }
 
     // initialize the shared memory array for communicating overlaps
     if (master && group == 0)
@@ -1568,6 +1590,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
     // counters to track progress through the loop over potential neighbors
     unsigned int excell_size;
     unsigned int k = offset;
+    bool old_config = true;
     if (active)
         {
         excell_size = d_excell_size[my_cell];
@@ -1639,7 +1662,16 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
 
                     // prefetch next j
                     unsigned int excell_idx = excli(k,my_cell);
-                    k += group_size;
+                    if (old_config)
+                        {
+                        old_config = false;
+                        }
+                    else
+                        {
+                        k += group_size;
+                        old_config = true;
+                        }
+
                     j = next_j;
 
                     if (k < excell_size)
@@ -1649,8 +1681,19 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                         #endif
                         }
 
+                    // reset per-neighbor overlap flag
+                    if (!old_config) d_excell_overlap[excell_idx] = 0;
+
+                    if (!old_config && (!d_trial_updated[j] ||
+                        d_update_order[d_excell_cell_set[excell_idx]] >= s_update_order_group[group]))
+                        continue;
+
                     // read in position, and orientation of neighboring particle
-                    postype_j = texFetchScalar4(d_postype, postype_tex, j);
+                    if (old_config)
+                        postype_j = texFetchScalar4(d_postype, postype_tex, j);
+                    else
+                        postype_j = d_trial_postype[j];
+
                     unsigned int type_j = __scalar_as_int(postype_j.w);
                     Shape shape_j(quat<Scalar>(orientation_j), s_params[type_j]);
 
@@ -1661,19 +1704,9 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                     // test circumsphere overlap
                     OverlapReal rsq = dot(r_ij,r_ij);
                     OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-                    bool circumsphere_old = rsq*OverlapReal(4.0) <= DaDb * DaDb;
+                    bool circumsphere = rsq*OverlapReal(4.0) <= DaDb * DaDb;
 
-                    // test new position
-                    bool circumsphere_new = false;
-                    if (d_trial_updated[j])
-                        {
-                        r_ij = vec3<Scalar>(d_trial_postype[j]) - vec3<Scalar>(pos_i);
-                        r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
-                        rsq = dot(r_ij,r_ij);
-                        circumsphere_new = rsq*OverlapReal(4.0) <= DaDb * DaDb;
-                        }
-
-                    if (i != j && (circumsphere_old || circumsphere_new))
+                    if (i != j && circumsphere)
                         {
                         // add this particle to the queue
                         unsigned int insert_point = atomicAdd(&s_queue_size, 1);
@@ -1696,14 +1729,22 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
 
                             // shared mem queue
                             s_queue_gid[insert_point] = group;
-                            s_queue_type_j[insert_point] = type_j;
+                            s_queue_old_config_j[insert_point] = old_config;
                             s_queue_excell_idx[insert_point] = excell_idx;
                             }
                         else
                             {
                             // or back up if the queue is already full
                             // we will recheck and insert this on the next time through
-                            k -= group_size;
+                            if (old_config)
+                                {
+                                k -= group_size;
+                                old_config = false;
+                                }
+                            else
+                                {
+                                old_config = true;
+                                }
                             }
                         }
 
@@ -1729,17 +1770,16 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             {
             unsigned int check_group = s_queue_gid[tidx_1d];
             unsigned int check_excell_idx = s_queue_excell_idx[tidx_1d];
+            unsigned int check_old_config = s_queue_old_config_j[tidx_1d];
             unsigned int check_type_i = s_type_group[check_group];
-            unsigned int check_type_j = s_queue_type_j[tidx_1d];
             unsigned int check_j = d_excell_idx[check_excell_idx];
-            unsigned int check_update_order = d_update_order[d_excell_cell_set[check_excell_idx]];
+
+            Scalar4 postype_j = d_postype[check_j];
+            unsigned int check_type_j = __scalar_as_int(postype_j.w);
 
             if (Shape::isParallel())
                 {
                 #if (__CUDA_ARCH__ > 300)
-                // reset the per-neighbor overlap flag
-                d_excell_overlap[check_excell_idx] = 0;
-
                 // get requested launch configuration
                 Shape shape_i(quat<Scalar>(), s_params[check_type_i]);
                 Shape shape_j(quat<Scalar>(), s_params[check_type_j]);
@@ -1754,111 +1794,44 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                 shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
                 if (load_shared) shared_bytes += extra_bytes;
 
-                // check circumsphere in old configuration again
-                Scalar4 postype_j = d_postype[check_j];
-                vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(s_pos_group[check_group]);
-                r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
+                // check against j in sub kernel
+                gpu_hpmc_check_overlaps_kernel<Shape> <<<grid,threads,shared_bytes,stream>>>(
+                    !check_old_config,
+                    blockIdx.x,
+                    s_queue_offset+tidx_1d,
+                    d_postype,
+                    d_orientation,
+                    d_counters,
+                    num_types,
+                    d_check_overlaps,
+                    overlap_idx,
+                    box,
+                    d_params,
+                    max_extra_bytes,
+                    queue_idx,
+                    d_queue_active_cell_idx,
+                    d_queue_postype,
+                    d_queue_orientation,
+                    d_queue_excell_idx,
+                    d_excell_idx,
+                    d_excell_overlap,
+                    d_cell_overlaps,
+                    load_shared,
+                    d_trial_postype,
+                    d_trial_orientation);
 
-                OverlapReal rsq = dot(r_ij,r_ij);
-                OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-                if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                if (check_cuda_errors)
                     {
-                    // check against old configuration of j
-                    gpu_hpmc_check_overlaps_kernel<Shape> <<<grid,threads,shared_bytes,stream>>>(
-                        false,
-                        blockIdx.x,
-                        s_queue_offset+tidx_1d,
-                        d_postype,
-                        d_orientation,
-                        d_counters,
-                        num_types,
-                        d_check_overlaps,
-                        overlap_idx,
-                        box,
-                        d_params,
-                        max_extra_bytes,
-                        queue_idx,
-                        d_queue_active_cell_idx,
-                        d_queue_postype,
-                        d_queue_orientation,
-                        d_queue_excell_idx,
-                        d_excell_idx,
-                        d_excell_overlap,
-                        d_cell_overlaps,
-                        load_shared,
-                        d_trial_postype,
-                        d_trial_orientation);
-
-                    if (check_cuda_errors)
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
                         {
-                        cudaError_t status = cudaGetLastError();
-                        if (status != cudaSuccess)
-                            {
-                            printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
-                            }
-                        }
-                    }
-
-                // we only need to check against the new configuration of particle j
-                // if that particle strictly precedes the current one in the chain and has been updated
-                bool j_has_been_updated = d_trial_updated[check_j];
-
-                if (j_has_been_updated && check_update_order < s_update_order_group[check_group])
-                    {
-                    // circumsphere check
-                    Scalar4 postype_j = d_trial_postype[check_j];
-
-                    // put particle j into the coordinate system of particle i
-                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(s_pos_group[check_group]);
-                    r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
-
-                    // test circumsphere overlap
-                    OverlapReal rsq = dot(r_ij,r_ij);
-                    OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-
-                    if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
-                        {
-                        // check against new configuration of j
-                        gpu_hpmc_check_overlaps_kernel<Shape> <<<grid,threads,shared_bytes,stream>>>(
-                            true,
-                            blockIdx.x,
-                            s_queue_offset+tidx_1d,
-                            d_postype,
-                            d_orientation,
-                            d_counters,
-                            num_types,
-                            d_check_overlaps,
-                            overlap_idx,
-                            box,
-                            d_params,
-                            max_extra_bytes,
-                            queue_idx,
-                            d_queue_active_cell_idx,
-                            d_queue_postype,
-                            d_queue_orientation,
-                            d_queue_excell_idx,
-                            d_excell_idx,
-                            d_excell_overlap,
-                            d_cell_overlaps,
-                            load_shared,
-                            d_trial_postype,
-                            d_trial_orientation);
-
-                        if (check_cuda_errors)
-                            {
-                            cudaError_t status = cudaGetLastError();
-                            if (status != cudaSuccess)
-                                {
-                                printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
-                                }
-                            }
+                        printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
                         }
                     }
                 #endif
                 }
             else // is parallel
                 {
-                unsigned int flag = 0;
                 // need to extract the overlap check to perform out of the shared mem queue
                 Scalar4 postype_j;
                 Scalar4 orientation_j;
@@ -1869,11 +1842,20 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                 Shape shape_i(quat<Scalar>(s_orientation_group[check_group]), s_params[check_type_i]);
 
                 // build shape j from global memory
-                postype_j = texFetchScalar4(d_postype, postype_tex, check_j);
+                if (check_old_config)
+                    postype_j = texFetchScalar4(d_postype, postype_tex, check_j);
+                else
+                    postype_j = d_trial_postype[check_j];
+
                 orientation_j = make_scalar4(1,0,0,0);
                 Shape shape_j(quat<Scalar>(orientation_j), s_params[check_type_j]);
                 if (shape_j.hasOrientation())
-                    shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, orientation_tex, check_j));
+                    {
+                    if (check_old_config)
+                        shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, orientation_tex, check_j));
+                    else
+                        shape_j.orientation = quat<Scalar>(d_trial_orientation[check_j]);
+                    }
 
                 // put particle j into the coordinate system of particle i
                 r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(pos_i);
@@ -1883,48 +1865,20 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                 OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
                 bool circumsphere_overlap =rsq*OverlapReal(4.0) <= DaDb * DaDb;
 
-                bool overlap_old = false;
-//                if (s_check_overlaps[overlap_idx(type_i, type_j)] && test_overlap(r_ij, shape_i, shape_j, err_count))
                 unsigned int err_count = 0;
-                if (circumsphere_overlap && test_overlap(r_ij, shape_i, shape_j, err_count))
+                if (s_check_overlaps[overlap_idx(check_type_i, check_type_j)] &&
+                    circumsphere_overlap &&
+                    test_overlap(r_ij, shape_i, shape_j, err_count))
                     {
-                    overlap_old = true;
-                    }
+                    // store result in global mem
+                    unsigned int res = atomicOr(&d_excell_overlap[check_excell_idx], check_old_config ? OVERLAP_IN_OLD_CONFIG : OVERLAP_IN_NEW_CONFIG);
 
-                bool j_has_been_updated = d_trial_updated[check_j];
-                bool overlap_new = false;
-                if (j_has_been_updated && check_update_order < s_update_order_group[check_group])
-                    {
-                    // build shape j from global memory, new config
-                    postype_j = d_trial_postype[check_j];
-                    if (shape_j.hasOrientation())
-                        shape_j.orientation = quat<Scalar>(d_trial_orientation[check_j]);
-                    r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(pos_i);
-                    r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
-
-                    OverlapReal rsq = dot(r_ij,r_ij);
-                    OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-                    bool circumsphere_overlap =rsq*OverlapReal(4.0) <= DaDb * DaDb;
-
-//                    if (s_check_overlaps[overlap_idx(type_i, type_j)] && test_overlap(r_ij, shape_i, shape_j, err_count))
-                    if (circumsphere_overlap && test_overlap(r_ij, shape_i, shape_j, err_count))
+                    if (res)
                         {
-                        overlap_new = true;
-                        }
-                    flag = overlap_new ? OVERLAP_IN_NEW_CONFIG : 0;
-                    }
-                else
-                    {
-                    // early exit
-                    if (overlap_old)
-                        {
+                        // early exit
                         atomicAdd(&s_overlap[check_group],1);
                         }
                     }
-                flag |= overlap_old ? OVERLAP_IN_OLD_CONFIG : 0;
-
-                // store result in global mem
-                d_excell_overlap[check_excell_idx] = flag;
                 }
             }
 
@@ -2409,11 +2363,11 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
 
     unsigned int n_groups = block_size / group_size;
     unsigned int max_queue_size = n_groups*group_size;
-    unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*3 + sizeof(Scalar4) + sizeof(Scalar3)) +
-                                max_queue_size * 3 * sizeof(unsigned int) +
-                                args.num_types * sizeof(typename Shape::param_type);
+    unsigned int min_shared_bytes = args.num_types * sizeof(typename Shape::param_type) +
+                                    args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
-    unsigned int min_shared_bytes = args.num_types * sizeof(typename Shape::param_type);
+    unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*3 + sizeof(Scalar4) + sizeof(Scalar3)) +
+                                max_queue_size * 3 * sizeof(unsigned int) + min_shared_bytes;
 
     if (min_shared_bytes >= args.devprop.sharedMemPerBlock)
         throw std::runtime_error("Insufficient shared memory for gpu_hpmc_schedule_overlaps_kernel kernel: reduce number of particle types or size of shape parameters");
@@ -2443,8 +2397,17 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
         + args.overlap_idx.getNumElements()*sizeof(unsigned int);
 
     static unsigned int base_shared_bytes = UINT_MAX;
-    bool shared_bytes_changed = base_shared_bytes != shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
-    base_shared_bytes = shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
+    bool shared_bytes_changed;
+    if (Shape::isParallel())
+        {
+        shared_bytes_changed = base_shared_bytes != shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
+        base_shared_bytes = shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
+        }
+    else
+        {
+        shared_bytes_changed = base_shared_bytes != shared_bytes + attr.sharedSizeBytes;
+        base_shared_bytes = shared_bytes + attr.sharedSizeBytes;
+        }
 
     // NVIDIA recommends not using more than 32k of shared memory per block
     // http://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
@@ -2468,6 +2431,9 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
             extra_bytes = max_extra_bytes - available_bytes;
             }
         }
+
+    if (!Shape::isParallel() && args.load_shared)
+        shared_bytes += extra_bytes;
 
     // setup the grid to run the kernel
     dim3 threads(group_size, n_groups,1);

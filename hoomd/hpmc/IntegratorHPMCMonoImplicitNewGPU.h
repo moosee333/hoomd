@@ -211,16 +211,29 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     // whether to load extra data into shared mem or fetch directly from global mem
     for (unsigned int load_shared = 0; load_shared < 2; ++load_shared)
         {
-        // may need this loop contingent on whether shape is parallel
-        for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
-            block_size_overlaps += dev_prop.warpSize)
+        if (Shape::isParallel())
+            {
+            for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
+                block_size_overlaps += dev_prop.warpSize)
+                {
+                for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
+                    {
+                    for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+                        {
+                        if ((block_size % group_size) == 0)
+                            valid_params_overlaps.push_back(block_size*1000000 + block_size_overlaps*100 + group_size + load_shared * dev_prop.warpSize);
+                        }
+                    }
+                }
+            }
+        else
             {
             for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
                 {
                 for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
                     {
                     if ((block_size % group_size) == 0)
-                        valid_params_overlaps.push_back(block_size*1000000 + block_size_overlaps*100 + group_size + load_shared * dev_prop.warpSize);
+                        valid_params_overlaps.push_back(block_size*1000000 + group_size + load_shared * dev_prop.warpSize);
                     }
                 }
             }
