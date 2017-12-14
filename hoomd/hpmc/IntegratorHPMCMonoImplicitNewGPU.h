@@ -783,8 +783,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
             // loop over cell sets in a shuffled order
             this->m_cell_set_order.shuffle(timestep,i);
 
-            ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.getInverse(), access_location::device, access_mode::read);
-
             // propose moves
             ArrayHandle<hpmc_counters_t> d_counters(this->m_count_total, access_location::device, access_mode::readwrite);
 
@@ -848,10 +846,15 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                     d_trial_orientation.data,
                     d_trial_updated.data,
                     d_trial_move_type_translate.data,
-                    d_update_order.data,
+                    0, // d_update_order
                     0, // cur_set
                     this->m_cell_set_indexer
                     );
+
+                {
+                ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.getInverse(), access_location::device, access_mode::read);
+                args.d_update_order = d_update_order.data;
+                }
 
             detail::gpu_hpmc_moves<Shape>(args, params.data());
 
@@ -882,10 +885,12 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
             first = false;
 
+            ArrayHandle<unsigned int> h_update_order(this->m_cell_set_order.get(), access_location::host, access_mode::read);
+
             // acceptance, this part is serial over the cell sets
             for (unsigned int j = 0; j < this->m_cell_set_indexer.getH(); j++)
                 {
-                unsigned cur_set = this->m_cell_set_order[j];
+                unsigned cur_set = h_update_order.data[j];
 
                 // move particles
                 this->m_tuner_accept->begin();

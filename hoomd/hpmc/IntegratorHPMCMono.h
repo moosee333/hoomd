@@ -102,6 +102,13 @@ class UpdateOrder
             }
 
         //! Access the underlying GPUVector
+        const GPUVector<unsigned int> & get() const
+            {
+            // with ascending/descending update order, the permutation is self-inverse
+            return m_is_reversed ? m_reverse_update_order : m_update_order;
+            }
+
+        //! Access the underlying GPUVector
         const GPUVector<unsigned int> & getInverse() const
             {
             // with ascending/descending update order, the permutation is self-inverse
