@@ -1741,46 +1741,54 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
             if (load_shared) shared_bytes += extra_bytes;
 
-            // NEED TO TEST CIRCUMSPHERE
+            // check circumsphere in old configuration again
+            unsigned int check_j = d_excell_idx[check_excell_idx];
+            Scalar4 postype_j = d_postype[check_j];
+            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - vec3<Scalar>(s_pos_group[check_group]);
+            r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
 
-            // check against old configuration of j
-            gpu_hpmc_check_overlaps_kernel<Shape> <<<grid,threads,shared_bytes,stream>>>(
-                false,
-                blockIdx.x,
-                s_queue_offset+tidx_1d,
-                d_postype,
-                d_orientation,
-                d_counters,
-                num_types,
-                d_check_overlaps,
-                overlap_idx,
-                box,
-                d_params,
-                max_extra_bytes,
-                queue_idx,
-                d_queue_active_cell_idx,
-                d_queue_postype,
-                d_queue_orientation,
-                d_queue_excell_idx,
-                d_excell_idx,
-                d_excell_overlap,
-                d_cell_overlaps,
-                load_shared,
-                d_trial_postype,
-                d_trial_orientation);
-
-            if (check_cuda_errors)
+            OverlapReal rsq = dot(r_ij,r_ij);
+            OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+            if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
                 {
-                cudaError_t status = cudaGetLastError();
-                if (status != cudaSuccess)
+                // check against old configuration of j
+                gpu_hpmc_check_overlaps_kernel<Shape> <<<grid,threads,shared_bytes,stream>>>(
+                    false,
+                    blockIdx.x,
+                    s_queue_offset+tidx_1d,
+                    d_postype,
+                    d_orientation,
+                    d_counters,
+                    num_types,
+                    d_check_overlaps,
+                    overlap_idx,
+                    box,
+                    d_params,
+                    max_extra_bytes,
+                    queue_idx,
+                    d_queue_active_cell_idx,
+                    d_queue_postype,
+                    d_queue_orientation,
+                    d_queue_excell_idx,
+                    d_excell_idx,
+                    d_excell_overlap,
+                    d_cell_overlaps,
+                    load_shared,
+                    d_trial_postype,
+                    d_trial_orientation);
+
+                if (check_cuda_errors)
                     {
-                    printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
+                    cudaError_t status = cudaGetLastError();
+                    if (status != cudaSuccess)
+                        {
+                        printf("Error launching child kernel: %s\n", cudaGetErrorString(status));
+                        }
                     }
                 }
 
             // we only need to check against the new configuration of particle j
-            // if that particle strictly precedes the current one in the chain and it has been updated
-            unsigned int check_j = d_excell_idx[check_excell_idx];
+            // if that particle strictly precedes the current one in the chain and has been updated
             bool j_has_been_updated = d_trial_updated[check_j];
 
             if (j_has_been_updated && check_update_order < s_update_order_group[check_group])
