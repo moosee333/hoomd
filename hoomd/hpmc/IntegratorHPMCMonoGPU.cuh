@@ -1649,6 +1649,8 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             // prefetch j
             unsigned int j, next_j = 0;
             unsigned int cell_set, next_cell_set = 0;
+            bool skip_previous = false;
+
             if (k < excell_size)
                 {
                 #if (__CUDA_ARCH__ > 300)
@@ -1699,7 +1701,10 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                     if (!old_config) d_excell_overlap[excell_idx] = 0;
 
                     if (!old_config && (!d_trial_updated[j] || s_update_order[cell_set] >= update_order_i))
+                        {
+                        skip_previous = true;
                         continue;
+                        }
 
                     // read in position, and orientation of neighboring particle
                     if (old_config)
@@ -1742,8 +1747,10 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
 
                             // shared mem queue
                             s_queue_gid[insert_point] = group;
-                            s_queue_old_config_j[insert_point] = old_config;
+                            s_queue_old_config_j[insert_point] = old_config ? 1+2*skip_previous : 0;
                             s_queue_excell_idx[insert_point] = excell_idx;
+
+                            skip_previous = false;
                             }
                         else
                             {
@@ -1760,7 +1767,10 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                                 }
                             }
                         }
-
+                    else
+                        {
+                        skip_previous = false;
+                        }
                     } // end if k < excell_size
                 } // end while (s_queue_size < max_queue_size && k < excell_size)
             } // end if active
@@ -1783,7 +1793,8 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             {
             unsigned int check_group = s_queue_gid[tidx_1d];
             unsigned int check_excell_idx = s_queue_excell_idx[tidx_1d];
-            unsigned int check_old_config = s_queue_old_config_j[tidx_1d];
+            unsigned int check_old_config = s_queue_old_config_j[tidx_1d] & 1;
+            bool skip_previous = s_queue_old_config_j[tidx_1d] & 2;
             unsigned int check_type_i = s_type_group[check_group];
             unsigned int check_j = d_excell_idx[check_excell_idx];
 
@@ -1886,7 +1897,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                     // store result in global mem
                     unsigned int res = atomicOr(&d_excell_overlap[check_excell_idx], check_old_config ? OVERLAP_IN_OLD_CONFIG : OVERLAP_IN_NEW_CONFIG);
 
-                    if (res)
+                    if (res || skip_previous)
                         {
                         // early exit
                         atomicAdd(&s_overlap[check_group],1);
@@ -1896,33 +1907,36 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             }
 
         __syncthreads();
-        if (Shape::isParallel() && master && group == 0)
+        if (Shape::isParallel())
             {
-            // advance the parallel queue
-            s_queue_offset += n_overlap_checks;
-
-            if (s_gmem_queue_full)
+            if (master && group == 0)
                 {
-                #if (__CUDA_ARCH__ > 300)
-                // catch up with child kernels
-                cudaDeviceSynchronize();
+                // advance the parallel queue
+                s_queue_offset += n_overlap_checks;
 
-                if (check_cuda_errors)
+                if (s_gmem_queue_full)
                     {
-                    cudaError_t status = cudaGetLastError();
-                    if (status != cudaSuccess)
-                        {
-                        printf("Error on cudaDeviceSynchronize(): %s\n", cudaGetErrorString(status));
-                        }
-                    }
-                #endif
+                    #if (__CUDA_ARCH__ > 300)
+                    // catch up with child kernels
+                    cudaDeviceSynchronize();
 
-                // reset queue
-                s_queue_offset = 0;
-                s_gmem_queue_full = false;
+                    if (check_cuda_errors)
+                        {
+                        cudaError_t status = cudaGetLastError();
+                        if (status != cudaSuccess)
+                            {
+                            printf("Error on cudaDeviceSynchronize(): %s\n", cudaGetErrorString(status));
+                            }
+                        }
+                    #endif
+
+                    // reset queue
+                    s_queue_offset = 0;
+                    s_gmem_queue_full = false;
+                    }
                 }
+            __syncthreads();
             }
-        __syncthreads();
 
         #if 0
         // early exit currently not implemented
