@@ -1648,10 +1648,12 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             {
             // prefetch j
             unsigned int j, next_j = 0;
+            unsigned int cell_set, next_cell_set = 0;
             if (k < excell_size)
                 {
                 #if (__CUDA_ARCH__ > 300)
                 next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
+                next_cell_set = __ldg(&d_excell_cell_set[excli(k,my_cell)]);
                 #endif
                 }
 
@@ -1683,19 +1685,20 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                         }
 
                     j = next_j;
+                    cell_set = next_cell_set;
 
                     if (k < excell_size)
                         {
                         #if (__CUDA_ARCH__ > 300)
                         next_j = __ldg(&d_excell_idx[excli(k,my_cell)]);
+                        next_cell_set = __ldg(&d_excell_cell_set[excli(k,my_cell)]);
                         #endif
                         }
 
                     // reset per-neighbor overlap flag
                     if (!old_config) d_excell_overlap[excell_idx] = 0;
 
-                    if (!old_config && (!d_trial_updated[j] ||
-                        s_update_order[d_excell_cell_set[excell_idx]] >= update_order_i))
+                    if (!old_config && (!d_trial_updated[j] || s_update_order[cell_set] >= update_order_i))
                         continue;
 
                     // read in position, and orientation of neighboring particle
