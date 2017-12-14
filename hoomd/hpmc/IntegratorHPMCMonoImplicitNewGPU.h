@@ -271,7 +271,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     cudaStreamCreate(&m_stream);
     CHECK_CUDA_ERROR();
 
-    if (this->m_exec_conf->getComputeCapability() > 300)
+    if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
         {
         GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_queue_active_cell_idx);
         GPUArray<Scalar4>(0, this->m_exec_conf).swap(m_queue_postype);
@@ -350,7 +350,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         this->initializeCellSets();
         this->initializeExcellMem();
 
-        if (this->m_exec_conf->getComputeCapability() > 300)
+        if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
             {
             this->initializeQueueMem();
             }
@@ -389,7 +389,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         {
         this->initializeExcellMem();
 
-        if (this->m_exec_conf->getComputeCapability() > 300)
+        if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
             {
             this->initializeQueueMem();
             }

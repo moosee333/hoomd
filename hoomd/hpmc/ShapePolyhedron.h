@@ -43,9 +43,7 @@
   uncommenting the below line.
   */
 
-#ifdef NVCC
-#define LEAVES_AGAINST_TREE_TRAVERSAL
-#endif
+#define PARALLEL_TRAVERSAL_ON_GPU
 
 namespace hpmc
 {
@@ -170,7 +168,7 @@ struct ShapePolyhedron
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
     HOSTDEVICE static bool isParallel()
         {
-        #if defined(LEAVES_AGAINST_TREE_TRAVERSAL)
+        #if defined(PARALLEL_TRAVERSAL_ON_GPU)
         return true;
         #else
         return false;
@@ -807,7 +805,7 @@ inline bool BVHCollision(const ShapePolyhedron& a, const ShapePolyhedron &b,
  */
 DEVICE inline unsigned int get_num_requested_threads(const ShapePolyhedron& a, const ShapePolyhedron& b)
     {
-    #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
+    #ifdef PARALLEL_TRAVERSAL_ON_GPU
     if (a.tree.getNumLeaves() < b.tree.getNumLeaves())
         return a.tree.getNumLeaves();
     else
@@ -844,12 +842,12 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
      * a) an edge of one polyhedron intersects the face of the other
      * b) the center of mass of one polyhedron is contained in the other
      */
-    #if defined(NVCC) || defined(LEAVES_AGAINST_TREE_TRAVERSAL)
+    #if defined(NVCC) && defined(PARALLEL_TRAVERSAL_ON_GPU)
     const detail::GPUTree& tree_a = a.tree;
     const detail::GPUTree& tree_b = b.tree;
     #endif
 
-    #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
+    #if defined(NVCC) && defined(PARALLEL_TRAVERSAL_ON_GPU)
     #ifdef NVCC
     // Parallel tree traversal
     unsigned int offset = threadIdx.x + blockIdx.x*blockDim.x;
