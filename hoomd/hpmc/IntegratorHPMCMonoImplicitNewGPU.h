@@ -772,7 +772,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         m_trial_postype.resize(this->m_pdata->getMaxN());
         m_trial_orientation.resize(this->m_pdata->getMaxN());
         m_trial_updated.resize(this->m_pdata->getMaxN());
-        m_trial_move_type_translate.resize(this->m_pdata->getMaxN());
+        m_trial_move_type_translate.resize(this->m_cl->getCellIndexer().getNumElements());
 
         // access data for proposed moves
         ArrayHandle<Scalar4> d_trial_postype(m_trial_postype, access_location::device, access_mode::overwrite);
