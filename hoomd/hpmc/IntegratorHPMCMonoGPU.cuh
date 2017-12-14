@@ -1456,8 +1456,8 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
     Scalar4 *s_orientation_group = (Scalar4*)(s_params + num_types);
     Scalar3 *s_pos_group = (Scalar3*)(s_orientation_group + n_groups);
     unsigned int *s_check_overlaps = (unsigned int *)(s_pos_group + n_groups);
-    unsigned int *s_update_order_group = (unsigned int *)(s_check_overlaps + overlap_idx.getNumElements());
-    unsigned int *s_queue_old_config_j =   (unsigned int*)(s_update_order_group + n_groups);
+    unsigned int *s_update_order = (unsigned int *)(s_check_overlaps + overlap_idx.getNumElements());
+    unsigned int *s_queue_old_config_j =   (unsigned int*)(s_update_order + csi.getH());
     unsigned int *s_queue_excell_idx = (unsigned int *)(s_queue_old_config_j + max_queue_size);
     unsigned int *s_overlap =   (unsigned int*)(s_queue_excell_idx + max_queue_size);
     unsigned int *s_queue_gid = (unsigned int*)(s_overlap + n_groups);
@@ -1483,6 +1483,14 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             if (cur_offset + tidx < ntyppairs)
                 {
                 s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
+                }
+            }
+
+        for (unsigned int cur_offset = 0; cur_offset < csi.getH(); cur_offset += block_size)
+            {
+            if (cur_offset + tidx < csi.getH())
+                {
+                s_update_order[cur_offset + tidx] = d_update_order[cur_offset + tidx];
                 }
             }
         }
@@ -1547,6 +1555,8 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
     // initial implementation just moves one particle per cell (nselect=1).
     // these variables are ugly, but needed to get the updated quantities outside of the scope
     unsigned int i = UINT_MAX;
+    unsigned int update_order_i = UINT_MAX;
+
     unsigned int overlap_checks = 0;
     if (active)
         {
@@ -1554,6 +1564,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
         hoomd::detail::Saru rng(my_cell, seed+select, timestep);
         unsigned int my_cell_offset = rand_select(rng, my_cell_size-1);
         i = d_cell_idx[cli(my_cell_offset, my_cell)];
+        update_order_i = d_update_order[cur_set];
 
         if (master)
             {
@@ -1561,7 +1572,6 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
             s_pos_group[group] = make_scalar3(trial_postype.x, trial_postype.y, trial_postype.z);
             s_type_group[group] = __scalar_as_int(trial_postype.w);
             s_orientation_group[group] = d_trial_orientation[i];
-            s_update_order_group[group] = d_update_order[cur_set];
             }
         }
 
@@ -1685,7 +1695,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                     if (!old_config) d_excell_overlap[excell_idx] = 0;
 
                     if (!old_config && (!d_trial_updated[j] ||
-                        d_update_order[d_excell_cell_set[excell_idx]] >= s_update_order_group[group]))
+                        s_update_order[d_excell_cell_set[excell_idx]] >= update_order_i))
                         continue;
 
                     // read in position, and orientation of neighboring particle
@@ -2364,9 +2374,10 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
     unsigned int n_groups = block_size / group_size;
     unsigned int max_queue_size = n_groups*group_size;
     unsigned int min_shared_bytes = args.num_types * sizeof(typename Shape::param_type) +
-                                    args.overlap_idx.getNumElements() * sizeof(unsigned int);
+                                    args.overlap_idx.getNumElements() * sizeof(unsigned int) +
+                                    args.csi.getH() * sizeof(unsigned int);
 
-    unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*3 + sizeof(Scalar4) + sizeof(Scalar3)) +
+    unsigned int shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
                                 max_queue_size * 3 * sizeof(unsigned int) + min_shared_bytes;
 
     if (min_shared_bytes >= args.devprop.sharedMemPerBlock)
@@ -2388,7 +2399,7 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
 
         n_groups = block_size / group_size;
         max_queue_size = n_groups*group_size;
-        shared_bytes = n_groups * (sizeof(unsigned int)*3 + sizeof(Scalar4) + sizeof(Scalar3)) +
+        shared_bytes = n_groups * (sizeof(unsigned int)*2 + sizeof(Scalar4) + sizeof(Scalar3)) +
                        max_queue_size * 3 * sizeof(unsigned int) +
                        min_shared_bytes;
         }
