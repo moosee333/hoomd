@@ -799,6 +799,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     // index of depletant we handle
     unsigned int tidx = blockIdx.y*blockDim.y + threadIdx.y;
 
+    #if 0
     // catch an opportunity at early exit using a global mem race
     __shared__ bool s_early_exit;
     if (threadIdx.x == 0 && threadIdx.y == 0)
@@ -813,6 +814,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
     if (s_early_exit)
         return;
+    #endif
 
     // exit early if there is nothing to do
     if (tidx >= n_depletants) return;
@@ -824,9 +826,6 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     hoomd::detail::Saru rng(rng_seed.u32(), seed+select, timestep);
 
     // load particle positions etc
-
-    // NOTE texture fetches on child kernels are not allowed per the CUDA programming guide
-    // but we are using texFetch* here, which on compute capability >= 350 amounts to __ldg
     Scalar4 postype_i_old = d_postype[i];
     unsigned int type_i = __scalar_as_int(postype_i_old.w);
     vec3<Scalar> pos_i_old(postype_i_old);
