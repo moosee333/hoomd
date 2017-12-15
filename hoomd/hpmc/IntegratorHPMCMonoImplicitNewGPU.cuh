@@ -83,7 +83,14 @@ struct hpmc_implicit_args_new_t
                 cudaStream_t _stream,
                 bool _check_cuda_errors,
                 unsigned int _block_size_overlaps,
-                bool _load_shared
+                bool _load_shared,
+                Index2D _csi = Index2D(),
+                const unsigned int *_d_excell_cell_set = 0,
+                const Scalar4 *_d_trial_postype = 0,
+                const Scalar4 *_d_trial_orientation = 0,
+                const unsigned int *_d_trial_updated = 0,
+                const unsigned int *_d_update_order = 0,
+                unsigned int *_d_excell_overlap = 0
                 )
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
@@ -132,7 +139,14 @@ struct hpmc_implicit_args_new_t
                   stream(_stream),
                   check_cuda_errors(_check_cuda_errors),
                   block_size_overlaps(_block_size_overlaps),
-                  load_shared(_load_shared)
+                  load_shared(_load_shared),
+                  csi(_csi),
+                  d_excell_cell_set(_d_excell_cell_set),
+                  d_trial_postype(_d_trial_postype),
+                  d_trial_orientation(_d_trial_orientation),
+                  d_trial_updated(_d_trial_updated),
+                  d_update_order(_d_update_order),
+                  d_excell_overlap(_d_excell_overlap)
         {
         };
 
@@ -184,6 +198,13 @@ struct hpmc_implicit_args_new_t
     bool check_cuda_errors;            //!< Whether to check CUDA errors of child kernel launches
     unsigned int block_size_overlaps;  //!< Block size for overlap check kernel
     bool load_shared;                  //!< Whether to load extra shape data into shared mem or fetch from managed memory
+    Index2D csi;                       //!< Cell set indexer
+    const unsigned int *d_excell_cell_set; //!< lookup of cell set by expanded cell list index
+    const Scalar4 *d_trial_postype;   //!< Trial moves, position and type
+    const Scalar4 *d_trial_orientation; //!< Trial moves, orientation
+    const unsigned int *d_trial_updated; //!< Flags whether ptl i has been updated
+    const unsigned int *d_update_order;      //!< Current inverse update sequence
+    unsigned int *d_excell_overlap;    //!< Overlap flags per cell neighbor
     };
 
 template< class Shape >
@@ -710,15 +731,24 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                                      const typename Shape::param_type *d_params,
                                      unsigned int max_extra_bytes,
                                      unsigned int depletant_type,
-                                     const Scalar4 *d_postype_old,
-                                     const Scalar4 *d_orientation_old,
+                                     const Scalar4 *d_trial_postype,
+                                     const Scalar4 *d_trial_orientation,
                                      unsigned int *d_overlap_cell,
-                                     bool load_shared)
+                                     bool load_shared,
+                                     unsigned int excell_j,
+                                     bool old_config_j,
+                                     unsigned int update_order_j,
+                                     const unsigned int *d_update_order,
+                                     Index2D csi,
+                                     const unsigned *d_excell_cell_set,
+                                     unsigned int *d_excell_overlap
+                                     )
     {
     extern __shared__ char s_data[];
 
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     unsigned int *s_check_overlaps = (unsigned int *) (s_params + num_types);
+    unsigned int *s_update_order = (unsigned int *)(s_check_overlaps + overlap_idx.getNumElements());
 
     // copy over parameters one int per thread for fast loads
         {
@@ -743,6 +773,13 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                 s_check_overlaps[cur_offset + tidx_1d] = d_check_overlaps[cur_offset + tidx_1d];
                 }
             }
+        for (unsigned int cur_offset = 0; cur_offset < csi.getH(); cur_offset += block_size)
+            {
+            if (cur_offset + tidx_1d < csi.getH())
+                {
+                s_update_order[cur_offset + tidx_1d] = d_update_order[cur_offset + tidx_1d];
+                }
+            }
         }
 
     __syncthreads();
@@ -750,7 +787,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     if (load_shared)
         {
         // initialize extra shared mem
-        char *s_extra = (char *) (s_check_overlaps + overlap_idx.getNumElements());
+        char *s_extra = (char *) (s_update_order + csi.getNumElements());
 
         unsigned int available_bytes = max_extra_bytes;
         for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
@@ -790,11 +827,11 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
     // NOTE texture fetches on child kernels are not allowed per the CUDA programming guide
     // but we are using texFetch* here, which on compute capability >= 350 amounts to __ldg
-    Scalar4 postype_i_old = texFetchScalar4(d_postype_old, depletants_postype_old_tex, i);
+    Scalar4 postype_i_old = d_postype[i];
     unsigned int type_i = __scalar_as_int(postype_i_old.w);
     vec3<Scalar> pos_i_old(postype_i_old);
 
-    Scalar4 postype_j_old = texFetchScalar4(d_postype_old, depletants_postype_old_tex, j);
+    Scalar4 postype_j_old = d_postype[j];
     unsigned int type_j = __scalar_as_int(postype_j_old.w);
     vec3<Scalar> pos_j_old(postype_j_old);
 
@@ -812,7 +849,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     Shape shape_i_old(quat<Scalar>(), s_params[type_i]);
     if (shape_i_old.hasOrientation())
         {
-        Scalar4 orientation_i_old = texFetchScalar4(d_orientation_old, depletants_orientation_old_tex, i);
+        Scalar4 orientation_i_old = d_orientation[i];
         shape_i_old.orientation = quat<Scalar>(orientation_i_old);
         }
 
@@ -915,14 +952,14 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     bool overlap_new = false;
 
     // load new particle position
-    Scalar4 postype_i = texFetchScalar4(d_postype, depletants_postype_tex, i);
+    Scalar4 postype_i = d_trial_postype[i];
     vec3<Scalar> pos_i(postype_i);
 
     // ... and orientation
     Shape shape_i(quat<Scalar>(), s_params[type_i]);
     if (shape_i.hasOrientation())
         {
-        Scalar4 orientation_i = texFetchScalar4(d_orientation, depletants_orientation_tex, i);
+        Scalar4 orientation_i = d_trial_orientation[i];
         shape_i.orientation = quat<Scalar>(orientation_i);
         }
 
@@ -973,17 +1010,21 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
             do {
                 // read in position, and orientation of neighboring particle
+                unsigned int excell_idx = excli(local_k, my_cell);
                 #if (__CUDA_ARCH__ > 300)
-                l = __ldg(&d_excell_idx[excli(local_k, my_cell)]);
+                l = __ldg(&d_excell_idx[excell_idx]);
                 #endif
+                unsigned int cell_set = d_excell_cell_set[excell_idx];
 
-                // check against neighbor
-                postype_l = texFetchScalar4(d_postype_old, depletants_postype_old_tex, l);
+//                if (!old_config && (!d_trial_updated[j] || s_update_order[cell_set] >= update_order_i))
+//                    {
+//                    skip_previous = true;
+//                    continue;
+//                    }
+
+                // check against neighbor in old configuration (except for j)
+                postype_l = (l == j && !old_config_j) ? d_trial_postype[j] : d_postype[l];
                 Shape shape_l(quat<Scalar>(), s_params[__scalar_as_int(postype_l.w)]);
-                if (shape_l.hasOrientation())
-                    {
-                    shape_l.orientation = quat<Scalar>(texFetchScalar4(d_orientation_old, depletants_orientation_old_tex, l));
-                    }
 
                 // rl - r_dep
                 rij = vec3<Scalar>(postype_l) - pos_test;
@@ -994,8 +1035,11 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                 OverlapReal DaDb = d_dep + shape_l.getCircumsphereDiameter();
                 circumsphere_overlap = (rsq*OverlapReal(4.0) <= DaDb * DaDb);
 
-                // count unique intersection volumes only
-                if (circumsphere_overlap && l < j && l != i)
+                // count unique intersection volumes only (using lexicographical order)
+                if (circumsphere_overlap
+                    && (s_update_order[cell_set] < update_order_j ||
+                        (s_update_order[cell_set] == update_order_j && l < j))
+                    && l != i)
                     {
                     ignore = true;
                     break;
@@ -1019,7 +1063,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                 Shape shape_l(quat<Scalar>(), s_params[typ_l]);
                 if (shape_l.hasOrientation())
                     {
-                    shape_l.orientation = quat<Scalar>(texFetchScalar4(d_orientation_old, depletants_orientation_old_tex, l));
+                    shape_l.orientation = quat<Scalar>((l == j && !old_config_j) ? d_trial_orientation[j]: d_orientation[l]);
                     }
 
                 if (s_check_overlaps[overlap_idx(depletant_type, typ_l)])
@@ -1040,7 +1084,7 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
 
     // if it overlaps with a neighbor in the old config, flag rejection in global mem
     if (in_intersection_volume && !ignore)
-        d_overlap_cell[active_cell_idx] = 1;
+        atomicOr(&d_excell_overlap[excell_j], old_config_j ? OVERLAP_IN_OLD_CONFIG : OVERLAP_IN_NEW_CONFIG);
     }
 
 //! Insert depletants using nested kernels (Dynamic Parallelism)
@@ -1058,7 +1102,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                                      const uint3 cell_dim,
                                      const Scalar3 ghost_width,
                                      const unsigned int *d_cell_set,
-                                     const unsigned int n_active_cells,
+                                     Index2D csi,
                                      const unsigned int N,
                                      const unsigned int num_types,
                                      const unsigned int seed,
@@ -1075,14 +1119,18 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                                      unsigned int max_extra_bytes,
                                      unsigned int extra_bytes,
                                      unsigned int depletant_type,
-                                     const Scalar4 *d_postype_old,
-                                     const Scalar4 *d_orientation_old,
                                      unsigned int *d_overlap_cell,
                                      hpmc_implicit_counters_t *d_implicit_counters,
                                      Scalar fugacity,
                                      unsigned int block_size_overlaps,
                                      bool check_cuda_errors,
-                                     bool load_shared)
+                                     bool load_shared,
+                                     const unsigned int *d_excell_cell_set,
+                                     const Scalar4 *d_trial_postype,
+                                     const Scalar4 *d_trial_orientation,
+                                     const unsigned int *d_trial_updated,
+                                     const unsigned int *d_update_order,
+                                     unsigned int *d_excell_overlap)
     {
     // flags to tell what type of thread we are
     unsigned int group = threadIdx.y;
@@ -1103,9 +1151,11 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
     unsigned int *s_active_cell_group = (unsigned int *)(s_params + num_types);
     unsigned int *s_idx_group = (unsigned int *)(s_active_cell_group + n_groups);
     unsigned int *s_check_overlaps = (unsigned int *) (s_idx_group + n_groups);
-    unsigned int *s_queue_j = (unsigned int*)(s_check_overlaps + overlap_idx.getNumElements());
-    unsigned int *s_queue_gid = (unsigned int*)(s_queue_j + max_queue_size);
-    unsigned int *s_reject = (unsigned int *)(s_queue_gid + max_queue_size);
+    unsigned int *s_queue_excell_idx = (unsigned int*)(s_check_overlaps + overlap_idx.getNumElements());
+    unsigned int *s_queue_gid = (unsigned int*)(s_queue_excell_idx + max_queue_size);
+    unsigned int *s_queue_old_config_j = (unsigned int *)(s_queue_gid  + max_queue_size);
+    unsigned int *s_reject = (unsigned int *)(s_queue_old_config_j + max_queue_size);
+    unsigned int *s_update_order = (unsigned int *)(s_reject + n_groups);
 
     // copy over parameters one int per thread for fast loads
     unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
@@ -1130,6 +1180,14 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                 s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
                 }
             }
+        for (unsigned int cur_offset = 0; cur_offset < csi.getH(); cur_offset += block_size)
+            {
+            if (cur_offset + tidx < csi.getH())
+                {
+                s_update_order[cur_offset + tidx] = d_update_order[cur_offset + tidx];
+                }
+            }
+
         }
 
     __syncthreads();
@@ -1148,19 +1206,28 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
     __syncthreads();
 
     // identify the active cell that this thread handles
-    unsigned int active_cell_idx = blockIdx.x * n_groups + group;
+    unsigned int cell_set_idx = blockIdx.x * n_groups + group;
 
     // this thread is inactive if it indexes past the end of the active cell list
     bool active = true;
-    if (active_cell_idx >= n_active_cells)
+    if (cell_set_idx >= csi.getNumElements())
         active = false;
 
-    // pull in the index of our cell
-    unsigned int my_cell = 0;
-    unsigned int my_cell_size = 0;
+    // get the active cell and the current cell set
+    unsigned int cur_set = UINT_MAX;
+    unsigned int active_cell_idx = UINT_MAX;
     if (active)
         {
-        my_cell = d_cell_set[active_cell_idx];
+        cur_set = cell_set_idx / csi.getW();
+        active_cell_idx = cell_set_idx % csi.getW();
+        }
+
+    // pull in the index of our cell
+    unsigned int my_cell = UINT_MAX;
+    unsigned int my_cell_size = UINT_MAX;
+    if (active)
+        {
+        my_cell = d_cell_set[csi(active_cell_idx,cur_set)];
         my_cell_size = d_cell_size[my_cell];
         }
 
@@ -1170,23 +1237,32 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
 
     __syncthreads();
 
-    // load updated particle index
-    unsigned int i;
+    // initial implementation just moves one particle per cell (nselect=1).
+    // these variables are ugly, but needed to get the updated quantities outside of the scope
+    unsigned int i = UINT_MAX;
+    unsigned int update_order_i = UINT_MAX;
 
     if (active)
         {
-        i = d_active_cell_ptl_idx[active_cell_idx];
+        // one RNG per cell, reproduce the random number from the trial move kernel
+        hoomd::detail::Saru rng(my_cell, seed+select, timestep);
+        unsigned int my_cell_offset = rand_select(rng, my_cell_size-1);
+        i = d_cell_idx[cli(my_cell_offset, my_cell)];
+        update_order_i = d_update_order[cur_set];
 
-        // if the move was not performed or has been rejected before, nothing to do here
-        if (i == UINT_MAX || !d_active_cell_accept[active_cell_idx])
-            active = false;
+        if (master)
+            {
+            s_idx_group[group] = i;
+            s_active_cell_group[group] = active_cell_idx;
+            }
         }
+
+    __syncthreads();
 
     // initialize one RNG per thread (Philox4_32_10 is used for fast initialization)
     curandStatePhilox4_32_10_t local_state;
     curand_init((unsigned long long)(seed+tidx), (unsigned long long)(timestep+UINT_MAX*select), 0, &local_state);
 
-    unsigned int overlap_checks = 0;
     unsigned int n_inserted = 0;
 
     // detect which circumspheres are overlapping
@@ -1194,27 +1270,6 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
     // depletant circumsphere diameter
     Shape shape_depletant(quat<Scalar>(), s_params[depletant_type]);
     Scalar d_dep = shape_depletant.getCircumsphereDiameter();
-
-    if (active)
-        {
-        // test depletant position around old configuration
-        Scalar4 postype_i_old = texFetchScalar4(d_postype_old, depletants_postype_old_tex, i);
-        Scalar4 orientation_i_old = make_scalar4(1,0,0,0);
-
-        Shape shape_i_old(quat<Scalar>(), s_params[__scalar_as_int(postype_i_old.w)]);
-        if (shape_i_old.hasOrientation())
-            {
-            orientation_i_old = texFetchScalar4(d_orientation_old, depletants_orientation_old_tex, i);
-            shape_i_old.orientation = quat<Scalar>(orientation_i_old);
-            }
-
-        // stash the trial move in shared memory so that other threads in this block can process overlap checks
-        if (master)
-            {
-            s_idx_group[group] = i;
-            s_active_cell_group[group] = active_cell_idx;
-            }
-        }
 
     if (master && group == 0)
         {
@@ -1228,10 +1283,11 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
     // counters to track progress through the loop over potential neighbors
     unsigned int excell_size;
     unsigned int k = offset;
+    bool old_config = true;
+
     if (active)
         {
         excell_size = d_excell_size[my_cell];
-        overlap_checks += excell_size;
         }
 
     #if (__CUDA_ARCH__ > 300)
@@ -1248,10 +1304,15 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             {
             // prefetch j
             unsigned int j, next_j = 0;
+
+            unsigned int cell_set, next_cell_set = 0;
+            bool skip_previous = false;
+
             if (k < excell_size)
                 {
                 #if (__CUDA_ARCH__ > 300)
                 next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
+                next_cell_set = __ldg(&d_excell_cell_set[excli(k,my_cell)]);
                 #endif
                 }
 
@@ -1265,31 +1326,52 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                     // build shape i from shared memory
 
                     // possible optimization: store pos in shared mem to avoid global mem load
-                    Scalar4 postype_i_old = texFetchScalar4(d_postype_old, depletants_postype_old_tex, i);
-                    vec3<Scalar> pos_i_old(postype_i_old);
-                    unsigned int type_i = __scalar_as_int(postype_i_old.w);
+                    Scalar4 postype_i = texFetchScalar4(d_postype, depletants_postype_tex, i);
+                    vec3<Scalar> pos_i_old(postype_i);
+                    unsigned int type_i = __scalar_as_int(postype_i.w);
                     Shape shape_i(quat<Scalar>(), s_params[type_i]);
 
                     // prefetch next j
-                    k += group_size;
+                    unsigned int excell_idx = excli(k,my_cell);
+                    if (old_config)
+                        {
+                        old_config = false;
+                        }
+                    else
+                        {
+                        k += group_size;
+                        old_config = true;
+                        }
+
                     j = next_j;
+                    cell_set = next_cell_set;
 
                     if (k < excell_size)
                         {
                         #if (__CUDA_ARCH__ > 300)
                         next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
-                        #else
-                        next_j = d_excell_idx[excli(k, my_cell)];
+                        next_cell_set = __ldg(&d_excell_cell_set[excli(k,my_cell)]);
                         #endif
                         }
 
+                    if (!old_config && (!d_trial_updated[j] || s_update_order[cell_set] >= update_order_i))
+                        {
+                        skip_previous = true;
+                        continue;
+                        }
+
                     // read in position, and orientation of neighboring particle
-                    Scalar4 postype_j_old = texFetchScalar4(d_postype_old, depletants_postype_old_tex, j);
-                    unsigned int type_j = __scalar_as_int(postype_j_old.w);
+                    Scalar4 postype_j;
+                    if (old_config)
+                        postype_j = texFetchScalar4(d_postype, postype_tex, j);
+                    else
+                        postype_j = d_trial_postype[j];
+
+                    unsigned int type_j = __scalar_as_int(postype_j.w);
                     Shape shape_j(quat<Scalar>(), s_params[type_j]);
 
                     // put particle j into the coordinate system of particle i
-                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j_old) - pos_i_old;
+                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_old;
                     r_ij = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
 
                     // test excluded volume circumsphere overlap
@@ -1306,14 +1388,29 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                         if (insert_point < max_queue_size)
                             {
                             s_queue_gid[insert_point] = group;
-                            s_queue_j[insert_point] = j;
+                            s_queue_old_config_j[insert_point] = old_config ? 1+2*skip_previous : 0;
+                            s_queue_excell_idx[insert_point] = excell_idx;
+
+                            skip_previous = false;
                             }
                         else
                             {
                             // or back up if the queue is already full
                             // we will recheck and insert this on the next time through
-                            k -= group_size;
+                            if (old_config)
+                                {
+                                k -= group_size;
+                                old_config = false;
+                                }
+                            else
+                                {
+                                old_config = true;
+                                }
                             }
+                        }
+                    else
+                        {
+                        skip_previous = false;
                         }
 
                     } // end if k < excell_size
@@ -1337,19 +1434,24 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             #if (__CUDA_ARCH__ > 300)
             // need to extract the intersection volume to perform out of the shared mem queue
             unsigned int check_group = s_queue_gid[tidx_1d];
-            unsigned int check_j = s_queue_j[tidx_1d];
+            unsigned int check_excell_idx = s_queue_excell_idx[tidx_1d];
+            unsigned int check_old_config = s_queue_old_config_j[tidx_1d] & 1;
+            //bool skip_previous = s_queue_old_config_j[tidx_1d] & 2;
+            unsigned int check_i = s_idx_group[check_group];
+            unsigned int check_j = d_excell_idx[check_excell_idx];
+            unsigned int check_update_order_j = s_update_order[d_excell_cell_set[check_excell_idx]];
+
             unsigned int check_active_cell = s_active_cell_group[check_group];
             vec3<Scalar> r_ij;
 
             // build shape i from shared memory, no need for orientations
-            unsigned int check_i = s_idx_group[check_group];
-            Scalar4 check_postype_i_old = texFetchScalar4(d_postype_old, depletants_postype_old_tex, check_i);
+            Scalar4 check_postype_i_old = d_postype[i];
             vec3<Scalar> pos_i_old(check_postype_i_old);
             unsigned int type_i = __scalar_as_int(check_postype_i_old.w);
             Shape shape_i_old(quat<Scalar>(), s_params[type_i]);
 
             // build shape j from global memory
-            Scalar4 postype_j_old = texFetchScalar4(d_postype_old, depletants_postype_old_tex, check_j);
+            Scalar4 postype_j_old = check_old_config ? d_postype[check_j] : d_trial_postype[check_j];
             unsigned int type_j = __scalar_as_int(postype_j_old.w);
             Shape shape_j_old(quat<Scalar>(), s_params[type_j]);
 
@@ -1383,6 +1485,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
 
             unsigned int shared_bytes = num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
+            shared_bytes += csi.getH();
             if (load_shared) shared_bytes += extra_bytes;
 
             // only launch when necessary
@@ -1431,10 +1534,17 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                     d_params,
                     max_extra_bytes,
                     depletant_type,
-                    d_postype_old,
-                    d_orientation_old,
+                    d_trial_postype,
+                    d_trial_orientation,
                     d_overlap_cell,
-                    load_shared
+                    load_shared,
+                    check_excell_idx,
+                    check_old_config,
+                    check_update_order_j,
+                    d_update_order,
+                    csi,
+                    d_excell_cell_set,
+                    d_excell_overlap
                     );
 
                 if (check_cuda_errors)
@@ -1768,7 +1878,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
                args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
     unsigned int shared_bytes = n_groups * 3*sizeof(unsigned int) +
-                                max_queue_size*(sizeof(unsigned int) + sizeof(unsigned int)) +
+                                max_queue_size*4*sizeof(unsigned int) +
                                 min_shared_bytes;
 
     if (min_shared_bytes >= args.devprop.sharedMemPerBlock)
@@ -1787,8 +1897,8 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
 
         n_groups = block_size / (group_size);
         max_queue_size = n_groups*group_size;
-        shared_bytes = n_groups * 3*sizeof(unsigned int) +
-                       max_queue_size*(sizeof(unsigned int) + sizeof(unsigned int)) +
+        shared_bytes = n_groups * 4*sizeof(unsigned int) +
+                       max_queue_size* 3*sizeof(unsigned int) +
                        min_shared_bytes;
         }
 
@@ -1837,10 +1947,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     dim3 threads = dim3(group_size, n_groups,1);
 
     // 1 block per active cell
-    dim3 grid( args.n_active_cells/n_groups+1, 1, 1);
-
-    // reset counters
-    cudaMemsetAsync(args.d_overlap_cell,0, sizeof(unsigned int)*args.n_active_cells,args.stream);
+    dim3 grid( args.csi.getNumElements()/n_groups+1, 1, 1);
 
     // need to execute on stream to satisfy data dependencies with managed memory
     gpu_hpmc_insert_depletants_queue_dp_kernel<Shape><<<grid, threads, shared_bytes, args.stream>>>(args.d_postype,
@@ -1856,7 +1963,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
                                                                  args.cell_dim,
                                                                  args.ghost_width,
                                                                  args.d_cell_set,
-                                                                 args.n_active_cells,
+                                                                 args.csi,
                                                                  args.N,
                                                                  args.num_types,
                                                                  args.seed,
@@ -1873,14 +1980,19 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
                                                                  max_extra_bytes,
                                                                  extra_bytes,
                                                                  args.depletant_type,
-                                                                 args.d_postype_old,
-                                                                 args.d_orientation_old,
                                                                  args.d_overlap_cell,
                                                                  args.d_implicit_count,
                                                                  args.fugacity,
                                                                  block_size_overlaps,
                                                                  args.check_cuda_errors,
-                                                                 args.load_shared);
+                                                                 args.load_shared,
+                                                                 args.d_excell_cell_set,
+                                                                 args.d_trial_postype,
+                                                                 args.d_trial_orientation,
+                                                                 args.d_trial_updated,
+                                                                 args.d_update_order,
+                                                                 args.d_excell_overlap);
+
     return cudaSuccess;
     }
 
