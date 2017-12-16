@@ -1010,7 +1010,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 block_size_overlaps,
                                 load_shared);
 
-                        detail::gpu_hpmc_insert_depletants_queue<Shape>(args, params.data());
+                        detail::gpu_hpmc_insert_depletants_dp<Shape>(args, params.data());
 
                         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                             CHECK_CUDA_ERROR();
