@@ -203,38 +203,35 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     // the full block size, stride and group size matrix is searched,
     // encoded as block_size*1000000 + stride*100 + group_size.
 
-    // parameters for count_overlaps kernel
-    std::vector<unsigned int> valid_params_overlaps;
+    // valid params for dynamic parallelism kernel
+    std::vector<unsigned int> valid_params_dp;
+
+    // valid params for kernel without dynamic parallelism, but with extra shared memory tuning
+    std::vector<unsigned int> valid_params_tune_shared;
 
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
 
     // whether to load extra data into shared mem or fetch directly from global mem
     for (unsigned int load_shared = 0; load_shared < 2; ++load_shared)
         {
-        if (Shape::isParallel())
-            {
-            for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
-                block_size_overlaps += dev_prop.warpSize)
-                {
-                for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
-                    {
-                    for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
-                        {
-                        if ((block_size % group_size) == 0)
-                            valid_params_overlaps.push_back(block_size*1000000 + block_size_overlaps*100 + group_size + load_shared * dev_prop.warpSize);
-                        }
-                    }
-                }
-            }
-        else
+        for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
+            block_size_overlaps += dev_prop.warpSize)
             {
             for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
                 {
                 for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
                     {
                     if ((block_size % group_size) == 0)
-                        valid_params_overlaps.push_back(block_size*1000000 + group_size + load_shared * dev_prop.warpSize);
+                        valid_params_dp.push_back(block_size*1000000 + block_size_overlaps*100 + group_size + load_shared * dev_prop.warpSize);
                     }
+                }
+            }
+        for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
+            {
+            for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+                {
+                if ((block_size % group_size) == 0)
+                    valid_params_tune_shared.push_back(block_size*1000000 + group_size + load_shared * dev_prop.warpSize);
                 }
             }
         }
@@ -253,10 +250,11 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
 
     m_tuner_update.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_update", this->m_exec_conf));
     m_tuner_excell_block_size.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_excell_block_size", this->m_exec_conf));
-    m_tuner_implicit.reset(new Autotuner(valid_params_overlaps, 5, 1000000, "hpmc_insert_depletants", this->m_exec_conf));
+    m_tuner_implicit.reset(new Autotuner(valid_params_dp, 5, 1000000, "hpmc_insert_depletants", this->m_exec_conf));
 
     m_tuner_moves.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_moves", this->m_exec_conf));
-    m_tuner_check_overlaps.reset(new Autotuner(valid_params_overlaps, 5, 1000000, "hpmc_check_overlaps", this->m_exec_conf));
+    m_tuner_check_overlaps.reset(new Autotuner(Shape::isParallel() ? valid_params_dp : valid_params_tune_shared,
+        5, 1000000, "hpmc_check_overlaps", this->m_exec_conf));
     m_tuner_accept.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_accept", this->m_exec_conf));
 
     GPUArray<hpmc_implicit_counters_t> implicit_count(1,this->m_exec_conf);
