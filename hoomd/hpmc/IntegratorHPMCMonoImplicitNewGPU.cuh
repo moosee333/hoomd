@@ -83,7 +83,8 @@ struct hpmc_implicit_args_new_t
                 cudaStream_t _stream,
                 bool _check_cuda_errors,
                 unsigned int _block_size_overlaps,
-                bool _load_shared
+                bool _load_shared,
+                unsigned int *_d_trial_updated = 0
                 )
                 : d_postype(_d_postype),
                   d_orientation(_d_orientation),
@@ -132,7 +133,8 @@ struct hpmc_implicit_args_new_t
                   stream(_stream),
                   check_cuda_errors(_check_cuda_errors),
                   block_size_overlaps(_block_size_overlaps),
-                  load_shared(_load_shared)
+                  load_shared(_load_shared),
+                  d_trial_updated(_d_trial_updated)
         {
         };
 
@@ -184,6 +186,7 @@ struct hpmc_implicit_args_new_t
     bool check_cuda_errors;            //!< Whether to check CUDA errors of child kernel launches
     unsigned int block_size_overlaps;  //!< Block size for overlap check kernel
     bool load_shared;                  //!< Whether to load extra shape data into shared mem or fetch from managed memory
+    unsigned int *d_trial_updated;      //!< ==1 if move has been accepted or is pending
     };
 
 template< class Shape >
@@ -1904,6 +1907,7 @@ __global__ void gpu_implicit_accept_reject_new_kernel(
     const unsigned int *d_active_cell_accept,
     const unsigned int *d_move_type_translate,
     curandState_t *d_state_cell,
+    unsigned int *d_trial_updated,
     const typename Shape::param_type *d_params
     )
     {
@@ -1937,6 +1941,10 @@ __global__ void gpu_implicit_accept_reject_new_kernel(
         // revert to old position and orientation
         d_postype[updated_ptl_idx] = d_postype_old[updated_ptl_idx];
         d_orientation[updated_ptl_idx] = d_orientation_old[updated_ptl_idx];
+
+        // reset flag for next overlap acceptance
+        if (d_trial_updated)
+            d_trial_updated[updated_ptl_idx] = 0;
 
         if (!shape_i.ignoreStatistics())
             {
@@ -2010,6 +2018,7 @@ cudaError_t gpu_hpmc_implicit_accept_reject_new(const hpmc_implicit_args_new_t& 
         args.d_active_cell_accept,
         args.d_active_cell_move_type_translate,
         args.d_state_cell,
+        args.d_trial_updated,
         d_params);
 
     return cudaSuccess;

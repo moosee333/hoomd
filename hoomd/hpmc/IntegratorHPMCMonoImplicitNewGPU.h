@@ -1071,7 +1071,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                                 m_stream,
                                 this->m_exec_conf->isCUDAErrorCheckingEnabled(),
                                 block_size_overlaps,
-                                false // load_shared
+                                false,// load_shared
+                                d_trial_updated.data
                                 ),
                             params.data());
 
