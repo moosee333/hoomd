@@ -578,7 +578,7 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
         for (unsigned int j= 0; j< nb; j++)
             {
             // fetch next face of particle b
-            unsigned int nverts_b = next_offs-next_offs_end;
+            unsigned int nverts_b = next_offs_end-next_offs;
             unsigned int offs_b = next_offs;
             unsigned int mask_b = next_mask;
 
