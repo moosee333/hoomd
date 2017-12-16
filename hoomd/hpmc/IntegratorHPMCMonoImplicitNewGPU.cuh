@@ -1485,7 +1485,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
 
             unsigned int shared_bytes = num_types*sizeof(Shape::param_type);
             shared_bytes += overlap_idx.getNumElements()*sizeof(unsigned int);
-            shared_bytes += csi.getH()*sizeof(unsigned int);
+            shared_bytes += csi.getH();
             if (load_shared) shared_bytes += extra_bytes;
 
             // only launch when necessary
@@ -1917,8 +1917,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     // manage extra shared memory in nested kernel
     static unsigned int base_shared_bytes = UINT_MAX;
     unsigned int shared_bytes_overlaps = args.num_types*sizeof(typename Shape::param_type)
-        + args.overlap_idx.getNumElements()*sizeof(unsigned int)
-        + args.csi.getH()*sizeof(unsigned int);
+        + args.overlap_idx.getNumElements()*sizeof(unsigned int);
     bool shared_bytes_changed = base_shared_bytes != shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
     base_shared_bytes = shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
 
