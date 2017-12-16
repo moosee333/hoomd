@@ -2017,7 +2017,10 @@ __global__ void gpu_hpmc_accept_kernel(Scalar4 *d_postype,
                                      unsigned int *d_trial_move_type_translate,
                                      unsigned int cur_set,
                                      unsigned int max_queue_size,
-                                     const unsigned int *d_update_order)
+                                     const unsigned int *d_update_order,
+                                     unsigned int *d_active_cell_ptl_idx,
+                                     unsigned int *d_active_cell_accept,
+                                     unsigned int *d_active_cell_move_type_translate)
     {
     // flags to tell what type of thread we are
     bool active = true;
@@ -2316,6 +2319,30 @@ __global__ void gpu_hpmc_accept_kernel(Scalar4 *d_postype,
                 d_trial_updated[i] = 0;
                 }
 
+            if (d_active_cell_accept)
+                {
+                // store particle index
+                d_active_cell_ptl_idx[active_cell_idx] = i;
+                }
+
+            if (d_active_cell_accept)
+                {
+                // store accept flag
+                d_active_cell_accept[active_cell_idx] = accepted ? 1 : 0;
+                }
+
+            if (d_active_cell_move_type_translate)
+                {
+                // store move type
+                d_active_cell_move_type_translate[active_cell_idx] = move_type_translate ? 1 : 0;
+                }
+
+            // if an auxillary array was provided, defer writing out statistics
+            if (d_active_cell_ptl_idx)
+                {
+                ignore_stats = 1;
+                }
+
             if (!ignore_stats && accepted && move_type_translate)
                 atomicAdd(&s_translate_accept_count, 1);
             if (!ignore_stats && accepted && !move_type_translate)
@@ -2324,6 +2351,14 @@ __global__ void gpu_hpmc_accept_kernel(Scalar4 *d_postype,
                 atomicAdd(&s_translate_reject_count, 1);
             if (!ignore_stats && !accepted && !move_type_translate)
                 atomicAdd(&s_rotate_reject_count, 1);
+            }
+        else // active && move_active
+            {
+            if (d_active_cell_ptl_idx && active_cell_idx < n_active_cells)
+                {
+                // indicate that no particle was selected
+                d_active_cell_ptl_idx[active_cell_idx] = UINT_MAX;
+                }
             }
         }
 
@@ -2629,7 +2664,10 @@ cudaError_t gpu_hpmc_accept(const hpmc_args_t& args, const typename Shape::param
                                                                  args.d_trial_move_type_translate,
                                                                  args.cur_set,
                                                                  max_queue_size,
-                                                                 args.d_update_order);
+                                                                 args.d_update_order,
+                                                                 args.d_active_cell_ptl_idx,
+                                                                 args.d_active_cell_accept,
+                                                                 args.d_active_cell_move_type_translate);
 
     return cudaSuccess;
     }
