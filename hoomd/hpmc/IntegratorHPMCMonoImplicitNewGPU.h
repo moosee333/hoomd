@@ -59,16 +59,16 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
             if (ndim == 3)
                 {
                 m_tuner_update->setPeriod(period*this->m_nselect*8);
-                m_tuner_moves->setPeriod(period*this->m_nselect*8);
-                m_tuner_check_overlaps->setPeriod(period*this->m_nselect*8);
+                m_tuner_moves->setPeriod(period*this->m_nselect);
+                m_tuner_check_overlaps->setPeriod(period*this->m_nselect);
                 m_tuner_accept->setPeriod(period*this->m_nselect*8);
                 m_tuner_implicit->setPeriod(period*this->m_nselect*8);
                 }
             else
                 {
                 m_tuner_update->setPeriod(period*this->m_nselect*4);
-                m_tuner_moves->setPeriod(period*this->m_nselect*4);
-                m_tuner_check_overlaps->setPeriod(period*this->m_nselect*4);
+                m_tuner_moves->setPeriod(period*this->m_nselect);
+                m_tuner_check_overlaps->setPeriod(period*this->m_nselect);
                 m_tuner_accept->setPeriod(period*this->m_nselect*4);
                 m_tuner_implicit->setPeriod(period*this->m_nselect*4);
                 }
