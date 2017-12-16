@@ -1445,7 +1445,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
             vec3<Scalar> r_ij;
 
             // build shape i from shared memory, no need for orientations
-            Scalar4 check_postype_i_old = d_postype[check_i];
+            Scalar4 check_postype_i_old = d_postype[i];
             vec3<Scalar> pos_i_old(check_postype_i_old);
             unsigned int type_i = __scalar_as_int(check_postype_i_old.w);
             Shape shape_i_old(quat<Scalar>(), s_params[type_i]);
@@ -1875,8 +1875,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     unsigned int max_queue_size = n_groups*group_size;
 
     unsigned int min_shared_bytes = args.num_types * sizeof(typename Shape::param_type) +
-               args.overlap_idx.getNumElements() * sizeof(unsigned int) +
-               args.csi.getH() * sizeof(unsigned int);
+               args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
     unsigned int shared_bytes = n_groups * 3*sizeof(unsigned int) +
                                 max_queue_size*4*sizeof(unsigned int) +
