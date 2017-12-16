@@ -253,7 +253,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
 
     m_tuner_update.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_update", this->m_exec_conf));
     m_tuner_excell_block_size.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_excell_block_size", this->m_exec_conf));
-    m_tuner_implicit.reset(new Autotuner(valid_params_overlaps, 5, 1000000, "hpmc_insert_depletants", this->m_exec_conf));
+    m_tuner_implicit.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_insert_depletants", this->m_exec_conf));
 
     m_tuner_moves.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_moves", this->m_exec_conf));
     m_tuner_check_overlaps.reset(new Autotuner(valid_params_overlaps, 5, 1000000, "hpmc_check_overlaps", this->m_exec_conf));
@@ -895,93 +895,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                 CHECK_CUDA_ERROR();
 
             m_tuner_check_overlaps->end();
-
-            if (have_depletants)
-                {
-                if (this->m_prof) this->m_prof->push(this->m_exec_conf,"Depletants");
-
-                // counters
-                ArrayHandle<hpmc_implicit_counters_t> d_implicit_count(this->m_implicit_count, access_location::device, access_mode::readwrite);
-
-                // Kernel driver arguments
-                unsigned int param = m_tuner_implicit->getParam();
-                unsigned int block_size = param / 1000000;
-                unsigned int block_size_overlaps = (param % 1000000) / 100;
-                unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
-                bool load_shared = ((param % 100)-1) / (dev_prop.warpSize);
-
-                m_tuner_implicit->begin();
-
-                // kernel parameters
-                auto args =   detail::hpmc_implicit_args_new_t(d_postype.data,
-                        d_orientation.data,
-                        0, //old_postype
-                        0, //old_orientation
-                        d_cell_idx.data,
-                        d_cell_size.data,
-                        d_excell_idx.data,
-                        d_excell_size.data,
-                        this->m_cl->getCellIndexer(),
-                        this->m_cl->getCellListIndexer(),
-                        this->m_excell_list_indexer,
-                        this->m_cl->getDim(),
-                        ghost_width,
-                        d_cell_sets.data,
-                        this->m_cell_set_indexer.getW(),
-                        this->m_pdata->getN(),
-                        this->m_pdata->getNTypes(),
-                        this->m_seed + this->m_exec_conf->getRank()*this->m_nselect,
-                        d_overlaps.data,
-                        this->m_overlap_idx,
-                        timestep,
-                        this->m_sysdef->getNDimensions(),
-                        box,
-                        i+particles_per_cell*this->m_nselect,
-                        block_size,
-                        0, //stride
-                        group_size,
-                        this->m_hasOrientation,
-                        this->m_pdata->getMaxN(),
-                        this->m_exec_conf->dev_prop,
-                        0, // cudarand_state_cell
-                        0, // curand_state_cell_new
-                        this->m_type,
-                        d_counters.data,
-                        d_implicit_count.data,
-                        0, // poisson_dist
-                        0, // overlap_cell
-                        0, // active_cell_ptl_idx
-                        0, // active_cell_accept
-                        0, // active_cell_move_type_translate
-                        0, //d_min
-                        0, //d_max
-                        first,
-                        this->getDepletantDensity(),
-                        m_stream,
-                        this->m_exec_conf->isCUDAErrorCheckingEnabled(),
-                        block_size_overlaps,
-                        load_shared,
-                        m_cell_set_indexer,
-                        d_excell_cell_set.data,
-                        d_trial_postype.data,
-                        d_trial_orientation.data,
-                        d_trial_updated.data,
-                        0, //d_update_order
-                        d_excell_overlap.data);
-
-                    {
-                    ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.getInverse(), access_location::device, access_mode::read);
-                    args.d_update_order = d_update_order.data;
-                    }
-
-
-                detail::gpu_hpmc_insert_depletants_dp<Shape>(args, params.data());
-
-                if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
-                    CHECK_CUDA_ERROR();
-
-                m_tuner_implicit->end();
-                }
 
             first = false;
 
