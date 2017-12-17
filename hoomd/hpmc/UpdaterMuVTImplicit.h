@@ -1074,57 +1074,58 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
     hoomd::detail::Saru rng(timestep, this->m_seed, 0x1412459a);
     #endif
 
-    if (this->m_pdata->getN())
+    n_free = 0;
+
+    if (is_local)
         {
-        // update the aabb tree (only valid with N > 0 particles)
-        const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
+        auto params = this->m_mc->getParams();
 
-        // update the image list
-        const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+        ArrayHandle<unsigned int> h_overlaps(this->m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
+        const Index2D & overlap_idx = this->m_mc->getOverlapIndexer();
 
-        n_free = 0;
-
-        if (is_local)
+        // for every test depletant
+        for (unsigned int k = 0; k < n_insert; ++k)
             {
-            ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
-            ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
-            ArrayHandle<unsigned int> h_tag(this->m_pdata->getTags(), access_location::host, access_mode::read);
+            // draw a random vector in the excluded volume sphere of the particle to be inserted
+            Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
+            Scalar z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
 
-            const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = this->m_mc->getParams();
+            // random normalized vector
+            vec3<Scalar> n(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
 
-            ArrayHandle<unsigned int> h_overlaps(this->m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
-            const Index2D & overlap_idx = this->m_mc->getOverlapIndexer();
+            // draw random radial coordinate in test sphere
+            Scalar r3 = rng.template s<Scalar>();
+            Scalar r = Scalar(0.5)*delta*powf(r3,1.0/3.0);
 
-            // for every test depletant
-            for (unsigned int k = 0; k < n_insert; ++k)
+            // test depletant position
+            vec3<Scalar> pos_test = pos+r*n;
+
+            Shape shape_test(quat<Scalar>(), params[type_d]);
+            if (shape_test.hasOrientation())
                 {
-                // draw a random vector in the excluded volume sphere of the particle to be inserted
-                Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
-                Scalar z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
+                // if the depletant is anisotropic, generate orientation
+                shape_test.orientation = generateRandomOrientation(rng);
+                }
 
-                // random normalized vector
-                vec3<Scalar> n(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
+            // check against overlap with old configuration
+            bool overlap_old = false;
 
-                // draw random radial coordinate in test sphere
-                Scalar r3 = rng.template s<Scalar>();
-                Scalar r = Scalar(0.5)*delta*powf(r3,1.0/3.0);
+            detail::AABB aabb_test_local = shape_test.getAABB(vec3<Scalar>(0,0,0));
 
-                // test depletant position
-                vec3<Scalar> pos_test = pos+r*n;
+            unsigned int err_count = 0;
 
-                Shape shape_test(quat<Scalar>(), params[type_d]);
-                if (shape_test.hasOrientation())
-                    {
-                    // if the depletant is anisotropic, generate orientation
-                    shape_test.orientation = generateRandomOrientation(rng);
-                    }
+            if (this->m_pdata->getN())
+                {
+                // update the aabb tree (only valid with N > 0 particles)
+                const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
-                // check against overlap with old configuration
-                bool overlap_old = false;
+                // update the image list
+                const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
 
-                detail::AABB aabb_test_local = shape_test.getAABB(vec3<Scalar>(0,0,0));
+                ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
+                ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+                ArrayHandle<unsigned int> h_tag(this->m_pdata->getTags(), access_location::host, access_mode::read);
 
-                unsigned int err_count = 0;
                 // All image boxes (including the primary)
                 const unsigned int n_images = image_list.size();
                 for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
@@ -1179,29 +1180,30 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
                     if (overlap_old)
                         break;
                     } // end loop over images
+                }
+            if (! overlap_old)
+                {
+                n_free++;
 
-                if (! overlap_old)
+                // see if it overlaps with inserted particle
+                const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+                for (unsigned int cur_image = 0; cur_image < image_list.size(); cur_image++)
                     {
-                    n_free++;
-                    // see if it overlaps with inserted particle
-                    for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
-                        {
-                        Shape shape(orientation, params[type]);
+                    Shape shape(orientation, params[type]);
 
-                        vec3<Scalar> pos_test_image = pos_test + image_list[cur_image];
-                        vec3<Scalar> r_ij = pos - pos_test_image;
-                        if (h_overlaps.data[overlap_idx(type_d, type)]
-                            && check_circumsphere_overlap(r_ij, shape_test, shape)
-                            && test_overlap(r_ij, shape_test, shape, err_count))
-                            {
-                            n_overlap++;
-                            }
+                    vec3<Scalar> pos_test_image = pos_test + image_list[cur_image];
+                    vec3<Scalar> r_ij = pos - pos_test_image;
+                    if (h_overlaps.data[overlap_idx(type_d, type)]
+                        && check_circumsphere_overlap(r_ij, shape_test, shape)
+                        && test_overlap(r_ij, shape_test, shape, err_count))
+                        {
+                        n_overlap++;
                         }
                     }
+                }
 
-                } // end loop over test depletants
-            } // is_local
-        } // end if N >0
+            } // end loop over test depletants
+        } // is_local
     #ifdef ENABLE_MPI
     if (this->m_comm)
         {
