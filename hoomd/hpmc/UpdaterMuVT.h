@@ -354,6 +354,10 @@ UpdaterMuVT<Shape>::~UpdaterMuVT()
 template<class Shape>
 void UpdaterMuVT<Shape>::mapTypes()
     {
+    m_exec_conf->msg->notice(8) << "UpdaterMuVT updating type map " << m_pdata->getN() << " particles " << std::endl;
+
+    if (m_prof) m_prof->push("Map types");
+
     ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
     ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
 
@@ -373,6 +377,8 @@ void UpdaterMuVT<Shape>::mapTypes()
         assert(m_type_map.size() > typei);
         m_type_map[typei].push_back(tag);
         }
+
+    if (m_prof) m_prof->pop();
     }
 
 template<class Shape>
@@ -936,8 +942,10 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     // generate particles locally
                     unsigned int n_insert = poisson(rng_poisson);
 
-                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " inserting " << n_insert
-                         << " ptls of type " << type << std::endl;
+                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to insert " << n_insert
+                         << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
+
+                    if (m_prof) m_prof->push("Insert");
 
                     // local particle data
                     std::vector<vec3<Scalar> > positions;
@@ -969,15 +977,27 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             {
                             positions.push_back(pos_test);
                             orientations.push_back(shape_test.orientation);
+
+                            m_count_total.insert_accept_count++;
+                            }
+                        else
+                            {
+                            m_count_total.insert_reject_count++;
                             }
                         }
 
+                    if (m_prof) m_prof->pop();
+
                     // remove old particles first *after* checking overlaps (Gibbs sampler)
-                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << m_type_map[type].size()
-                         << " ptls of type " << type << std::endl;
+                    unsigned int n_remove_local = m_type_map[type].size();
+                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << n_remove_local
+                         << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
 
                     // remove all particles of the given types
                     m_pdata->removeParticlesGlobal(m_type_map[type]);
+
+                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " inserting " << positions.size()
+                         << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
 
                     // bulk-insert the particles
                     auto inserted_tags = m_pdata->addParticlesGlobal(positions.size());
@@ -985,26 +1005,31 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     assert(inserted_tags.size() == positions.size());
                     assert(inserted_tags.size() == orientations.size());
 
-                    // set the particle properties
-                    ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-                    ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
-                    ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
-
-                    unsigned int n = 0;
-                    for (auto it_tag = inserted_tags.begin(); it_tag != inserted_tags.end(); ++it_tag)
                         {
-                        unsigned int tag = *it_tag;
-                        assert(h_rtag.data[tag] < m_pdata->getN());
+                        // set the particle properties
+                        ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
+                        ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
+                        ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
 
-                        unsigned int idx = h_rtag.data[tag];
-                        vec3<Scalar> pos = positions[n];
-                        h_postype.data[idx] = make_scalar4(pos.x, pos.y, pos.z, __int_as_scalar(type));
-                        if (shape_test.hasOrientation())
+                        unsigned int n = 0;
+                        for (auto it_tag = inserted_tags.begin(); it_tag != inserted_tags.end(); ++it_tag)
                             {
-                            h_orientation.data[idx] = quat_to_scalar4(orientations[n]);
+                            unsigned int tag = *it_tag;
+                            assert(h_rtag.data[tag] < m_pdata->getN());
+
+                            unsigned int idx = h_rtag.data[tag];
+                            vec3<Scalar> pos = positions[n];
+                            h_postype.data[idx] = make_scalar4(pos.x, pos.y, pos.z, __int_as_scalar(type));
+                            if (shape_test.hasOrientation())
+                                {
+                                h_orientation.data[idx] = quat_to_scalar4(orientations[n]);
+                                }
+                            n++;
                             }
-                        n++;
                         }
+
+                    // types have changed
+                    m_pdata->notifyParticleSort();
                     }
                 } // end else gibbs && !parallel
             } // end transfer move
@@ -1599,12 +1624,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
         const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
 
         // check for overlaps
-        ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
-
-        const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
+        auto params = m_mc->getParams();
 
         ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
         const Index2D& overlap_idx = m_mc->getOverlapIndexer();
@@ -1617,45 +1637,58 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
 
         unsigned int err_count = 0;
 
-        const unsigned int n_images = image_list.size();
-        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
             {
-            vec3<Scalar> pos_image = pos + image_list[cur_image];
+            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
 
-            if (cur_image != 0)
+            const unsigned int n_images = image_list.size();
+            for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                 {
-                // check for self-overlap with all images except the original
-                vec3<Scalar> r_ij = pos - pos_image;
-                if (h_overlaps.data[overlap_idx(type, type)]
-                    && check_circumsphere_overlap(r_ij, shape, shape)
-                    && test_overlap(r_ij, shape, shape, err_count))
-                    {
-                    overlap = 1;
-                    break;
-                    }
+                vec3<Scalar> pos_image = pos + image_list[cur_image];
 
-                // self-energy
-                if (patch && dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
+                if (cur_image != 0)
                     {
-                    lnboltzmann -= patch->energy(r_ij,
-                        type,
-                        quat<float>(orientation),
-                        1.0, // diameter i
-                        0.0, // charge i
-                        type,
-                        quat<float>(orientation),
-                        1.0, // diameter i
-                        0.0 // charge i
-                        );
+                    // check for self-overlap with all images except the original
+                    vec3<Scalar> r_ij = pos - pos_image;
+                    if (h_overlaps.data[overlap_idx(type, type)]
+                        && check_circumsphere_overlap(r_ij, shape, shape)
+                        && test_overlap(r_ij, shape, shape, err_count))
+                        {
+                        overlap = 1;
+                        break;
+                        }
+
+                    // self-energy
+                    if (patch && dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
+                        {
+                        lnboltzmann -= patch->energy(r_ij,
+                            type,
+                            quat<float>(orientation),
+                            1.0, // diameter i
+                            0.0, // charge i
+                            type,
+                            quat<float>(orientation),
+                            1.0, // diameter i
+                            0.0 // charge i
+                            );
+                        }
                     }
                 }
-            }
+            } // end ArrayHandle scope
 
         // we cannot rely on a valid AABB tree when there are 0 particles
         if (! overlap && nptl_local > 0)
             {
             // Check particle against AABB tree for neighbors
             const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
+            const unsigned int n_images = image_list.size();
+
+            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
 
             OverlapReal R_query = std::max(shape.getCircumsphereDiameter()/OverlapReal(2.0), r_cut_patch - m_mc->getMinCoreDiameter()/(OverlapReal)2.0);
             detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
@@ -1663,7 +1696,6 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
             for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                 {
                 vec3<Scalar> pos_image = pos + image_list[cur_image];
-
 
                 detail::AABB aabb = aabb_local;
                 aabb.translate(pos_image);

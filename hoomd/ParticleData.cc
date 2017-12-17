@@ -364,13 +364,8 @@ void ParticleData::allocate(unsigned int N)
     GPUArray< Scalar3 > inertia(N, m_exec_conf);
     m_inertia.swap(inertia);
 
-    #ifdef ENABLE_MPI
-    if (m_decomposition)
-        {
-        GPUArray< unsigned int > comm_flags(N, m_exec_conf);
-        m_comm_flags.swap(comm_flags);
-        }
-    #endif
+    GPUArray< unsigned int > comm_flags(N, m_exec_conf);
+    m_comm_flags.swap(comm_flags);
 
     // allocate alternate particle data arrays (for swapping in-out)
     allocateAlternateArrays(N);
@@ -507,9 +502,7 @@ void ParticleData::reallocate(unsigned int max_n)
     m_angmom.resize(max_n);
     m_inertia.resize(max_n);
 
-    #ifdef ENABLE_MPI
-    if (m_decomposition) m_comm_flags.resize(max_n);
-    #endif
+    m_comm_flags.resize(max_n);
 
     if (! m_pos_alt.isNull())
         {
@@ -914,6 +907,7 @@ void ParticleData::initializeFromSnapshot(const SnapshotParticleData<Real>& snap
         ArrayHandle< Scalar3 > h_inertia(m_inertia, access_location::host, access_mode::overwrite);
         ArrayHandle< unsigned int > h_tag(m_tag, access_location::host, access_mode::overwrite);
         ArrayHandle< unsigned int > h_rtag(m_rtag, access_location::host, access_mode::readwrite);
+        ArrayHandle< unsigned int > h_comm_flag(m_comm_flags, access_location::host, access_mode::overwrite);
 
         for (unsigned int snap_idx = 0; snap_idx < snapshot.size; snap_idx++)
             {
@@ -941,6 +935,8 @@ void ParticleData::initializeFromSnapshot(const SnapshotParticleData<Real>& snap
             h_orientation.data[nglobal] = quat_to_scalar4(snapshot.orientation[snap_idx]);
             h_angmom.data[nglobal] = quat_to_scalar4(snapshot.angmom[snap_idx]);
             h_inertia.data[nglobal] = vec_to_scalar3(snapshot.inertia[snap_idx]);
+
+            h_comm_flag.data[nglobal] = 0;
             nglobal++;
             }
 
@@ -2223,27 +2219,30 @@ void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
     // we are changing the local number of particles, so remove ghosts
     removeAllGhostParticles();
 
-    ArrayHandle<unsigned int> h_comm_flags(getCommFlags(), access_location::host, access_mode::readwrite);
-
-    for (auto it = tags.begin(); it != tags.end(); ++it)
         {
-        unsigned int tag =  *it;
+        ArrayHandle<unsigned int> h_comm_flags(getCommFlags(), access_location::host, access_mode::readwrite);
 
-        // sanity check
-        if (tag >= m_rtag.size())
+        for (auto it = tags.begin(); it != tags.end(); ++it)
             {
-            m_exec_conf->msg->error() << "Trying to remove particle " << tag << " which does not exist!" << endl;
-            throw runtime_error("Error removing particle");
+            unsigned int tag =  *it;
+            assert(tag <= getMaximumTag());
+
+            // sanity check
+            if (tag >= m_rtag.size())
+                {
+                m_exec_conf->msg->error() << "Trying to remove particle " << tag << " which does not exist!" << endl;
+                throw runtime_error("Error removing particle");
+                }
+
+            // Local particle index
+            unsigned int idx = m_rtag[tag];
+
+            bool is_local = idx < getN();
+            assert(is_local || idx == NOT_LOCAL);
+
+            if (is_local)
+                h_comm_flags.data[idx] = 1; // flag for removal
             }
-
-        // Local particle index
-        unsigned int idx = m_rtag[tag];
-
-        bool is_local = idx < getN();
-        assert(is_local || idx == NOT_LOCAL);
-
-        if (is_local)
-            h_comm_flags.data[idx] = 1; // flag for removal
         }
 
     // collect tags from all ranks
@@ -2265,6 +2264,11 @@ void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
         for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
             tags_unique.insert(*it_j);
 
+    // remove local particles, emits the particle sort signal
+    std::vector<unsigned int> comm_flags; // not used here
+    std::vector<pdata_element> out; // not used here
+    removeParticles(out,comm_flags);
+
     // keep track of inserted/remove tags
     for (auto it = tags_unique.begin(); it != tags_unique.end(); ++it)
         {
@@ -2280,12 +2284,7 @@ void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
     // invalidate active tag cache
     m_invalid_cached_tags = true;
 
-    // remove local particles, emits the particle sort signal
-    std::vector<unsigned int> comm_flags; // not used here
-    std::vector<pdata_element> out; // not used here
-    removeParticles(out,comm_flags);
-
-    // update global particle number
+     // update global particle number
     setNGlobal(getNGlobal()-tags.size());
     }
 
@@ -2315,8 +2314,8 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
         all_n_insert.push_back(n_insert);
         }
 
-    unsigned int n_insert_tot = 0;
-    unsigned int new_tag = getNGlobal();
+    unsigned int old_n_global = getNGlobal();
+    unsigned int new_nglobal = old_n_global;
 
     std::vector<unsigned int> local_inserted_tags;
 
@@ -2330,7 +2329,6 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
     for (auto it = all_n_insert.begin(); it != all_n_insert.end(); ++it)
         {
         unsigned int n_insert_proc = *it;
-        n_insert_tot += n_insert_proc;
 
         for (unsigned i = 0; i < n_insert_proc; ++i)
             {
@@ -2346,13 +2344,15 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
             else
                 {
                 // generate a new tag
-                tag = new_tag;
+                tag = new_nglobal;
                 }
-
-            new_tag++;
 
             // add to set of active tags
             m_tag_set.insert(tag);
+
+            assert(tag <= m_recycled_tags.size() + new_nglobal);
+            assert(tag <= getMaximumTag());
+            new_nglobal++;
 
             if (rank == my_rank)
                 local_inserted_tags.push_back(tag);
@@ -2379,7 +2379,7 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
         el.diameter = 0;
         el.image = make_int3(0,0,0);
         el.body = NO_BODY;
-        el.orientation = make_scalar4(1,0,0,0); 
+        el.orientation = make_scalar4(1,0,0,0);
         el.angmom = make_scalar4(0,0,0,0);
         el.inertia = make_scalar3(0,0,0);
         el.tag = tag;
@@ -2394,11 +2394,11 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
         elements.push_back(el);
         }
 
+    // update global number of particles
+    setNGlobal(new_nglobal);
+
     // insert into local particle data
     addParticles(elements);
-
-    // update global number of particles
-    setNGlobal(getNGlobal()+n_insert_tot);
 
     return local_inserted_tags;
     }
