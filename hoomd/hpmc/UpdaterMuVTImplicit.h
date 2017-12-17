@@ -431,30 +431,29 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryRemoveParticle(unsigned int times
     #endif
 
     // only if the particle to be removed actually exists
-    if (tag != UINT_MAX)
+    #ifdef ENABLE_MPI
+    if (this->m_gibbs)
         {
-        // old type
-        unsigned int type = this->m_pdata->getType(tag);
-
-        // Depletant type
-        unsigned int type_d = m_mc_implicit->getDepletantType();
-
-        // Depletant and colloid diameter
-        Scalar d_dep, d_colloid_old;
+        if (tag != UINT_MAX)
             {
-            const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> >& params = this->m_mc->getParams();
-            quat<Scalar> o;
-            Shape tmp(o, params[type_d]);
-            d_dep = tmp.getCircumsphereDiameter();
+            // old type
+            unsigned int type = this->m_pdata->getType(tag);
 
-            Shape shape_old(o, params[type]);
-            d_colloid_old = shape_old.getCircumsphereDiameter();
-            }
+            // Depletant type
+            unsigned int type_d = m_mc_implicit->getDepletantType();
 
-        #ifdef ENABLE_MPI
+            // Depletant and colloid diameter
+            Scalar d_dep, d_colloid_old;
+                {
+                const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> >& params = this->m_mc->getParams();
+                quat<Scalar> o;
+                Shape tmp(o, params[type_d]);
+                d_dep = tmp.getCircumsphereDiameter();
 
-        if (this->m_gibbs)
-            {
+                Shape shape_old(o, params[type]);
+                d_colloid_old = shape_old.getCircumsphereDiameter();
+                }
+
             // try inserting depletants in new configuration (where particle is removed)
             Scalar delta = d_dep + d_colloid_old;
             if (moveDepletantsIntoOldPosition(timestep, n_insert, delta, tag, m_mc_implicit->getNumTrials(), lnb, true))
@@ -466,12 +465,12 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryRemoveParticle(unsigned int times
                 nonzero = false;
                 }
             }
-        else
-        #endif
-            {
-            // just accept
-            }
-        } // end nglobal
+        }
+    else
+    #endif
+        {
+        // just accept
+        }
 
     return nonzero;
     }

@@ -2206,6 +2206,203 @@ void ParticleData::removeParticle(unsigned int tag)
     notifyParticleSort();
     }
 
+/*! \param tags Tags of particle to remove
+ *
+ * The tag list may differ from rank to rank, a global communication is performed
+ *
+ * \note this function removes ghosts, they need to be re-initialized afterwards
+ */
+void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
+    {
+    if (getNGlobal()==0)
+        {
+        m_exec_conf->msg->error() << "Trying to remove particle when there are zero particles!" << endl;
+        throw runtime_error("Error removing particle");
+        }
+
+    // we are changing the local number of particles, so remove ghosts
+    removeAllGhostParticles();
+
+    ArrayHandle<unsigned int> h_comm_flags(getCommFlags(), access_location::host, access_mode::readwrite);
+
+    for (auto it = tags.begin(); it != tags.end(); ++it)
+        {
+        unsigned int tag =  *it;
+
+        // sanity check
+        if (tag >= m_rtag.size())
+            {
+            m_exec_conf->msg->error() << "Trying to remove particle " << tag << " which does not exist!" << endl;
+            throw runtime_error("Error removing particle");
+            }
+
+        // Local particle index
+        unsigned int idx = m_rtag[tag];
+
+        bool is_local = idx < getN();
+        assert(is_local || idx == NOT_LOCAL);
+
+        if (is_local)
+            h_comm_flags.data[idx] = 1; // flag for removal
+        }
+
+    // collect tags from all ranks
+    std::vector<std::vector<unsigned int> > all_tags_proc;
+    #ifdef ENABLE_MPI
+    if (getDomainDecomposition())
+        {
+        all_gather_v(tags, all_tags_proc, m_exec_conf->getMPICommunicator());
+        }
+    else
+    #endif
+        {
+        all_tags_proc.push_back(tags);
+        }
+
+    // find unique tags
+    std::set<unsigned int> tags_unique;
+    for (auto it_i = all_tags_proc.begin(); it_i != all_tags_proc.end(); ++it_i)
+        for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
+            tags_unique.insert(*it_j);
+
+    // keep track of inserted/remove tags
+    for (auto it = tags_unique.begin(); it != tags_unique.end(); ++it)
+        {
+        unsigned int tag = *it;
+
+        // remove from set of active tags
+        m_tag_set.erase(tag);
+
+        // maintain a stack of deleted group tags for future recycling
+        m_recycled_tags.push(tag);
+        }
+
+    // invalidate active tag cache
+    m_invalid_cached_tags = true;
+
+    // remove local particles, emits the particle sort signal
+    std::vector<unsigned int> comm_flags; // not used here
+    std::vector<pdata_element> out; // not used here
+    removeParticles(out,comm_flags);
+
+    // update global particle number
+    setNGlobal(getNGlobal()-tags.size());
+    }
+
+//! Add new particles to the global simulation box, given local particle data on every rank
+/*! the particle data number may differ from rank to rank, a global synchronization is performed
+
+    \note the ghosts are removed and need to be re-initialized
+
+    \returns tags of locally inserted particles
+ */
+const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_insert)
+    {
+    // we are changing the local number of particles, so remove ghosts
+    removeAllGhostParticles();
+
+    // number of inserted particles per processor
+    std::vector<unsigned int> all_n_insert;
+
+    #ifdef ENABLE_MPI
+    if (getDomainDecomposition())
+        {
+        all_gather_v(n_insert, all_n_insert, m_exec_conf->getMPICommunicator());
+        }
+    else
+    #endif
+        {
+        all_n_insert.push_back(n_insert);
+        }
+
+    unsigned int n_insert_tot = 0;
+    unsigned int new_tag = getNGlobal();
+
+    std::vector<unsigned int> local_inserted_tags;
+
+    unsigned int my_rank = 0;
+    #ifdef ENABLE_MPI
+    if (getDomainDecomposition())
+        my_rank = m_exec_conf->getRank();
+    #endif
+
+    unsigned int rank = 0;
+    for (auto it = all_n_insert.begin(); it != all_n_insert.end(); ++it)
+        {
+        unsigned int n_insert_proc = *it;
+        n_insert_tot += n_insert_proc;
+
+        for (unsigned i = 0; i < n_insert_proc; ++i)
+            {
+            // the global tag of the newly created particle
+            unsigned int tag;
+
+            // first check if we can recycle a deleted tag
+            if (m_recycled_tags.size())
+                {
+                tag = m_recycled_tags.top();
+                m_recycled_tags.pop();
+                }
+            else
+                {
+                // generate a new tag
+                tag = new_tag;
+                }
+
+            new_tag++;
+
+            // add to set of active tags
+            m_tag_set.insert(tag);
+
+            if (rank == my_rank)
+                local_inserted_tags.push_back(tag);
+            }
+        rank++;
+        }
+
+    // resize array of global reverse lookup tags
+    m_rtag.resize(getMaximumTag()+1);
+
+    // invalidate the active tag cache
+    m_invalid_cached_tags = true;
+
+    // generate a list of default particle properties
+    std::vector<pdata_element> elements;
+    for (auto it = local_inserted_tags.begin(); it != local_inserted_tags.end(); ++it)
+        {
+        unsigned int tag = *it;
+        pdata_element el;
+        el.pos = make_scalar4(0,0,0,__int_as_scalar(0));
+        el.vel = make_scalar4(0,0,0,1);
+        el.accel = make_scalar3(0,0,0);
+        el.charge = 0;
+        el.diameter = 0;
+        el.image = make_int3(0,0,0);
+        el.body = NO_BODY;
+        el.orientation = make_scalar4(1,0,0,0); 
+        el.angmom = make_scalar4(0,0,0,0);
+        el.inertia = make_scalar3(0,0,0);
+        el.tag = tag;
+        el.net_force = make_scalar4(0,0,0,0);
+        el.net_torque = make_scalar4(0,0,0,0);
+        el.net_virial[0] = 0;
+        el.net_virial[1] = 0;
+        el.net_virial[2] = 0;
+        el.net_virial[3] = 0;
+        el.net_virial[4] = 0;
+        el.net_virial[5] = 0;
+        elements.push_back(el);
+        }
+
+    // insert into local particle data
+    addParticles(elements);
+
+    // update global number of particles
+    setNGlobal(getNGlobal()+n_insert_tot);
+
+    return local_inserted_tags;
+    }
+
 //! Return the nth active global tag
 /*! \param n Index of bond in global bond table
  */
@@ -2406,7 +2603,6 @@ bool SnapshotParticleData<Real>::validate() const
     return true;
     }
 
-#ifdef ENABLE_MPI
 //! Select non-zero communication lags
 struct comm_flag_select : std::unary_function<const unsigned int, bool>
     {
@@ -2880,7 +3076,6 @@ void ParticleData::addParticlesGPU(const GPUVector<pdata_element>& in)
     }
 
 #endif // ENABLE_CUDA
-#endif // ENABLE_MPI
 
 unsigned int ParticleData::addType(const std::string& type_name)
     {

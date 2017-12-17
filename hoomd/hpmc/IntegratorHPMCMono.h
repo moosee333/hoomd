@@ -169,7 +169,7 @@ class IntegratorHPMCMono : public IntegratorHPMC
         virtual Scalar getLogValue(const std::string& quantity, unsigned int timestep);
 
         //! Get the particle parameters
-        virtual std::vector<param_type, managed_allocator<param_type> >& getParams()
+        virtual const std::vector<param_type, managed_allocator<param_type> >& getParams()
             {
             return m_params;
             }

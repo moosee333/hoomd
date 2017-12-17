@@ -1000,6 +1000,7 @@ class ParticleData
             {
             return m_decomposition;
             }
+#endif // ENABLE_MPI
 
         //! Pack particle data into a buffer
         /*! \param out Buffer into which particle data is packed
@@ -1043,13 +1044,17 @@ class ParticleData
         void addParticlesGPU(const GPUVector<pdata_element>& in);
         #endif // ENABLE_CUDA
 
-#endif // ENABLE_MPI
-
         //! Add a single particle to the simulation
         unsigned int addParticle(unsigned int type);
 
         //! Remove a particle from the simulation
         void removeParticle(unsigned int tag);
+
+        //! Bulk-remove a list of tags
+        void removeParticlesGlobal(std::vector<unsigned int> tags);
+
+        //! Bulk-insert a number of particles
+        const std::vector<unsigned int> addParticlesGlobal(unsigned int n_insert);
 
         //! Return the nth active global tag
         unsigned int getNthTag(unsigned int n);
