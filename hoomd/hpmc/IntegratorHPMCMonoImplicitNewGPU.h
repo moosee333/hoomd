@@ -1273,7 +1273,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
     // attach the parameters to the kernel stream so that they are visible
     // when other kernels are called
 
-    #if 0
     cudaStreamAttachMemAsync(m_stream, this->m_params.data(), 0, cudaMemAttachSingle);
     CHECK_CUDA_ERROR();
 
@@ -1287,7 +1286,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
         // attach nested memory regions
         this->m_params[i].attach_to_stream(m_stream);
         }
-    #endif
     }
 
 
