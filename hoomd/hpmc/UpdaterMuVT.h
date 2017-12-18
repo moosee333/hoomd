@@ -14,6 +14,10 @@
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include <random>
 
 namespace hpmc
@@ -952,8 +956,6 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     std::vector<vec3<Scalar> > positions;
                     std::vector<quat<Scalar> > orientations;
 
-                    hoomd::detail::Saru rng_local(rng.u32(), m_exec_conf->getRank(), 0x993344ff);
-
                     auto params = m_mc->getParams();
                     Shape shape_test(quat<Scalar>(), params[type]);
 
@@ -964,27 +966,41 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         m_mc->buildAABBTree();
                     #endif
 
+                    unsigned int n_omp_threads = 1;
+
+                    #ifdef _OPENMP
+                    n_omp_threads = omp_get_max_threads();
+                    #endif
+
+                    std::vector<hoomd::detail::Saru> rng_parallel;
+
+                    // initialize a set of random number generators
+                    for (unsigned int i = 0; i < n_omp_threads; ++i)
+                        {
+                        rng_parallel.push_back(hoomd::detail::Saru(timestep,this->m_seed+this->m_exec_conf->getRank(), 0x54872f2a^i));
+                        }
+
                     # pragma omp parallel for
                     for (unsigned int i = 0; i < n_insert; ++i)
                         {
                         // draw a uniformly distributed position in the local box
                         // Propose a random position uniformly in the box
+                        #ifdef _OPENMP
+                        unsigned int thread_idx = omp_get_thread_num();
+                        #else
+                        unsigned int thread_idx = 0;
+                        #endif
+
                         Scalar3 f;
-                        #pragma omp critical
-                        f.x = rng_local.template s<Scalar>();
-
-                        #pragma omp critical
-                        f.y = rng_local.template s<Scalar>();
-
-                        #pragma omp critical
-                        f.z = rng_local.template s<Scalar>();
+                        f.x = rng_parallel[thread_idx].template s<Scalar>();
+                        f.y = rng_parallel[thread_idx].template s<Scalar>();
+                        f.z = rng_parallel[thread_idx].template s<Scalar>();
 
                         vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getBox().makeCoordinates(f));
                         if (shape_test.hasOrientation())
                             {
                             // set particle orientation
-                            #pragma omp critical
-                            shape_test.orientation = generateRandomOrientation(rng_local);
+                            shape_test.orientation = generateRandomOrientation(rng_parallel[thread_idx]);
                             }
 
                         // check if particle can be inserted without overlaps
