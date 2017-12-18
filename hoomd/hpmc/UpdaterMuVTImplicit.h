@@ -11,6 +11,10 @@
 
 #include <random>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #ifndef NVCC
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
@@ -1070,11 +1074,17 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
         }
     #endif
 
+    #ifdef _OPENMP
+    unsigned int thread_idx = omp_get_thread_num();
+    #else
+    unsigned int thread_idx = 0;
+    #endif
+
     // initialize another rng
     #ifdef ENABLE_MPI
-    hoomd::detail::Saru rng(timestep, this->m_seed, this->m_exec_conf->getPartition() ^0x1412459a );
+    hoomd::detail::Saru rng(timestep, this->m_seed+thread_idx, this->m_exec_conf->getPartition() ^0x1412459a );
     #else
-    hoomd::detail::Saru rng(timestep, this->m_seed, 0x1412459a);
+    hoomd::detail::Saru rng(timestep, this->m_seed+thread_idx, 0x1412459a);
     #endif
 
     n_free = 0;
@@ -1376,8 +1386,14 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned in
         std::poisson_distribution<unsigned int> poisson =
             std::poisson_distribution<unsigned int>(lambda);
 
+        #ifdef _OPENMP
+        unsigned int thread_idx = omp_get_thread_num();
+        #else
+        unsigned int thread_idx = 0;
+        #endif
+
         // combine four seeds
-        std::vector<unsigned int> seed_seq(4);
+        std::vector<unsigned int> seed_seq(5);
         seed_seq[0] = this->m_seed;
         seed_seq[1] = timestep;
         seed_seq[2] = local ? this->m_exec_conf->getRank() : 0;
@@ -1386,6 +1402,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned in
         #else
         seed_seq[3] = 0;
         #endif
+        seed_seq[4] = thread_idx;
         std::seed_seq seed(seed_seq.begin(), seed_seq.end());
 
         // RNG for poisson distribution
