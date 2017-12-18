@@ -2210,7 +2210,7 @@ void ParticleData::removeParticle(unsigned int tag)
  */
 void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
     {
-    if (getNGlobal()==0)
+    if (getNGlobal()==0 && tags.size())
         {
         m_exec_conf->msg->error() << "Trying to remove particle when there are zero particles!" << endl;
         throw runtime_error("Error removing particle");
