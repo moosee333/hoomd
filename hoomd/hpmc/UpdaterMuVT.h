@@ -979,7 +979,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         #pragma omp critical
                         f.z = rng_local.template s<Scalar>();
 
-                        vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getGlobalBox().makeCoordinates(f));
+                        vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getBox().makeCoordinates(f));
                         if (shape_test.hasOrientation())
                             {
                             // set particle orientation

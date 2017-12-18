@@ -705,7 +705,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoNewPosition(unsign
     hoomd::detail::Saru rng(timestep, this->m_seed, 0x123b09af );
     #endif
 
-    if (this->m_pdata->getN())
+    if (this->m_pdata->getN()+this->m_pdata->getNGhosts())
         {
         // update the aabb tree (only valid if N>0)
         const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
@@ -1117,7 +1117,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
 
             unsigned int err_count = 0;
 
-            if (this->m_pdata->getN())
+            if (this->m_pdata->getN()+this->m_pdata->getNGhosts())
                 {
                 // update the aabb tree (only valid with N > 0 particles)
                 const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
