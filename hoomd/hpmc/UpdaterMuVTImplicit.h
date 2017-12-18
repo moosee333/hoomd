@@ -1063,7 +1063,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
 
     bool is_local = true;
     #ifdef ENABLE_MPI
-    if (this->m_pdata->getDomainDecomposition())
+    if (communicate && this->m_pdata->getDomainDecomposition())
         {
         const BoxDim& global_box = this->m_pdata->getGlobalBox();
         is_local = this->m_exec_conf->getRank() == this->m_pdata->getDomainDecomposition()->placeParticle(global_box, vec_to_scalar3(pos));
