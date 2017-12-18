@@ -196,10 +196,11 @@ class UpdaterMuVT : public Updater
          * \param orientation Orientation of particle
          * \param lnboltzmann Log of Boltzmann weight of insertion attempt (return value)
          * \param communicate if true, reduce result over all ranks
+         * \param seed an additional RNG seed
          * \returns True if boltzmann weight is non-zero
          */
         virtual bool tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos, quat<Scalar> orientation,
-            Scalar &lnboltzmann, bool communicate);
+            Scalar &lnboltzmann, bool communicate, unsigned int seed);
 
         /*! Try removing a particle
             \param timestep Current time step
@@ -709,7 +710,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
-                        unsigned int nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, true);
+                        unsigned int nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
+                            lnb, true, 0);
 
                         if (nonzero)
                             {
@@ -1005,7 +1007,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
-                        if (tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, false))
+                        if (tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, false, i))
                             {
                             #pragma omp critical
                                 {
@@ -1640,7 +1642,7 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
 
 template<class Shape>
 bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
-    quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate)
+    quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed)
     {
     // do we have to compute energetic contribution?
     auto patch = m_mc->getPatchInteraction();

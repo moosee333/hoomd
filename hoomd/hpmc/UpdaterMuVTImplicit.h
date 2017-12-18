@@ -11,10 +11,6 @@
 
 #include <random>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
 #ifndef NVCC
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
@@ -53,7 +49,7 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
          * \returns True if boltzmann weight is non-zero
          */
         virtual bool tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
-            quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate);
+            quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed);
 
         /*! Remove particle and try to insert depletants
             \param timestep  time step
@@ -137,7 +133,8 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
          * \returns Number of overlapping depletants
          */
         unsigned int countDepletantOverlapsInNewPosition(unsigned int timestep, unsigned int n_insert, Scalar delta,
-            vec3<Scalar>pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free, bool communicate);
+            vec3<Scalar>pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free, bool communicate,
+            unsigned int seed);
 
         /*! Count overlapping depletants in a sphere of diameter delta
          * \param timestep time step
@@ -150,7 +147,7 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
 
 
         //! Get the random number of depletants
-        virtual unsigned int getNumDepletants(unsigned int timestep, Scalar V, bool local);
+        virtual unsigned int getNumDepletants(unsigned int timestep, Scalar V, bool local, unsigned int seed);
 
     };
 
@@ -185,12 +182,12 @@ UpdaterMuVTImplicit<Shape, Integrator>::UpdaterMuVTImplicit(std::shared_ptr<Syst
 
 template<class Shape, class Integrator>
 bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
-     quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate)
+     quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed)
     {
     // check overlaps with colloid particles first
     lnboltzmann = Scalar(0.0);
     Scalar lnb(0.0);
-    bool nonzero = UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos, orientation, lnb, communicate);
+    bool nonzero = UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos, orientation, lnb, communicate, seed);
     if (nonzero)
         {
         lnboltzmann += lnb;
@@ -226,12 +223,13 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
         if (nonzero)
             {
             // generate random depletant number
-            unsigned int n_dep = getNumDepletants(timestep, V, false);
+            unsigned int n_dep = getNumDepletants(timestep, V, false, 0);
 
             unsigned int tmp = 0;
 
             // count depletants overlapping with new config (but ignore overlap in old one)
-            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type, tmp, communicate);
+            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type, tmp,
+                communicate, 0);
 
             lnb = Scalar(0.0);
 
@@ -274,11 +272,12 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
         if (nonzero)
             {
             // generate random depletant number
-            unsigned int n_dep = getNumDepletants(timestep, V, false);
+            unsigned int n_dep = getNumDepletants(timestep, V, false, seed);
 
             // count depletants overlapping with new config (but ignore overlap in old one)
             unsigned int n_free;
-            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type, n_free, communicate);
+            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type,
+                n_free, communicate, seed);
             nonzero = !n_overlap;
             }
         }
@@ -336,11 +335,12 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::trySwitchType(unsigned int timestep,
     Scalar V = Scalar(M_PI/6.0)*delta*delta*delta;
 
     // generate random depletant number
-    unsigned int n_dep = getNumDepletants(timestep, V, false);
+    unsigned int n_dep = getNumDepletants(timestep, V, false, 0);
 
     // count depletants overlapping with new config (but ignore overlaps with old one)
     unsigned int tmp_free = 0;
-    unsigned int n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, new_type, tmp_free, true);
+    unsigned int n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation,
+        new_type, tmp_free, true, 0);
 
     // reject if depletant overlap
     if (! this->m_gibbs && n_overlap)
@@ -1057,8 +1057,9 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoOldPosition(unsign
     }
 
 template<class Shape, class Integrator>
-unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewPosition(unsigned int timestep, unsigned int n_insert,
-    Scalar delta, vec3<Scalar> pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free, bool communicate)
+unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewPosition(unsigned int timestep,
+     unsigned int n_insert, Scalar delta, vec3<Scalar> pos, quat<Scalar> orientation, unsigned int type,
+     unsigned int &n_free, bool communicate, unsigned int seed)
     {
     // number of depletants successfully inserted
     unsigned int n_overlap = 0;
@@ -1074,17 +1075,11 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
         }
     #endif
 
-    #ifdef _OPENMP
-    unsigned int thread_idx = omp_get_thread_num();
-    #else
-    unsigned int thread_idx = 0;
-    #endif
-
     // initialize another rng
     #ifdef ENABLE_MPI
-    hoomd::detail::Saru rng(timestep, this->m_seed+thread_idx, this->m_exec_conf->getPartition() ^0x1412459a );
+    hoomd::detail::Saru rng(timestep, this->m_seed+seed, this->m_exec_conf->getPartition() ^0x1412459a );
     #else
-    hoomd::detail::Saru rng(timestep, this->m_seed+thread_idx, 0x1412459a);
+    hoomd::detail::Saru rng(timestep, this->m_seed+seed, 0x1412459a);
     #endif
 
     n_free = 0;
@@ -1375,7 +1370,8 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlaps(unsig
 
 //! Get a poisson-distributed number of depletants
 template<class Shape, class Integrator>
-unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned int timestep,  Scalar V, bool local)
+unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned int timestep,  Scalar V, bool local,
+    unsigned int seed)
     {
     // parameter for Poisson distribution
     Scalar lambda = this->m_mc_implicit->getDepletantDensity()*V;
@@ -1386,13 +1382,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned in
         std::poisson_distribution<unsigned int> poisson =
             std::poisson_distribution<unsigned int>(lambda);
 
-        #ifdef _OPENMP
-        unsigned int thread_idx = omp_get_thread_num();
-        #else
-        unsigned int thread_idx = 0;
-        #endif
-
-        // combine four seeds
+        // combine five seeds
         std::vector<unsigned int> seed_seq(5);
         seed_seq[0] = this->m_seed;
         seed_seq[1] = timestep;
@@ -1402,7 +1392,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned in
         #else
         seed_seq[3] = 0;
         #endif
-        seed_seq[4] = thread_idx;
+        seed_seq[4] = seed;
         std::seed_seq seed(seed_seq.begin(), seed_seq.end());
 
         // RNG for poisson distribution
@@ -1453,7 +1443,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::boxResizeAndScale(unsigned int times
         #endif
 
         // draw number from Poisson distribution (using old box)
-        unsigned int n = getNumDepletants(timestep, old_local_box.getVolume(), true);
+        unsigned int n = getNumDepletants(timestep, old_local_box.getVolume(), true, 0);
 
         // Depletant type
         unsigned int type_d = m_mc_implicit->getDepletantType();
