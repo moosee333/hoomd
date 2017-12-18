@@ -956,18 +956,33 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     auto params = m_mc->getParams();
                     Shape shape_test(quat<Scalar>(), params[type]);
 
+                    #ifdef _OPENMP
+                    // avoid a race condition
+                    m_mc->updateImageList();
+                    if (m_pdata->getN())
+                        m_mc->buildAABBTree();
+                    #endif
+
+                    # pragma omp parallel for
                     for (unsigned int i = 0; i < n_insert; ++i)
                         {
                         // draw a uniformly distributed position in the local box
                         // Propose a random position uniformly in the box
                         Scalar3 f;
+                        #pragma omp critical
                         f.x = rng_local.template s<Scalar>();
+
+                        #pragma omp critical
                         f.y = rng_local.template s<Scalar>();
+
+                        #pragma omp critical
                         f.z = rng_local.template s<Scalar>();
+
                         vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getGlobalBox().makeCoordinates(f));
                         if (shape_test.hasOrientation())
                             {
                             // set particle orientation
+                            #pragma omp critical
                             shape_test.orientation = generateRandomOrientation(rng_local);
                             }
 
@@ -975,13 +990,17 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         Scalar lnb(0.0);
                         if (tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb))
                             {
-                            positions.push_back(pos_test);
-                            orientations.push_back(shape_test.orientation);
+                            #pragma omp critical
+                                {
+                                positions.push_back(pos_test);
+                                orientations.push_back(shape_test.orientation);
 
-                            m_count_total.insert_accept_count++;
+                                m_count_total.insert_accept_count++;
+                                }
                             }
                         else
                             {
+                            #pragma omp critical
                             m_count_total.insert_reject_count++;
                             }
                         }
