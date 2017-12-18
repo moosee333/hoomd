@@ -598,7 +598,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
     if (active && !volume_move)
         {
-        bool transfer_move = (rng.f() <= m_transfer_ratio);
+        bool transfer_move = !m_gibbs || (rng.f() <= m_transfer_ratio);
 
         if (transfer_move)
             {
@@ -1178,6 +1178,12 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     {
                     // slave
                     assert(m_gibbs);
+
+                    // fugacity not support for now
+                    if (! m_gibbs)
+                        {
+                        throw std::runtime_error("Particle identity changes only supported in Gibbs ensemble.");
+                        }
 
                     unsigned int type=0, other_type=0;
                     #ifdef ENABLE_MPI
