@@ -2221,6 +2221,7 @@ void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
 
         {
         ArrayHandle<unsigned int> h_comm_flags(getCommFlags(), access_location::host, access_mode::readwrite);
+        ArrayHandle<unsigned int> h_rtag(getRTags(), access_location::host, access_mode::read);
 
         for (auto it = tags.begin(); it != tags.end(); ++it)
             {
@@ -2235,7 +2236,7 @@ void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
                 }
 
             // Local particle index
-            unsigned int idx = m_rtag[tag];
+            unsigned int idx = h_rtag.data[tag];
 
             bool is_local = idx < getN();
             assert(is_local || idx == NOT_LOCAL);
@@ -2285,7 +2286,7 @@ void ParticleData::removeParticlesGlobal(std::vector<unsigned int> tags)
     m_invalid_cached_tags = true;
 
      // update global particle number
-    setNGlobal(getNGlobal()-tags.size());
+    setNGlobal(getNGlobal()-tags_unique.size());
     }
 
 //! Add new particles to the global simulation box, given local particle data on every rank
@@ -2325,6 +2326,8 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
         my_rank = m_exec_conf->getRank();
     #endif
 
+    std::vector<unsigned int> inserted_tags;
+
     unsigned int rank = 0;
     for (auto it = all_n_insert.begin(); it != all_n_insert.end(); ++it)
         {
@@ -2354,6 +2357,8 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
             assert(tag <= getMaximumTag());
             new_nglobal++;
 
+            inserted_tags.push_back(tag);
+
             if (rank == my_rank)
                 local_inserted_tags.push_back(tag);
             }
@@ -2362,6 +2367,13 @@ const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_
 
     // resize array of global reverse lookup tags
     m_rtag.resize(getMaximumTag()+1);
+
+        {
+        // reset rtags
+        ArrayHandle<unsigned int> h_rtag(getRTags(), access_location::host, access_mode::readwrite);
+        for (auto it = inserted_tags.begin(); it != inserted_tags.end(); ++it)
+            h_rtag.data[*it] = NOT_LOCAL;
+        }
 
     // invalidate the active tag cache
     m_invalid_cached_tags = true;

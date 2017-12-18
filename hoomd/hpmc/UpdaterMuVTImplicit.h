@@ -45,10 +45,11 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
          * \param pos Position of fictitous particle
          * \param orientation Orientation of particle
          * \param lnboltzmann Log of Boltzmann weight of insertion attempt (return value)
+         * \param if true, reduce final result
          * \returns True if boltzmann weight is non-zero
          */
         virtual bool tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
-            quat<Scalar> orientation, Scalar &lnboltzmann);
+            quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate);
 
         /*! Remove particle and try to insert depletants
             \param timestep  time step
@@ -128,10 +129,11 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
          * \param orientation Orientation of new particle
          * \param type Type of new particle (ignored, if ignore==True)
          * \param n_free Depletants that were free in old configuration
+         * \param communicate if true, reduce result with MPI
          * \returns Number of overlapping depletants
          */
         unsigned int countDepletantOverlapsInNewPosition(unsigned int timestep, unsigned int n_insert, Scalar delta,
-            vec3<Scalar>pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free);
+            vec3<Scalar>pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free, bool communicate);
 
         /*! Count overlapping depletants in a sphere of diameter delta
          * \param timestep time step
@@ -178,12 +180,13 @@ UpdaterMuVTImplicit<Shape, Integrator>::UpdaterMuVTImplicit(std::shared_ptr<Syst
     }
 
 template<class Shape, class Integrator>
-bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos, quat<Scalar> orientation, Scalar &lnboltzmann)
+bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
+     quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate)
     {
     // check overlaps with colloid particles first
     lnboltzmann = Scalar(0.0);
     Scalar lnb(0.0);
-    bool nonzero = UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos, orientation, lnb);
+    bool nonzero = UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos, orientation, lnb, communicate);
     if (nonzero)
         {
         lnboltzmann += lnb;
@@ -224,7 +227,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
             unsigned int tmp = 0;
 
             // count depletants overlapping with new config (but ignore overlap in old one)
-            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type, tmp);
+            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type, tmp, communicate);
 
             lnb = Scalar(0.0);
 
@@ -271,7 +274,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
 
             // count depletants overlapping with new config (but ignore overlap in old one)
             unsigned int n_free;
-            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type, n_free);
+            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type, n_free, communicate);
             nonzero = !n_overlap;
             }
         }
@@ -333,7 +336,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::trySwitchType(unsigned int timestep,
 
     // count depletants overlapping with new config (but ignore overlaps with old one)
     unsigned int tmp_free = 0;
-    unsigned int n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, new_type, tmp_free);
+    unsigned int n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, new_type, tmp_free, true);
 
     // reject if depletant overlap
     if (! this->m_gibbs && n_overlap)
@@ -1051,7 +1054,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoOldPosition(unsign
 
 template<class Shape, class Integrator>
 unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewPosition(unsigned int timestep, unsigned int n_insert,
-    Scalar delta, vec3<Scalar> pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free)
+    Scalar delta, vec3<Scalar> pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free, bool communicate)
     {
     // number of depletants successfully inserted
     unsigned int n_overlap = 0;
@@ -1204,8 +1207,9 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
 
             } // end loop over test depletants
         } // is_local
+
     #ifdef ENABLE_MPI
-    if (this->m_comm)
+    if (communicate && this->m_comm)
         {
         MPI_Allreduce(MPI_IN_PLACE, &n_overlap, 1, MPI_UNSIGNED, MPI_SUM, this->m_exec_conf->getMPICommunicator());
         MPI_Allreduce(MPI_IN_PLACE, &n_free, 1, MPI_UNSIGNED, MPI_SUM, this->m_exec_conf->getMPICommunicator());

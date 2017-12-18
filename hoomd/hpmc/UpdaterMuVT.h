@@ -191,10 +191,11 @@ class UpdaterMuVT : public Updater
          * \param pos Position of fictitous particle
          * \param orientation Orientation of particle
          * \param lnboltzmann Log of Boltzmann weight of insertion attempt (return value)
+         * \param communicate if true, reduce result over all ranks
          * \returns True if boltzmann weight is non-zero
          */
         virtual bool tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos, quat<Scalar> orientation,
-            Scalar &lnboltzmann);
+            Scalar &lnboltzmann, bool communicate);
 
         /*! Try removing a particle
             \param timestep Current time step
@@ -704,7 +705,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
-                        unsigned int nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb);
+                        unsigned int nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, true);
 
                         if (nonzero)
                             {
@@ -988,7 +989,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
-                        if (tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb))
+                        if (tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, false))
                             {
                             #pragma omp critical
                                 {
@@ -1623,7 +1624,7 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
 
 template<class Shape>
 bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
-    quat<Scalar> orientation, Scalar &lnboltzmann)
+    quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate)
     {
     // do we have to compute energetic contribution?
     auto patch = m_mc->getPatchInteraction();
@@ -1789,7 +1790,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
         } // end if local
 
     #ifdef ENABLE_MPI
-    if (m_comm)
+    if (communicate && m_comm)
         {
         MPI_Allreduce(MPI_IN_PLACE, &lnboltzmann, 1, MPI_HOOMD_SCALAR, MPI_SUM, m_exec_conf->getMPICommunicator());
         MPI_Allreduce(MPI_IN_PLACE, &overlap, 1, MPI_UNSIGNED, MPI_MAX, m_exec_conf->getMPICommunicator());
