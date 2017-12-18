@@ -960,7 +960,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     #ifdef _OPENMP
                     // avoid a race condition
                     m_mc->updateImageList();
-                    if (m_pdata->getN())
+                    if (m_pdata->getN()+m_pdata->getNGhosts())
                         m_mc->buildAABBTree();
                     #endif
 
