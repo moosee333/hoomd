@@ -208,7 +208,8 @@ class UpdaterMuVT : public Updater
             \param lnboltzmann Log of Boltzmann weight of removal attempt (return value)
             \returns True if boltzmann weight is non-zero
          */
-        virtual bool tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann);
+        virtual bool tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
+            bool communicate, unsigned int seed);
 
         /*! Try switching particle type
          * \param timestep Current time step
@@ -862,7 +863,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                     // get weight for removal
                     Scalar lnb(0.0);
-                    if (tryRemoveParticle(timestep, tag, lnb))
+                    if (tryRemoveParticle(timestep, tag, lnb, true, 0))
                         {
                         lnboltzmann += lnb;
                         }
@@ -923,7 +924,6 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
             else // gibbs && ! parallel
                 {
                 // perform parallel insertion/removal
-
                 for (auto it_type = m_transfer_types.begin(); it_type != m_transfer_types.end(); it_type++)
                     {
                     unsigned int type = *it_type;
@@ -948,6 +948,35 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                     // generate particles locally
                     unsigned int n_insert = poisson(rng_poisson);
+                    unsigned int n_remove_local = m_type_map[type].size();
+
+                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to remove " << n_remove_local
+                         << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
+
+                    if (m_prof) m_prof->push("Remove");
+
+                    #ifdef _OPENMP
+                    // avoid a race condition
+                    m_mc->updateImageList();
+                    if (m_pdata->getN()+m_pdata->getNGhosts())
+                        m_mc->buildAABBTree();
+                    #endif
+
+                    std::vector<unsigned int> remove_tags;
+                    # pragma omp parallel for
+                    for (unsigned int i = 0; i < n_remove_local; ++i)
+                        {
+                        // check if particle can be inserted without overlaps
+                        Scalar lnb(0.0);
+                        unsigned int tag = m_type_map[type][i];
+                        if (tryRemoveParticle(timestep, tag, lnb, false, i))
+                            {
+                            #pragma omp critical
+                            remove_tags.push_back(tag);
+                            }
+                        }
+
+                    if (m_prof) m_prof->pop();
 
                     m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to insert " << n_insert
                          << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
@@ -960,13 +989,6 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                     auto params = m_mc->getParams();
                     Shape shape_test(quat<Scalar>(), params[type]);
-
-                    #ifdef _OPENMP
-                    // avoid a race condition
-                    m_mc->updateImageList();
-                    if (m_pdata->getN()+m_pdata->getNGhosts())
-                        m_mc->buildAABBTree();
-                    #endif
 
                     unsigned int n_omp_threads = 1;
 
@@ -981,6 +1003,13 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         {
                         rng_parallel.push_back(hoomd::detail::Saru(timestep,this->m_seed+this->m_exec_conf->getRank(), 0x54872f2a^i));
                         }
+
+                    #ifdef _OPENMP
+                    // avoid a race condition
+                    m_mc->updateImageList();
+                    if (m_pdata->getN()+m_pdata->getNGhosts())
+                        m_mc->buildAABBTree();
+                    #endif
 
                     # pragma omp parallel for
                     for (unsigned int i = 0; i < n_insert; ++i)
@@ -1013,26 +1042,23 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                                 {
                                 positions.push_back(pos_test);
                                 orientations.push_back(shape_test.orientation);
-
-                                m_count_total.insert_accept_count++;
                                 }
                             }
-                        else
-                            {
-                            #pragma omp critical
-                            m_count_total.insert_reject_count++;
-                            }
                         }
+
+                    m_count_total.remove_accept_count += remove_tags.size();
+                    m_count_total.remove_reject_count += m_type_map[type].size()-remove_tags.size();
+                    m_count_total.insert_accept_count += positions.size();
+                    m_count_total.insert_reject_count += n_insert - positions.size();
 
                     if (m_prof) m_prof->pop();
 
                     // remove old particles first *after* checking overlaps (Gibbs sampler)
-                    unsigned int n_remove_local = m_type_map[type].size();
-                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << n_remove_local
+                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << remove_tags.size()
                          << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
 
                     // remove all particles of the given types
-                    m_pdata->removeParticlesGlobal(m_type_map[type]);
+                    m_pdata->removeParticlesGlobal(remove_tags);
 
                     m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " inserting " << positions.size()
                          << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
@@ -1505,7 +1531,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
     }
 
 template<class Shape>
-bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann)
+bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
+    bool communicate, unsigned int seed)
     {
     lnboltzmann = Scalar(0.0);
 
