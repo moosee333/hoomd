@@ -89,22 +89,6 @@ class UpdaterMuVT : public Updater
                 throw std::runtime_error("Must transfer at least one type.\n");
                 }
             m_transfer_types = transfer_types;
-
-            // determine if the inserted/removed species are non-interacting
-            m_parallel = ! m_mc->getPatchInteraction();
-            ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
-            const Index2D& overlap_idx = m_mc->getOverlapIndexer();
-
-            for (auto it_i = transfer_types.begin(); it_i != transfer_types.end(); ++it_i)
-                {
-                for (auto it_j = transfer_types.begin(); it_j != transfer_types.end(); ++it_j)
-                    {
-                    if (h_overlaps.data[overlap_idx(*it_i,*it_j)])
-                        {
-                        m_parallel = false;
-                        }
-                    }
-                }
             }
 
 
@@ -602,6 +586,24 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
             }
         }
     #endif
+
+    // determine if the inserted/removed species are non-interacting
+        {
+        m_parallel = ! m_mc->getPatchInteraction();
+        ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
+        const Index2D& overlap_idx = m_mc->getOverlapIndexer();
+
+        for (auto it_i = m_transfer_types.begin(); it_i != m_transfer_types.end(); ++it_i)
+            {
+            for (auto it_j = m_transfer_types.begin(); it_j != m_transfer_types.end(); ++it_j)
+                {
+                if (h_overlaps.data[overlap_idx(*it_i,*it_j)])
+                    {
+                    m_parallel = false;
+                    }
+                }
+            }
+        } // end ArrayHandle scope
 
     if (active && !volume_move)
         {
