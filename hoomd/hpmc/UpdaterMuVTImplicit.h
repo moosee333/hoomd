@@ -159,7 +159,7 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
 
 
         //! Get the random number of depletants
-        virtual unsigned int getNumDepletants(unsigned int timestep, Scalar V, bool local, unsigned int seed);
+        virtual unsigned int getNumDepletants(unsigned int timestep, Scalar V, unsigned int seed);
 
     };
 
@@ -235,7 +235,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
         if (nonzero)
             {
             // generate random depletant number
-            unsigned int n_dep = getNumDepletants(timestep, V, false, 0);
+            unsigned int n_dep = getNumDepletants(timestep, V, seed);
 
             unsigned int tmp = 0;
 
@@ -284,7 +284,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
         if (nonzero && !m_mc_implicit->depletantModeOverlapRegions())
             {
             // generate random depletant number
-            unsigned int n_dep = getNumDepletants(timestep, V, false, seed);
+            unsigned int n_dep = getNumDepletants(timestep, V, seed);
 
             // count depletants overlapping with new config (but ignore overlap in old one)
             unsigned int n_free;
@@ -347,7 +347,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::trySwitchType(unsigned int timestep,
     Scalar V = Scalar(M_PI/6.0)*delta*delta*delta;
 
     // generate random depletant number
-    unsigned int n_dep = getNumDepletants(timestep, V, false, 0);
+    unsigned int n_dep = getNumDepletants(timestep, V, 0);
 
     // count depletants overlapping with new config (but ignore overlaps with old one)
     unsigned int tmp_free = 0;
@@ -1414,11 +1414,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
     #endif
 
     // initialize another rng
-    #ifdef ENABLE_MPI
-    hoomd::detail::Saru rng(timestep, this->m_seed+seed, this->m_exec_conf->getPartition() ^0x1412459a );
-    #else
-    hoomd::detail::Saru rng(timestep, this->m_seed+seed, 0x1412459a);
-    #endif
+    hoomd::detail::Saru rng(timestep, this->m_seed+seed, this->m_exec_conf->getRank() ^0x1412459a );
 
     n_free = 0;
 
@@ -1708,8 +1704,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlaps(unsig
 
 //! Get a poisson-distributed number of depletants
 template<class Shape, class Integrator>
-unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned int timestep,  Scalar V, bool local,
-    unsigned int seed)
+unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned int timestep,  Scalar V, unsigned int seed)
     {
     // parameter for Poisson distribution
     Scalar lambda = this->m_mc_implicit->getDepletantDensity()*V;
@@ -1721,16 +1716,11 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::getNumDepletants(unsigned in
             std::poisson_distribution<unsigned int>(lambda);
 
         // combine five seeds
-        std::vector<unsigned int> seed_seq(5);
+        std::vector<unsigned int> seed_seq(4);
         seed_seq[0] = this->m_seed;
         seed_seq[1] = timestep;
-        seed_seq[2] = local ? this->m_exec_conf->getRank() : 0;
-        #ifdef ENABLE_MPI
-        seed_seq[3] = this->m_exec_conf->getPartition();
-        #else
-        seed_seq[3] = 0;
-        #endif
-        seed_seq[4] = seed;
+        seed_seq[2] = this->m_exec_conf->getRank();
+        seed_seq[3] = seed;
         std::seed_seq seed(seed_seq.begin(), seed_seq.end());
 
         // RNG for poisson distribution
@@ -1747,6 +1737,12 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::boxResizeAndScale(unsigned int times
     {
     // call parent class method
     lnboltzmann = Scalar(0.0);
+
+    unsigned int partition = 0;
+    #ifdef ENABLE_MPI
+    partition = this->m_exec_conf->getPartition();
+    #endif
+
     bool result = UpdaterMuVT<Shape>::boxResizeAndScale(timestep, old_box, new_box, extra_ndof, lnboltzmann);
 
     if (result)
@@ -1781,7 +1777,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::boxResizeAndScale(unsigned int times
         #endif
 
         // draw number from Poisson distribution (using old box)
-        unsigned int n = getNumDepletants(timestep, old_local_box.getVolume(), true, 0);
+        unsigned int n = getNumDepletants(timestep, old_local_box.getVolume(), partition);
 
         // Depletant type
         unsigned int type_d = m_mc_implicit->getDepletantType();
