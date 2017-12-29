@@ -686,8 +686,7 @@ template< class Shape >
 __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
                                      unsigned int i,
                                      unsigned int j,
-                                     Scalar Vcap_i,
-                                     Scalar Vcap_j,
+                                     bool sphere,
                                      unsigned int active_cell_idx,
                                      Scalar4 *d_postype,
                                      Scalar4 *d_orientation,
@@ -831,64 +830,47 @@ __global__ void gpu_check_depletant_overlaps_kernel(unsigned int n_depletants,
     rij = vec3<Scalar>(box.minImage(vec_to_scalar3(rij)));
     Scalar d = fast::sqrt(dot(rij,rij));
 
-    // heights spherical caps that constitute the intersection volume
-    Scalar hi = (Rj*Rj - (d-Ri)*(d-Ri))/(2.0*d);
-    Scalar hj = (Ri*Ri - (d-Rj)*(d-Rj))/(2.0*d);
+    Scalar V,Vcap_i,Vcap_j;
+    Scalar hi(0.0);
+    Scalar hj(0.0);
 
-    // choose a cap
-    Scalar s = rng.template s<Scalar>();
-    bool cap_i = s < Vcap_i/(Vcap_i+Vcap_j);
-
-    Scalar R = cap_i ? Ri : Rj;
-    Scalar h = cap_i ? hi : hj;
-
-    if (!cap_i) rij = -rij;
-
-    // generate a depletant position in the spherical cap
-    // draw a radial coordinate uniformly distributed in the spherical cap
-    Scalar u = rng.template s<Scalar>();
-    Scalar Rmh = R-h;
-    Scalar arg = 2.0*u*h*h*(3.0*R-h)/(Rmh*Rmh*Rmh)-1.0;
-    Scalar r;
-    if (arg > 1.0)
+    if (sphere)
         {
-        r = Scalar(0.5)*Rmh*(1.0+2.0*cosh(log(arg+fast::sqrt(arg*arg-1.0))/3.0));
+        V = (Ri < Rj) ? Scalar(M_PI*4.0/3.0)*Ri*Ri*Ri : Scalar(M_PI*4.0/3.0)*Rj*Rj*Rj;
         }
     else
         {
-        // principal branch of acos
-        r = Scalar(0.5)*Rmh*(1.0+2.0*fast::cos(fast::acos(arg)/3.0));
+        // heights spherical caps that constitute the intersection volume
+        hi = (Rj*Rj - (d-Ri)*(d-Ri))/(2*d);
+        hj = (Ri*Ri - (d-Rj)*(d-Rj))/(2*d);
+
+        // volumes of spherical caps
+        Vcap_i = Scalar(M_PI/3.0)*hi*hi*(3*Ri-hi);
+        Vcap_j = Scalar(M_PI/3.0)*hj*hj*(3*Rj-hj);
+
+        // volume of intersection
+        V = Vcap_i + Vcap_j;
         }
 
-    // draw a random unit vector in a zone of height h_prime in the spherical cap
-    Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
-    Scalar h_prime = r-R+h;
-    Scalar z = (R-h)+h_prime*rng.template s<Scalar>();
-
-    // unit vector in cap direction
-    vec3<Scalar> n = rij*fast::rsqrt(dot(rij,rij));
-
-    // find two unit vectors normal to n
-    vec3<Scalar> ez(0,0,1);
-    vec3<Scalar> n1, n2;
-    vec3<Scalar> c = cross(n,ez);
-    if (dot(c,c)==0.0)
+    vec3<Scalar> pos_test;
+    if (!sphere)
         {
-        n1 = vec3<Scalar>(1,0,0);
-        n2 = vec3<Scalar>(0,1,0);
+        // choose one of the two caps randomly, with a weight proportional to their volume
+        Scalar s = rng.template s<Scalar>();
+        bool cap_i = s < Vcap_i/V;
+
+        // generate a depletant position in the spherical cap
+        pos_test = cap_i ? generatePositionInSphericalCap(rng, pos_i_old, Ri, hi, rij)
+            : generatePositionInSphericalCap(rng, pos_j_old, Rj, hj, -rij);
         }
     else
         {
-        n1 = c*fast::rsqrt(dot(c,c));
-        c = cross(n,n1);
-        n2 = c*fast::rsqrt(dot(c,c));
+        // generate a random position in the smaller sphere
+        if (Ri < Rj)
+            pos_test = generatePositionInSphere(rng, pos_i_old, Ri);
+        else
+            pos_test = generatePositionInSphere(rng, pos_j_old, Rj);
         }
-
-    vec3<Scalar> r_cone = n1*fast::sqrt(r*r-z*z)*fast::cos(theta)+n2*fast::sqrt(r*r-z*z)*fast::sin(theta)+n*z;
-
-    // test depletant position
-    vec3<Scalar> pos_test(cap_i ? pos_i_old : pos_j_old);
-    pos_test += r_cone;
 
     // check if old configuration of particle i generates an overlap
     rij = pos_i_old - pos_test;
@@ -1366,16 +1348,30 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
 
             Scalar d = fast::sqrt(dot(r_ij,r_ij));
 
-            // heights spherical caps that constitute the intersection volume
-            Scalar hi = (Rj*Rj - (d-Ri)*(d-Ri))/(2*d);
-            Scalar hj = (Ri*Ri - (d-Rj)*(d-Rj))/(2*d);
+            bool sphere = false;
+            Scalar V;
 
-            // volumes of spherical caps
-            Scalar Vcap_i = Scalar(M_PI/3.0)*hi*hi*(3*Ri-hi);
-            Scalar Vcap_j = Scalar(M_PI/3.0)*hj*hj*(3*Rj-hj);
+            if (d + Ri - Rj < 0 || d + Rj - Ri < 0)
+                {
+                sphere = true;
+                V = (Ri < Rj) ? Scalar(M_PI*4.0/3.0)*Ri*Ri*Ri : Scalar(M_PI*4.0/3.0)*Rj*Rj*Rj;
+                }
+            else
+                {
+                // heights spherical caps that constitute the intersection volume
+                Scalar hi = (Rj*Rj - (d-Ri)*(d-Ri))/(2*d);
+                Scalar hj = (Ri*Ri - (d-Rj)*(d-Rj))/(2*d);
+
+                // volumes of spherical caps
+                Scalar Vcap_i = Scalar(M_PI/3.0)*hi*hi*(3*Ri-hi);
+                Scalar Vcap_j = Scalar(M_PI/3.0)*hj*hj*(3*Rj-hj);
+
+                // volume of intersection
+                V = Vcap_i + Vcap_j;
+                }
 
             // draw poisson random number
-            unsigned int n_depletants = curand_poisson(&local_state, fugacity*(Vcap_i+Vcap_j));
+            unsigned int n_depletants = curand_poisson(&local_state, fugacity*V);
             n_inserted += n_depletants;
 
             // check depletant overlaps in sub-kernels
@@ -1407,8 +1403,7 @@ __global__ void gpu_hpmc_insert_depletants_queue_dp_kernel(Scalar4 *d_postype,
                     n_depletants,
                     check_i,
                     check_j,
-                    Vcap_i,
-                    Vcap_j,
+                    sphere,
                     check_active_cell,
                     d_postype,
                     d_orientation,

@@ -177,7 +177,7 @@ DEVICE inline quat<Scalar> generateRandomOrientation(RNG& rng)
  * \param R radius of insertion sphere
  */
 template<class RNG>
-inline vec3<Scalar> generatePositionInSphere(RNG& rng, vec3<Scalar> pos_sphere, Scalar R)
+DEVICE inline vec3<Scalar> generatePositionInSphere(RNG& rng, vec3<Scalar> pos_sphere, Scalar R)
     {
     // draw a random vector in the excluded volume sphere of the colloid
     Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
@@ -205,7 +205,7 @@ inline vec3<Scalar> generatePositionInSphere(RNG& rng, vec3<Scalar> pos_sphere, 
  * \param d Vector normal to the cap
  */
 template<class RNG>
-inline vec3<Scalar> generatePositionInSphericalCap(RNG& rng, const vec3<Scalar>& pos_sphere,
+DEVICE inline vec3<Scalar> generatePositionInSphericalCap(RNG& rng, const vec3<Scalar>& pos_sphere,
      Scalar R, Scalar h, const vec3<Scalar>& d)
     {
     // pick a z coordinate in the spherical cap s.t. V(z) ~ uniform
