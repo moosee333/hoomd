@@ -14,11 +14,38 @@
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
 
-#ifdef _OPENMP
-#include <omp.h>
+#ifdef ENABLE_TBB
+#include <tbb/tbb.h>
+#include <thread>
 #endif
 
 #include <random>
+
+#ifdef ENABLE_TBB
+namespace cereal
+{
+  //! Serialization for tbb::concurrent_vector
+  template <class Archive, class T, class A> inline
+  void save( Archive & ar, tbb::concurrent_vector<T, A> const & vector )
+  {
+    ar( make_size_tag( static_cast<size_type>(vector.size()) ) ); // number of elements
+    for(auto && v : vector)
+      ar( v );
+  }
+
+  template <class Archive, class T, class A> inline
+  void load( Archive & ar, tbb::concurrent_vector<T, A> & vector )
+  {
+    size_type size;
+    ar( make_size_tag( size ) );
+
+    vector.resize( static_cast<std::size_t>( size ) );
+    for(auto && v : vector)
+      ar( v );
+  }
+
+}
+#endif
 
 namespace hpmc
 {
@@ -964,19 +991,29 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         m_mc->buildAABBTree();
                     #endif
 
+                    #ifdef ENABLE_TBB
+                    tbb::concurrent_vector<unsigned int> remove_tags;
+                    #else
                     std::vector<unsigned int> remove_tags;
-                    # pragma omp parallel for
+                    #endif
+
+                    #ifdef ENABLE_TBB
+                    tbb::parallel_for((unsigned int)0,n_remove_local, [&](unsigned int i)
+                    #else
                     for (unsigned int i = 0; i < n_remove_local; ++i)
+                    #endif
                         {
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
                         unsigned int tag = m_type_map[type][i];
                         if (tryRemoveParticle(timestep, tag, lnb, false, i))
                             {
-                            #pragma omp critical
                             remove_tags.push_back(tag);
                             }
                         }
+                    #ifdef ENABLE_TBB
+                        );
+                    #endif
 
                     if (m_prof) m_prof->pop();
 
@@ -986,67 +1023,79 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     if (m_prof) m_prof->push("Insert");
 
                     // local particle data
+                    #ifdef ENABLE_TBB
+                    tbb::concurrent_vector<vec3<Scalar> > positions;
+                    tbb::concurrent_vector<quat<Scalar> > orientations;
+                    #else
                     std::vector<vec3<Scalar> > positions;
                     std::vector<quat<Scalar> > orientations;
+                    #endif
 
                     auto params = m_mc->getParams();
                     Shape shape_test(quat<Scalar>(), params[type]);
 
-                    unsigned int n_omp_threads = 1;
-
-                    #ifdef _OPENMP
-                    n_omp_threads = omp_get_max_threads();
+                    #ifdef ENABLE_TBB
+                    // create one RNG per thread
+                    tbb::enumerable_thread_specific< hoomd::detail::Saru > rng_parallel([=]
+                        {
+                        std::vector<unsigned int> seed_seq(5);
+                        seed_seq[0] = this->m_seed;
+                        seed_seq[1] = timestep;
+                        seed_seq[2] = this->m_exec_conf->getRank();
+                        std::hash<std::thread::id> hash;
+                        seed_seq[3] = hash(std::this_thread::get_id());
+                        seed_seq[4] = 0x73bb387a;
+                        std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+                        std::vector<unsigned int> s(1);
+                        seed.generate(s.begin(),s.end());
+                        return s[0]; // initialize with single seed
+                        });
                     #endif
 
-                    std::vector<hoomd::detail::Saru> rng_parallel;
-
-                    // initialize a set of random number generators
-                    for (unsigned int i = 0; i < n_omp_threads; ++i)
-                        {
-                        rng_parallel.push_back(hoomd::detail::Saru(timestep,this->m_seed+this->m_exec_conf->getRank(), 0x54872f2a^i));
-                        }
-
-                    #ifdef _OPENMP
+                    #ifdef ENABLE_TBB
                     // avoid a race condition
                     m_mc->updateImageList();
                     if (m_pdata->getN()+m_pdata->getNGhosts())
                         m_mc->buildAABBTree();
                     #endif
 
-                    # pragma omp parallel for
+                    #ifdef ENABLE_TBB
+                    tbb::parallel_for((unsigned int)0,n_insert, [&](unsigned int i)
+                    #else
                     for (unsigned int i = 0; i < n_insert; ++i)
+                    #endif
                         {
                         // draw a uniformly distributed position in the local box
                         // Propose a random position uniformly in the box
-                        #ifdef _OPENMP
-                        unsigned int thread_idx = omp_get_thread_num();
+                        Scalar3 f;
+                        #ifdef ENABLE_TBB
+                        hoomd::detail::Saru& my_rng = rng_parallel.local();
                         #else
-                        unsigned int thread_idx = 0;
+                        hoomd::detail::Saru& my_rng = rng;
                         #endif
 
-                        Scalar3 f;
-                        f.x = rng_parallel[thread_idx].template s<Scalar>();
-                        f.y = rng_parallel[thread_idx].template s<Scalar>();
-                        f.z = rng_parallel[thread_idx].template s<Scalar>();
+                        f.x = my_rng.template s<Scalar>();
+                        f.y = my_rng.template s<Scalar>();
+                        f.z = my_rng.template s<Scalar>();
 
                         vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getBox().makeCoordinates(f));
                         if (shape_test.hasOrientation())
                             {
                             // set particle orientation
-                            shape_test.orientation = generateRandomOrientation(rng_parallel[thread_idx]);
+                            shape_test.orientation = generateRandomOrientation(my_rng);
                             }
 
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
                         if (tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, false, i))
                             {
-                            #pragma omp critical
-                                {
-                                positions.push_back(pos_test);
-                                orientations.push_back(shape_test.orientation);
-                                }
+                            positions.push_back(pos_test);
+                            orientations.push_back(shape_test.orientation);
                             }
                         }
+                    #ifdef ENABLE_TBB
+                        );
+                    #endif
 
                     m_count_total.remove_accept_count += remove_tags.size();
                     m_count_total.remove_reject_count += m_type_map[type].size()-remove_tags.size();
