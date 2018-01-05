@@ -1203,6 +1203,7 @@ class ParticleData
 /*! \param tags Tags of particle to remove
  *
  * The tag list may differ from rank to rank, a global communication is performed
+ * Tags *must* by unique, the same tag may not be removed twice.
  *
  * \note this function removes ghosts, they need to be re-initialized afterwards
  */

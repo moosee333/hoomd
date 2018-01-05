@@ -2049,9 +2049,7 @@ unsigned int ParticleData::addParticle(unsigned int type)
         ArrayHandle<unsigned int> h_body(getBodies(), access_location::host, access_mode::readwrite);
         ArrayHandle<Scalar4> h_orientation(getOrientationArray(), access_location::host, access_mode::readwrite);
         ArrayHandle<unsigned int> h_tag(getTags(), access_location::host, access_mode::readwrite);
-        #ifdef ENABLE_MPI
         ArrayHandle<unsigned int> h_comm_flag(m_comm_flags, access_location::host, access_mode::readwrite);
-        #endif
 
         unsigned int idx = old_nparticles;
 
@@ -2065,12 +2063,7 @@ unsigned int ParticleData::addParticle(unsigned int type)
         h_body.data[idx] = NO_BODY;
         h_orientation.data[idx] = make_scalar4(1.0,0.0,0.0,0.0);
         h_tag.data[idx] = tag;
-        #ifdef ENABLE_MPI
-        if (m_decomposition)
-            {
-            h_comm_flag.data[idx] = 0;
-            }
-        #endif
+        h_comm_flag.data[idx] = 0;
         }
 
     // update global number of particles
@@ -2157,9 +2150,7 @@ void ParticleData::removeParticle(unsigned int tag)
             ArrayHandle<Scalar4> h_orientation(getOrientationArray(), access_location::host, access_mode::readwrite);
             ArrayHandle<unsigned int> h_tag(getTags(), access_location::host, access_mode::readwrite);
             ArrayHandle<unsigned int> h_rtag(getRTags(), access_location::host, access_mode::readwrite);
-            #ifdef ENABLE_MPI
             ArrayHandle<unsigned int> h_comm_flag(m_comm_flags, access_location::host, access_mode::readwrite);
-            #endif
 
             h_pos.data[idx] = h_pos.data[size-1];
             h_vel.data[idx] = h_vel.data[size-1];
@@ -2170,13 +2161,7 @@ void ParticleData::removeParticle(unsigned int tag)
             h_body.data[idx] = h_body.data[size-1];
             h_orientation.data[idx] = h_orientation.data[size-1];
             h_tag.data[idx] = h_tag.data[size-1];
-
-            #ifdef ENABLE_MPI
-            if (m_decomposition)
-                {
-                h_comm_flag.data[idx] = h_comm_flag.data[size-1];
-                }
-            #endif
+            h_comm_flag.data[idx] = h_comm_flag.data[size-1];
 
             unsigned int last_tag = h_tag.data[size-1];
             h_rtag.data[last_tag] = idx;
