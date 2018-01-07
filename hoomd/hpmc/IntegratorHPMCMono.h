@@ -78,7 +78,7 @@ class UpdateOrder
         */
         void shuffle(unsigned int timestep, unsigned int select = 0)
             {
-            Saru rng(timestep, m_seed+select, 0xfa870af6);
+            hoomd::detail::Saru rng(timestep, m_seed+select, 0xfa870af6);
             float r = rng.f();
 
             // reverse the order with 1/2 probability
@@ -474,7 +474,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
             #endif
 
             // make a trial move for i
-            Saru rng_i(i, m_seed + m_exec_conf->getRank()*m_nselect + i_nselect, timestep);
+            hoomd::detail::Saru rng_i(i, m_seed + m_exec_conf->getRank()*m_nselect + i_nselect, timestep);
             int typ_i = __scalar_as_int(postype_i.w);
             Shape shape_i(quat<Scalar>(orientation_i), m_params[typ_i]);
             unsigned int move_type_select = rng_i.u32() & 0xffff;
@@ -516,7 +516,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
             // All image boxes (including the primary)
             const unsigned int n_images = m_image_list.size();
-            for (unsigned int cur_image = 0; cur_image < n_images && !reject_external; cur_image++) // only do the loop if the external is accepted. allows to track statistics better
+            for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                 {
                 vec3<Scalar> pos_i_image = pos_i + m_image_list[cur_image];
                 detail::AABB aabb = aabb_i_local;
@@ -590,6 +590,13 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                     break;
                 } // end loop over images
 
+            // move could be rejected by the external potential or the overlap.
+            bool reject_external = false;
+            if(m_external && !overlap && !m_external->accept(i, pos_old, shape_old, pos_i, shape_i, rng_i))
+                {
+                reject_external = true;
+                }
+
             // if the move is accepted
             if (!overlap && !reject_external)
                 {
@@ -648,7 +655,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
         ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::readwrite);
 
         // precalculate the grid shift
-        Saru rng(timestep, this->m_seed, 0xf4a3210e);
+        hoomd::detail::Saru rng(timestep, this->m_seed, 0xf4a3210e);
         Scalar3 shift = make_scalar3(0,0,0);
         shift.x = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
         shift.y = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
@@ -1140,7 +1147,15 @@ void IntegratorHPMCMono<Shape>::limitMoveDistances()
 template <class Shape>
 std::vector<bool> IntegratorHPMCMono<Shape>::mapOverlaps()
     {
-    unsigned int N = m_pdata->getMaximumTag() + 1;
+    #ifdef ENABLE_MPI
+    if (m_pdata->getDomainDecomposition())
+        {
+        m_exec_conf->msg->error() << "map_overlaps does not support MPI parallel jobs" << std::endl;
+        throw std::runtime_error("map_overlaps does not support MPI parallel jobs");
+        }
+    #endif
+
+    unsigned int N = m_pdata->getN();
 
     std::vector<bool> overlap_map(N*N, false);
 
@@ -1246,9 +1261,9 @@ void IntegratorHPMCMono<Shape>::connectGSDSignal(
                                                     std::shared_ptr<GSDDumpWriter> writer,
                                                     std::string name)
     {
-    typedef ::detail::SharedSignalSlot<int(gsd_handle&)> SlotType;
+    typedef hoomd::detail::SharedSignalSlot<int(gsd_handle&)> SlotType;
     auto func = std::bind(&IntegratorHPMCMono<Shape>::slotWriteGSD, this, std::placeholders::_1, name);
-    std::shared_ptr<::detail::SignalSlot> pslot( new SlotType(writer->getWriteSignal(), func));
+    std::shared_ptr<hoomd::detail::SignalSlot> pslot( new SlotType(writer->getWriteSignal(), func));
     addSlot(pslot);
     }
 

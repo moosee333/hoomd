@@ -188,9 +188,16 @@ Ludwig Schneider, Georg-August Univeristy Goettingen
   * Constant stress flow: hoomd.md.update.mueller_plathe_flow
   * Matrix logging and hdf5 logging: hoomd.hdf5.log
 
+Bjørnar Jensen, University of Bergen
+ * Add Lennard-Jones 12-8 pair potential
+ * Add Buckingham/exp-6 pair potential
+ * Add special_pair Coulomb 1-4 scaling
+
 Lin Yang, Alex Travesset, Iowa State University
   * metal.pair.eam - reworked implementation
 
+Tim Moore, Vanderbilt University
+  * angle.cosinesq
 
 HPMC developers
 ---------------
@@ -266,6 +273,9 @@ Paul Dodd, Erin Teich, University of Michigan
  * External potential framework
  * Wall overlap checks
  * Lattice external potential
+
+ Erin Teich, University of Michigan
+ * Convex polyhedron union particle type
 
 Vyas Ramasubramani, University of Michigan
  * hpmc.util.tune fixes for tuning by type

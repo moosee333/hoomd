@@ -165,6 +165,14 @@ class gsd_write_tests (unittest.TestCase):
         if comm.get_rank() == 0:
             self.assertRaises(RuntimeError, init.read_gsd, self.tmp_file, frame=5);
 
+    # tests with zero particles
+    def test_zero_particles(self):
+        self.s.particles.remove(0)
+        self.s.particles.remove(1)
+        self.s.particles.remove(2)
+        self.s.particles.remove(3)
+        dump.gsd(filename=self.tmp_file, group=group.all(), period=1, overwrite=True);
+
     def tearDown(self):
         if (hoomd.comm.get_rank()==0):
             os.remove(self.tmp_file);
@@ -384,7 +392,7 @@ class gsd_read_tests (unittest.TestCase):
         dump.gsd(filename=self.tmp_file, group=group.all(), period=None, overwrite=True);
         context.initialize();
 
-        init.read_gsd(filename=self.tmp_file);
+        init.read_gsd(filename=self.tmp_file, frame=-1);
 
     def tearDown(self):
         if comm.get_rank() == 0:
@@ -422,7 +430,7 @@ class gsd_default_type (unittest.TestCase):
     def test_gsd(self):
         dump.gsd(filename=self.tmp_file, group=group.all(), period=None, overwrite=True);
 
-        snap = data.gsd_snapshot(self.tmp_file, frame=0);
+        snap = data.gsd_snapshot(self.tmp_file, frame=-1);
         if comm.get_rank() == 0:
             self.assertEqual(snap.particles.N, self.snapshot.particles.N);
             self.assertEqual(snap.particles.types, self.snapshot.particles.types);
