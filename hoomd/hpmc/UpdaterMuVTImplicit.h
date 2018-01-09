@@ -65,6 +65,39 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
             std::vector<vec3<Scalar> > positions = std::vector<vec3<Scalar> >(),
             std::vector<quat<Scalar> > orientations = std::vector<quat<Scalar> >());
 
+        /*! Find overlapping particles of type type_remove in excluded volume of particle of type tag
+            \param type_remove Type of particles to be removed
+            \param tag tag of particle in whose excluded volume we search
+            \returns List of particle tags in excluded volume
+         */
+        virtual std::set<unsigned int> findParticlesInExcludedVolume(unsigned int type_remove,
+            unsigned int type,
+            vec3<Scalar> pos,
+            quat<Scalar> orientation);
+
+        /*! Perform two-component perfect (Propp-Wilson) sampling in a sphere
+         * \param timestep Current time step
+         * \param type_insert Type of particle generated
+         * \param type type of particle in whose excluded volume we sample
+         * \param pos position of inserted particle
+         * \param orientation orientation of inserted particle
+         * \param types Types of generated particles (return value)
+         * \param positions Positions of generated particles
+         * \param orientations Orientations of generated particles
+         * \returns True if boltzmann weight is non-zero
+         */
+        virtual unsigned int perfectSample(unsigned int timestep,
+            unsigned int type_insert,
+            unsigned int type,
+            vec3<Scalar> pos,
+            quat<Scalar> orientation,
+            std::vector<unsigned int>& types,
+            std::vector<vec3<Scalar> >& positions,
+            std::vector<quat<Scalar> >& orientations,
+            const std::vector<unsigned int> & old_types,
+            const std::vector<vec3<Scalar> >& old_pos,
+            const std::vector<quat<Scalar> >& old_orientation);
+
         /*! Try inserting a particle in a two-species perfect sampling scheme
          * \param timestep Current time step
          * \param pos_sphere
@@ -80,9 +113,9 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
          * \returns True if boltzmann weight is non-zero
          */
         virtual std::vector<unsigned int> tryInsertPerfectSampling(unsigned int timestep,
-            vec3<Scalar> pos_sphere,
-            Scalar diameter,
-            enum UpdaterMuVT<Shape>::BoundaryConditions bc,
+            unsigned int type,
+            vec3<Scalar> pos,
+            quat<Scalar> orientation,
             const std::vector<unsigned int>& insert_types,
             const std::vector<vec3<Scalar> >& insert_pos,
             const std::vector< quat<Scalar> >& insert_orientation,
@@ -191,9 +224,11 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
         unsigned int countDepletantOverlapsInNewPosition(unsigned int timestep, unsigned int n_insert, Scalar delta,
             vec3<Scalar>pos, quat<Scalar> orientation, unsigned int type, unsigned int &n_free, bool communicate, unsigned int seed);
 
-        std::vector<unsigned int> checkDepletantOverlaps(unsigned int timestep, unsigned int n_insert, Scalar delta,
+        std::vector<unsigned int> checkDepletantOverlaps(unsigned int timestep, unsigned int n_insert,
             unsigned int seed,
-            vec3<Scalar> pos_sphere,
+            unsigned int type,
+            vec3<Scalar> pos,
+            quat<Scalar> orientation,
             const std::vector<unsigned int>& insert_type,
             const std::vector<vec3<Scalar> >& insert_position,
             const std::vector<quat<Scalar> >& insert_orientation,
@@ -256,6 +291,106 @@ UpdaterMuVTImplicit<Shape, Integrator>::UpdaterMuVTImplicit(std::shared_ptr<Syst
     : UpdaterMuVT<Shape>(sysdef, mc_implicit,seed,npartition), m_mc_implicit(mc_implicit)
     {
     }
+
+template<class Shape, class Integrator>
+std::set<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::findParticlesInExcludedVolume(unsigned int type_remove,
+            unsigned int type,
+            vec3<Scalar> pos,
+            quat<Scalar> orientation)
+    {
+    unsigned int nptl_local = this->m_pdata->getN() + this->m_pdata->getNGhosts();
+
+    // update the image list
+    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+
+    // check for overlaps
+    auto params = this->m_mc->getParams();
+
+    unsigned int type_d = m_mc_implicit->getDepletantType();
+
+    // shape of inserted particle
+    Shape shape(orientation, params[type]);
+
+    // NOTE we are assuming here the depletant orientation doesn't matter
+    Shape shape_depletant(quat<Scalar>(), params[type_d]);
+
+    if (shape_depletant.hasOrientation())
+        throw std::runtime_error("Anisotropic depletants not supported with muVT");
+
+    Scalar R_excl = 0.5*(shape.getCircumsphereDiameter() + shape_depletant.getCircumsphereDiameter());
+
+    std::set<unsigned int> remove_tags;
+
+    // we cannot rely on a valid AABB tree when there are 0 particles
+    if (nptl_local > 0)
+        {
+        // Check particle against AABB tree for neighbors
+        const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
+        const unsigned int n_images = image_list.size();
+
+        ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+        ArrayHandle<unsigned int> h_tag(this->m_pdata->getTags(), access_location::host, access_mode::read);
+
+        detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_excl);
+
+        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+            {
+            vec3<Scalar> pos_image = pos + image_list[cur_image];
+
+            detail::AABB aabb = aabb_local;
+            aabb.translate(pos_image);
+
+            // stackless search
+            for (unsigned int cur_node_idx = 0; cur_node_idx < aabb_tree.getNumNodes(); cur_node_idx++)
+                {
+                if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                    {
+                    if (aabb_tree.isNodeLeaf(cur_node_idx))
+                        {
+                        for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                            {
+                            // read in its position and orientation
+                            unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                            Scalar4 postype_j = h_postype.data[j];
+
+                            // put particles in coordinate system of particle i
+                            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+
+                            unsigned int typ_j = __scalar_as_int(postype_j.w);
+                            if (typ_j != type_remove) continue;
+
+                            Shape shape_j(quat<Scalar>(h_orientation.data[j]), params[typ_j]);
+
+                            OverlapReal rsq(dot(r_ij,r_ij));
+                            bool circumsphere_overlap = rsq <= R_excl*R_excl;
+
+                            if (circumsphere_overlap)
+                                {
+                                // is particle j in depletant-excluded volume? if we cannot insert a depletant
+                                // at j's position without overlap
+                                unsigned int err_count = 0;
+                                if (test_overlap(r_ij, shape, shape_depletant, err_count) && j < this->m_pdata->getN())
+                                    remove_tags.insert(h_tag.data[j]);
+                                }
+                            }
+                        }
+                    }
+                else
+                    {
+                    // skip ahead
+                    cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                    }
+
+                } // end loop over AABB nodes
+
+            } // end loop over images
+        } // end if nptl_local > 0
+
+    return remove_tags;
+    }
+
 
 template<class Shape, class Integrator>
 bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
@@ -364,9 +499,9 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
 
 template<class Shape, class Integrator>
 std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfectSampling(unsigned int timestep,
-    vec3<Scalar> pos_sphere,
-    Scalar diameter,
-    enum UpdaterMuVT<Shape>::BoundaryConditions bc,
+    unsigned int type,
+    vec3<Scalar> pos,
+    quat<Scalar> orientation,
     const std::vector<unsigned int>& insert_type,
     const std::vector<vec3<Scalar> >& insert_pos,
     const std::vector<quat<Scalar> > & insert_orientation,
@@ -377,7 +512,7 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
     const std::vector<quat<Scalar> >& orientations)
     {
     // check overlaps with colloid particles first
-    auto temp_result = UpdaterMuVT<Shape>::tryInsertPerfectSampling(timestep, pos_sphere, diameter, bc,
+    auto temp_result = UpdaterMuVT<Shape>::tryInsertPerfectSampling(timestep, type, pos, orientation,
         insert_type, insert_pos, insert_orientation, seed,
         start, types, positions, orientations);
 
@@ -385,15 +520,10 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
     Scalar d_dep;
     auto params = this->m_mc->getParams();
     Shape tmp(quat<Scalar>(), params[m_mc_implicit->getDepletantType()]);
-    d_dep = tmp.getCircumsphereDiameter();
+    Shape shape(quat<Scalar>(), params[type]);
 
     // need to investigate the role of BC here!
-    Scalar delta = diameter;
-
-    if (bc == UpdaterMuVT<Shape>::attractive)
-        delta -= d_dep;
-    else if (bc == UpdaterMuVT<Shape>::repulsive)
-        delta += d_dep;
+    Scalar delta = tmp.getCircumsphereDiameter() + shape.getCircumsphereDiameter();
 
     Scalar V = Scalar(M_PI/6.0)*delta*delta*delta;
 
@@ -416,7 +546,10 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
             temp_idx.push_back(*it);
             }
 
-        auto keep = checkDepletantOverlaps(timestep, n_dep, delta, seed, pos_sphere,
+        auto keep = checkDepletantOverlaps(timestep, n_dep, seed,
+            type,
+            pos,
+            orientation,
             temp_type,
             temp_pos,
             temp_orientation,
@@ -435,6 +568,163 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
 
     return result;
     }
+
+template<class Shape, class Integrator>
+unsigned int UpdaterMuVTImplicit<Shape,Integrator>::perfectSample(unsigned int timestep,
+    unsigned int type_insert,
+    unsigned int type,
+    vec3<Scalar> pos,
+    quat<Scalar> orientation,
+    std::vector<unsigned int>& types,
+    std::vector<vec3<Scalar> >& positions,
+    std::vector<quat<Scalar> >& orientations,
+    const std::vector<unsigned int> & old_types,
+    const std::vector<vec3<Scalar> >& old_pos,
+    const std::vector<quat<Scalar> >& old_orientation)
+    {
+    // Propp-Wilson (perfect) sampler
+
+    unsigned int cur_sequence = 0;
+    unsigned int l_sequence = 1; // length of current sequence
+
+    // depletant-excluded volume circumsphere of inserted particle
+    auto params = this->m_mc->getParams();
+
+    Shape shape_depletant(quat<Scalar>(), params[m_mc_implicit->getDepletantType()]);
+    Shape shape(orientation, params[type]);
+    Scalar diameter = shape_depletant.getCircumsphereDiameter() + shape.getCircumsphereDiameter();
+
+    Scalar fugacity = this->m_fugacity[type_insert]->getValue(timestep);
+    Scalar V_sphere = Scalar(M_PI/6.0)*diameter*diameter*diameter;
+
+    std::poisson_distribution<unsigned int> poisson(fugacity*V_sphere);
+
+    // the two Gibbs samplers
+    std::vector<vec3<Scalar> > cur_pos_A, cur_pos_B;
+    std::vector<quat<Scalar> > cur_orientation_A, cur_orientation_B;
+    std::vector<unsigned int> cur_types_A, cur_types_B;
+    std::vector<unsigned int> cur_set_A, cur_set_B; // keep track of inserted particles
+
+    std::vector<unsigned int> insert_types;
+    std::vector<vec3<Scalar> > insert_pos;
+    std::vector<quat<Scalar> > insert_orientation;
+
+    Shape shape_insert(quat<Scalar>(), params[type_insert]);
+
+    unsigned int iseed;
+
+    do
+        {
+        // step in powers of two
+        l_sequence *= 2;
+
+        // seed for Poisson process
+        iseed = l_sequence;
+
+        cur_types_A.clear(); cur_types_B.clear();
+        cur_pos_A.clear(); cur_pos_B.clear();
+        cur_orientation_A.clear(); cur_orientation_B.clear();
+
+        for (unsigned int k = 0; k < l_sequence; ++k)
+            {
+            // generate random positions in sampling sphere
+            hoomd::detail::Saru rng(timestep, this->m_seed+iseed, 0x9bc2ffe1 );
+
+            // combine five seeds
+            std::vector<unsigned int> seed_seq(5);
+            seed_seq[0] = this->m_seed;
+            seed_seq[1] = timestep;
+            seed_seq[2] = this->m_exec_conf->getPartition();
+            seed_seq[3] = 0x7ef9ab9a;
+            seed_seq[4] = iseed;
+            std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+
+            // RNG for poisson distribution
+            std::mt19937 rng_mt(seed);
+
+            unsigned int n_insert = poisson(rng_mt);
+            this->m_exec_conf->msg->notice(7) << "UpdaterMuVTImplicit " << timestep << " sequence " << cur_sequence << " trying to insert " << n_insert
+                 << " ptls of type " << this->m_pdata->getNameByType(type_insert) << std::endl;
+
+            insert_types.clear();
+            insert_pos.clear();
+            insert_orientation.clear();
+
+            for (unsigned int n = 0; n < n_insert; ++n)
+                {
+                // generate same positions on all ranks
+                vec3<Scalar> pos_insert = generatePositionInSphere(rng, pos, 0.5*diameter);
+                if (shape_insert.hasOrientation())
+                    {
+                    // set particle orientation
+                    shape_insert.orientation = generateRandomOrientation(rng);
+                    }
+                insert_types.push_back(type_insert);
+                insert_pos.push_back(pos_insert);
+                insert_orientation.push_back(shape_insert.orientation);
+                }
+
+            // push back old positions to cur_pos_A, ...
+            for (unsigned int i = 0; i < old_types.size(); ++i)
+                {
+                cur_types_A.push_back(old_types[i]);
+                cur_pos_A.push_back(old_pos[i]);
+                cur_orientation_A.push_back(old_orientation[i]);
+
+                cur_types_B.push_back(old_types[i]);
+                cur_pos_B.push_back(old_pos[i]);
+                cur_orientation_B.push_back(old_orientation[i]);
+                }
+
+            bool start = k == 0;
+            // try inserting in excluded volume, for the first Gibbs sampler chain
+            cur_set_A = tryInsertPerfectSampling(timestep, type, pos, orientation, insert_types, insert_pos, insert_orientation, iseed,
+                start, cur_types_A, cur_pos_A, cur_orientation_A);
+
+            // retain successfully inserted particles
+            cur_types_A.clear();
+            cur_pos_A.clear();
+            cur_orientation_A.clear();
+            for (auto it = cur_set_A.begin(); it != cur_set_A.end(); it++)
+                {
+                cur_types_A.push_back(insert_types[*it]);
+                cur_pos_A.push_back(insert_pos[*it]);
+                cur_orientation_A.push_back(insert_orientation[*it]);
+                }
+
+            // try inserting in excluded volume for second chain, it is important to use the same seed
+            cur_set_B =  tryInsertPerfectSampling(timestep, type, pos, orientation, insert_types, insert_pos, insert_orientation, iseed,
+                false, cur_types_B, cur_pos_B, cur_orientation_B);
+
+            // retain successfully inserted particles
+            cur_types_B.clear();
+            cur_pos_B.clear();
+            cur_orientation_B.clear();
+            for (auto it = cur_set_B.begin(); it != cur_set_B.end(); it++)
+                {
+                cur_types_B.push_back(insert_types[*it]);
+                cur_pos_B.push_back(insert_pos[*it]);
+                cur_orientation_B.push_back(insert_orientation[*it]);
+                }
+            iseed--;
+            }
+
+        if (cur_set_A == cur_set_B)
+            {
+            // converged, current Gibbs sampler state is final
+            positions = cur_pos_A;
+            orientations = cur_orientation_A;
+            types = cur_types_A;
+            break;
+            }
+
+        cur_sequence++;
+        } while (1);
+
+    // should always be zero ..
+    return iseed;
+    }
+
 
 
 template<class Shape, class Integrator>
@@ -1899,8 +2189,10 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoOldPosition(unsign
 
 template<class Shape, class Integrator>
 std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantOverlaps(
-    unsigned int timestep, unsigned int n_insert, Scalar delta, unsigned int seed,
-    vec3<Scalar> pos_sphere,
+    unsigned int timestep, unsigned int n_insert, unsigned int seed,
+    unsigned int type,
+    vec3<Scalar> pos,
+    quat<Scalar> orientation,
     const std::vector<unsigned int>& insert_type,
     const std::vector<vec3<Scalar> >& insert_position,
     const std::vector<quat<Scalar> >& insert_orientation,
@@ -1910,7 +2202,7 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     {
     unsigned int type_d = m_mc_implicit->getDepletantType();
 
-    std::vector<bool> overlap(insert_type.size(),0);
+    std::vector<bool> overlap(insert_type.size(),1);
 
     // initialize rng
     hoomd::detail::Saru rng(timestep, this->m_seed+seed, 0x1412459a );
@@ -1920,13 +2212,37 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     ArrayHandle<unsigned int> h_overlaps(this->m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
     const Index2D & overlap_idx = this->m_mc->getOverlapIndexer();
 
+    // NOTE assume here depletant is isotropic
+    Shape shape_test(quat<Scalar>(), params[type_d]);
+    Shape shape(orientation, params[type]);
+    Scalar delta = shape.getCircumsphereDiameter() + shape_test.getCircumsphereDiameter();
+
+    // first reject the inserted particles that are not in depletant-excluded volume
+    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    const unsigned int n_images = image_list.size();
+    for (unsigned int l = 0; l < insert_type.size(); ++l)
+        {
+        // if we cannot insert a depletant at the inserted particle's position, we are good
+        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+            {
+            vec3<Scalar> pos_test_image = insert_position[l] + image_list[cur_image];
+            vec3<Scalar> r_ij = pos - pos_test_image;
+            bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta;
+            unsigned int err_count = 0;
+            if (circumsphere_overlap && test_overlap(r_ij, shape_test, shape, err_count))
+                {
+                // this looks counterintuitive, but in the end we retain only those particles with overlap[l] == 0
+                overlap[l] = 0;
+                }
+            } // end loop over images
+        } // end loop over images
+
     // for every test depletant
     for (unsigned int k = 0; k < n_insert; ++k)
         {
         // draw a random vector in the excluded volume sphere of the particle to be inserted
-        vec3<Scalar> pos_test = generatePositionInSphere(rng, pos_sphere, 0.5*delta);
+        vec3<Scalar> pos_test = generatePositionInSphere(rng, pos, 0.5*delta);
 
-        Shape shape_test(quat<Scalar>(), params[type_d]);
         if (shape_test.hasOrientation())
             {
             // if the depletant is anisotropic, generate orientation
@@ -1940,9 +2256,6 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
 
         unsigned int err_count = 0;
 
-        // update the image list
-        const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
-
         if (this->m_pdata->getN()+this->m_pdata->getNGhosts())
             {
             // update the aabb tree (only valid with N > 0 particles)
@@ -1954,7 +2267,6 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
             ArrayHandle<unsigned int> h_comm_flags(this->m_pdata->getCommFlags(), access_location::host, access_mode::read);
 
             // All image boxes (including the primary)
-            const unsigned int n_images = image_list.size();
             for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                 {
                 vec3<Scalar> pos_test_image = pos_test + image_list[cur_image];
@@ -2044,21 +2356,19 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
             {
             if (!overlap[l])
                 {
-                unsigned int type = insert_type[l];
-                vec3<Scalar> pos = insert_position[l];
-                quat<Scalar> orientation = insert_orientation[l];
-
                 // see if it overlaps with inserted particle
                 for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                     {
-                    Shape shape(orientation, params[type]);
+                    Shape shape_insert(insert_orientation[l], params[insert_type[l]]);
 
                     vec3<Scalar> pos_test_image = pos_test + image_list[cur_image];
-                    vec3<Scalar> r_ij = pos - pos_test_image;
-                    if (h_overlaps.data[overlap_idx(type_d, type)]
+                    vec3<Scalar> r_ij = insert_position[l] - pos_test_image;
+                    if (h_overlaps.data[overlap_idx(type_d, insert_type[l])]
                         && check_circumsphere_overlap(r_ij, shape_test, shape)
-                        && test_overlap(r_ij, shape_test, shape, err_count))
+                        && test_overlap(r_ij, shape_test, shape_insert, err_count))
                         {
+                        // since we are already in depletant excluded volume, we should never get here
+                        // check if we can optimize this out
                         overlap[l] = 1;
                         break;
                         }
