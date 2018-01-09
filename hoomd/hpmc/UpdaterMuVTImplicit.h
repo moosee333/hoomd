@@ -15,6 +15,10 @@
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
 
+#ifdef TBB
+#include <tbb/tbb.h>
+#endif
+
 namespace hpmc
 {
 
@@ -34,6 +38,13 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
             std::shared_ptr<Integrator > mc_implicit,
             unsigned int seed,
             unsigned int npartition);
+
+        //! Destructor
+        virtual ~UpdaterMuVTImplicit()
+            {
+            if (m_aabbs != NULL)
+                free(m_aabbs);
+            }
 
     protected:
         std::poisson_distribution<unsigned int> m_poisson;   //!< Poisson distribution
@@ -74,6 +85,21 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
             unsigned int type,
             vec3<Scalar> pos,
             quat<Scalar> orientation);
+
+        //! Generate a random configuration for a Gibbs sampler
+        virtual void generateGibbsSamplerConfiguration(unsigned int timestep);
+
+        /*! Check for overlaps of an inserted particle, with existing and with Gibbs sampler configuration
+         * \param timestep  time step
+         * \param type Type of particle to test
+         * \param pos Position of fictitous particle
+         * \param orientation Orientation of particle
+         * \param lnboltzmann Log of Boltzmann weight of insertion attempt (return value)
+         * \param if true, reduce final result
+         * \returns True if boltzmann weight is non-zero
+         */
+        virtual bool tryInsertParticleGibbsSampling(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
+            quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed);
 
         /*! Perform two-component perfect (Propp-Wilson) sampling in a sphere
          * \param timestep Current time step
@@ -263,6 +289,25 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
         //! Get the random number of depletants
         virtual unsigned int getNumDepletants(unsigned int timestep, Scalar V, unsigned int seed);
 
+    private:
+        //! Grow the m_aabbs list
+        virtual void growAABBList(unsigned int N);
+
+        //! Helper function to build the internal AABB tree
+        const detail::AABBTree& buildGibbsSamplerAABBTree();
+
+        detail::AABBTree m_aabb_tree;               //!< Bounding volume hierarchy for overlap checks
+        detail::AABB* m_aabbs;                      //!< list of AABBs, one per particle
+        unsigned int m_aabbs_capacity;              //!< Capacity of m_aabbs list
+
+        #ifdef ENABLE_TBB
+        tbb::concurrent_vector<vec3<Scalar> > m_gibbs_position;
+        tbb::concurrent_vector<quat<Scalar> > m_gibbs_orientation;
+        #else
+        std::vector<Scalar3> m_gibbs_position;      //!< Internal list of coordinates for Gibbs sampler
+        std::vector<quat<Scalar> > m_gibbs_orientation; //!< Internal list of orientations
+        #endif
+
     };
 
 //! Export the UpdaterMuVT class to python
@@ -292,6 +337,249 @@ UpdaterMuVTImplicit<Shape, Integrator>::UpdaterMuVTImplicit(std::shared_ptr<Syst
     unsigned int npartition)
     : UpdaterMuVT<Shape>(sysdef, mc_implicit,seed,npartition), m_mc_implicit(mc_implicit)
     {
+    m_aabbs_capacity = 0;
+    m_aabbs = NULL;
+    }
+
+template <class Shape, class Integrator>
+void UpdaterMuVTImplicit<Shape, Integrator>::growAABBList(unsigned int N)
+    {
+    if (N > m_aabbs_capacity)
+        {
+        m_aabbs_capacity = N;
+        if (m_aabbs != NULL)
+            free(m_aabbs);
+
+        int retval = posix_memalign((void**)&m_aabbs, 32, N*sizeof(detail::AABB));
+        if (retval != 0)
+            {
+            this->m_exec_conf->msg->error() << "Error allocating aligned memory" << std::endl;
+            throw std::runtime_error("Error allocating AABB memory");
+            }
+        }
+    }
+
+template <class Shape, class Integrator>
+const detail::AABBTree& UpdaterMuVTImplicit<Shape, Integrator>::buildGibbsSamplerAABBTree()
+    {
+    auto params = m_mc_implicit->getParams();
+
+    this->m_exec_conf->msg->notice(8) << "UpdaterMuVT Building AABB tree: " << m_gibbs_position.size() << " Gibbs sampler ptls" << std::endl;
+    if (this->m_prof) this->m_prof->push(this->m_exec_conf, "AABB tree build");
+
+    unsigned int type_d = m_mc_implicit->getDepletantType();
+
+    // build the AABB tree
+        {
+        // grow the AABB list to the needed size
+        unsigned int n_aabb = m_gibbs_position.size();
+        if (n_aabb > 0)
+            {
+            growAABBList(n_aabb);
+            for (unsigned int cur_particle = 0; cur_particle < n_aabb; cur_particle++)
+                {
+                unsigned int i = cur_particle;
+                Shape shape(m_gibbs_orientation[i], params[type_d]);
+                m_aabbs[i] = shape.getAABB(m_gibbs_position[i]);
+                }
+            m_aabb_tree.buildTree(m_aabbs, n_aabb);
+            }
+        }
+
+    if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
+
+    return m_aabb_tree;
+    }
+
+//! Generate a random configuration for a Gibbs sampler
+template <class Shape, class Integrator>
+void UpdaterMuVTImplicit<Shape, Integrator>::generateGibbsSamplerConfiguration(unsigned int timestep)
+    {
+    // reset existing configuration
+    m_gibbs_position.clear();
+    m_gibbs_orientation.clear();
+
+    unsigned int type_d = m_mc_implicit->getDepletantType();
+    Scalar fugacity = m_mc_implicit->getDepletantDensity();
+
+    const BoxDim& box = this->m_pdata->getBox();
+    Scalar V = box.getVolume(this->m_sysdef->getNDimensions() == 2);
+    std::poisson_distribution<unsigned int> poisson(fugacity*V);
+
+    std::vector<unsigned int> seed_seq(5);
+    seed_seq[0] = this->m_seed;
+    seed_seq[1] = timestep;
+    seed_seq[2] = this->m_exec_conf->getPartition();
+    seed_seq[3] = this->m_exec_conf->getRank();
+    seed_seq[4] = 0x4823b4a1;
+    std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+
+    std::mt19937 rng_mt(seed);
+
+    hoomd::detail::Saru rng(timestep, this->m_seed+this->m_exec_conf->getRank(), 0x1824d2df^this->m_exec_conf->getPartition());
+
+    // how many depletants to insert
+    unsigned int n_insert = poisson(rng_mt);
+
+    auto params = m_mc_implicit->getParams();
+    Shape shape_insert(quat<Scalar>(), params[type_d]);
+
+    // NOTE in MPI we will need to make sure to maintain inactive boundaries
+
+    #ifdef ENABLE_TBB
+    // avoid a race condition
+    m_mc_implicit->updateImageList();
+    if (this->m_pdata->getN()+this->m_pdata->getNGhosts())
+        m_mc_implicit->buildAABBTree();
+    #endif
+
+    #ifdef ENABLE_TBB
+    tbb::parallel_for((unsigned int)0,n_insert, [&](unsigned int i)
+    #else
+    for (unsigned int i = 0; i < n_insert; ++i)
+    #endif
+        {
+        // generate a position uniformly in the box
+        Scalar3 f;
+        f.x = rng.template s<Scalar>();
+        f.y = rng.template s<Scalar>();
+        f.z = rng.template s<Scalar>();
+        vec3<Scalar> pos_insert(box.makeCoordinates(f));
+
+        if (shape_insert.hasOrientation())
+            {
+            // set particle orientation
+            shape_insert.orientation = generateRandomOrientation(rng);
+            }
+
+        // try inserting in existing configuration (not checking for depletant overlaps, hence base class method...)
+        Scalar lnb(0.0);
+        if (UpdaterMuVT<Shape>::tryInsertParticleGibbsSampling(timestep, type_d, pos_insert, shape_insert.orientation, lnb, false, 0))
+            {
+            // store particle in local list
+            m_gibbs_position.push_back(pos_insert);
+            m_gibbs_orientation.push_back(shape_insert.orientation);
+            }
+        }
+    #ifdef ENABLE_TBB
+        );
+    #endif
+
+    // update the AABB tree
+    buildGibbsSamplerAABBTree();
+    }
+
+template<class Shape, class Integrator>
+bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticleGibbsSampling(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
+     quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed)
+    {
+    // check overlaps with colloid particles first (call base class method)
+    lnboltzmann = Scalar(0.0);
+    Scalar lnb(0.0);
+    bool nonzero = UpdaterMuVT<Shape>::tryInsertParticleGibbsSampling(timestep, type, pos, orientation, lnb, communicate, seed);
+    if (nonzero)
+        {
+        lnboltzmann += lnb;
+        }
+
+    // Depletant type
+    unsigned int type_d = m_mc_implicit->getDepletantType();
+
+    unsigned int overlap = 0;
+
+    bool is_local = true;
+    #ifdef ENABLE_MPI
+    if (communicate && this->m_pdata->getDomainDecomposition())
+        {
+        const BoxDim& global_box = this->m_pdata->getGlobalBox();
+        is_local = this->m_exec_conf->getRank() == this->m_pdata->getDomainDecomposition()->placeParticle(global_box, vec_to_scalar3(pos));
+        }
+    #endif
+
+    unsigned int nptl_gibbs = m_gibbs_position.size();
+
+    if (nonzero && is_local && nptl_gibbs)
+        {
+        // update the image list
+        const std::vector<vec3<Scalar> >&image_list = m_mc_implicit->updateImageList();
+
+        // check for overlaps
+        auto params = this->m_mc->getParams();
+
+        ArrayHandle<unsigned int> h_overlaps(this->m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
+        const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
+
+        // construct a shape for inserted particle
+        Shape shape(orientation, params[type]);
+
+        unsigned int err_count = 0;
+
+        // Check particle against AABB tree of implicit particles for neighbors
+        const unsigned int n_images = image_list.size();
+
+        detail::AABB aabb_local = shape.getAABB(vec3<Scalar>(0,0,0));
+
+        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+            {
+            vec3<Scalar> pos_image = pos + image_list[cur_image];
+
+            detail::AABB aabb = aabb_local;
+            aabb.translate(pos_image);
+
+            // stackless search
+            for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree.getNumNodes(); cur_node_idx++)
+                {
+                if (detail::overlap(m_aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                    {
+                    if (m_aabb_tree.isNodeLeaf(cur_node_idx))
+                        {
+                        for (unsigned int cur_p = 0; cur_p < m_aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                            {
+                            // read in its position and orientation
+                            unsigned int j = m_aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                            // put particles in coordinate system of particle i
+                            vec3<Scalar> r_ij = vec3<Scalar>(m_gibbs_position[j]) - pos_image;
+
+                            Shape shape_j(quat<Scalar>(m_gibbs_orientation[j]), params[type_d]);
+
+                            if (h_overlaps.data[overlap_idx(type_d, type)]
+                                && check_circumsphere_overlap(r_ij, shape, shape_j)
+                                && test_overlap(r_ij, shape, shape_j, err_count))
+                                {
+                                overlap = 1;
+                                break;
+                                }
+                            }
+                        }
+                    }
+                else
+                    {
+                    // skip ahead
+                    cur_node_idx += m_aabb_tree.getNodeSkip(cur_node_idx);
+                    }
+
+                if (overlap)
+                    {
+                    break;
+                    }
+                } // end loop over AABB nodes
+
+            if (overlap)
+                {
+                break;
+                }
+            } // end loop over images
+        } // end if local
+
+    #ifdef ENABLE_MPI
+    if (communicate && this->m_comm)
+        {
+        MPI_Allreduce(MPI_IN_PLACE, &overlap, 1, MPI_UNSIGNED, MPI_MAX, this->m_exec_conf->getMPICommunicator());
+        }
+    #endif
+
+    return !overlap;
     }
 
 template<class Shape, class Integrator>
@@ -1542,9 +1830,8 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryRemoveParticle(unsigned int times
         }
 
     // number of depletants to insert
-    unsigned int n_insert = 0;
-
     #ifdef ENABLE_MPI
+    unsigned int n_insert = 0;
 
     // zero overlapping depletants after removal
     unsigned int n_overlap = 0;

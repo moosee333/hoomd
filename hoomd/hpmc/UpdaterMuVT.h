@@ -237,6 +237,28 @@ class UpdaterMuVT : public Updater
             std::vector<vec3<Scalar> > positions = std::vector<vec3<Scalar> >(),
             std::vector<quat<Scalar> > orientations = std::vector<quat<Scalar> >());
 
+        //! Generate a random configuration for a Gibbs sampler
+        virtual void generateGibbsSamplerConfiguration(unsigned int timestep)
+            {
+            // in absence of an implicitly sampled species, base class does nothing
+            }
+
+        /*! Check for overlaps of an inserted particle, with existing and with Gibbs sampler configuration
+         * \param timestep  time step
+         * \param type Type of particle to test
+         * \param pos Position of fictitous particle
+         * \param orientation Orientation of particle
+         * \param lnboltzmann Log of Boltzmann weight of insertion attempt (return value)
+         * \param if true, reduce final result
+         * \returns True if boltzmann weight is non-zero
+         */
+        virtual bool tryInsertParticleGibbsSampling(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
+            quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed)
+            {
+            // just check against existing particles
+            return UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos, orientation, lnboltzmann, communicate, seed);
+            }
+
         /*! Perform two-component perfect (Propp-Wilson) sampling in a sphere
          * \param timestep Current time step
          * \param maxit Maximum number of steps
@@ -263,6 +285,7 @@ class UpdaterMuVT : public Updater
             const std::vector<quat<Scalar> >& old_orientation)
             {
             // the base class implementation does nothing, since we need a second species (a depletant)
+            return 0;
             };
 
         /*! Try inserting a particle in a two-species perfect sampling scheme
@@ -1261,6 +1284,15 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                 }
             else // gibbs && ! parallel
                 {
+                // generate a Gibbs sampler configuration
+                if (m_prof)
+                    m_prof->push("Gibbs sampler");
+
+                generateGibbsSamplerConfiguration(timestep);
+
+                if (m_prof)
+                    m_prof->pop();
+
                 // perform parallel insertion/removal
                 for (auto it_type = parallel_types.begin(); it_type != parallel_types.end(); it_type++)
                     {
@@ -1396,7 +1428,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
-                        if (tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, false, i))
+                        if (tryInsertParticleGibbsSampling(timestep, type, pos_test, shape_test.orientation, lnb, false, i))
                             {
                             positions.push_back(pos_test);
                             orientations.push_back(shape_test.orientation);
@@ -1454,7 +1486,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                     // types have changed
                     m_pdata->notifyParticleSort();
-                    }
+                    } // end loop over types that can be inserted in parallel
                 } // end else gibbs && !parallel
             } // end transfer move
         else
