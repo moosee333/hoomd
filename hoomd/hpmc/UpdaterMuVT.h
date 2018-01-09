@@ -239,6 +239,7 @@ class UpdaterMuVT : public Updater
 
         /*! Perform two-component perfect (Propp-Wilson) sampling in a sphere
          * \param timestep Current time step
+         * \param maxit Maximum number of steps
          * \param type_insert Type of particle generated
          * \param type type of particle in whose excluded volume we sample
          * \param pos position of inserted particle
@@ -249,6 +250,7 @@ class UpdaterMuVT : public Updater
          * \returns True if boltzmann weight is non-zero
          */
         virtual unsigned int perfectSample(unsigned int timestep,
+            unsigned int maxit,
             unsigned int type_insert,
             unsigned int type,
             vec3<Scalar> pos,
@@ -751,6 +753,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                 if (insert)
                     {
+                    if (m_prof) m_prof->push("insert");
+
                     // Try inserting a particle
                     unsigned int type = 0;
                     std::string type_name;
@@ -836,6 +840,10 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             lnboltzmann = log(fugacity*V/(Scalar)(nptl_type+1));
                             }
 
+                        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to insert a particle of type "
+                            << m_pdata->getNameByType(type) << std::endl;
+
+
                         // check if particle can be inserted without overlaps
                         Scalar lnb(0.0);
                         unsigned int nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
@@ -864,8 +872,11 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             std::vector<vec3<Scalar> > insert_pos(1,pos_test);
                             std::vector<quat<Scalar> > insert_orientation(1,shape_test.orientation);
 
-                            unsigned int seed = perfectSample(timestep, parallel_types[0], type, pos_test, shape_test.orientation,
+                            if (m_prof) m_prof->push("perfect sample");
+                            unsigned int seed = perfectSample(timestep, UINT_MAX, parallel_types[0], type, pos_test, shape_test.orientation,
                                 types, positions, orientations, insert_type, insert_pos, insert_orientation);
+                            if (m_prof) m_prof->pop();
+
                             n_insert_tot = types.size();
 
                             if (!nonzero
@@ -988,9 +999,13 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             m_count_total.insert_reject_count++;
                             }
                         }
+
+                    if (m_prof) m_prof->pop();
                     }
                 else
                     {
+                    if (m_prof) m_prof->push("remove");
+
                     // try removing a particle
                     unsigned int tag = UINT_MAX;
 
@@ -1059,6 +1074,9 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                     if (tag != UINT_MAX)
                         {
+                        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to remove a particle of type "
+                            << m_pdata->getNameByType(type) << std::endl;
+
                         // get weight for removal
                         Scalar lnb(0.0);
                         if (tryRemoveParticle(timestep, tag, lnb, true, m_exec_conf->getPartition(), types, positions, orientations))
@@ -1110,8 +1128,13 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             std::vector<vec3<Scalar> > insert_pos;
                             std::vector<quat<Scalar> > insert_orientation;
 
-                            perfectSample(timestep, parallel_types[0], type, pos, orientation,
+                            if (m_prof) m_prof->push("perfect sample");
+
+                            unsigned int maxit = 1;
+                            perfectSample(timestep, maxit,  parallel_types[0], type, pos, orientation,
                                 types, positions, orientations, insert_type, insert_pos, insert_orientation);
+                            if (m_prof) m_prof->pop();
+
                             n_insert_tot = types.size();
                             }
                         } // end if tag != UINT_MAX
@@ -1174,6 +1197,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         m_count_total.remove_reject_count++;
                         }
+
+                    if (m_prof) m_prof->pop();
                     } // end remove particle
 
                 if (accept)

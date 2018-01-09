@@ -77,6 +77,7 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
 
         /*! Perform two-component perfect (Propp-Wilson) sampling in a sphere
          * \param timestep Current time step
+         * \param maxit Maximum number of steps
          * \param type_insert Type of particle generated
          * \param type type of particle in whose excluded volume we sample
          * \param pos position of inserted particle
@@ -87,6 +88,7 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
          * \returns True if boltzmann weight is non-zero
          */
         virtual unsigned int perfectSample(unsigned int timestep,
+            unsigned int maxit,
             unsigned int type_insert,
             unsigned int type,
             vec3<Scalar> pos,
@@ -321,6 +323,9 @@ std::set<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::findParticlesInExc
 
     std::set<unsigned int> remove_tags;
 
+    ArrayHandle<unsigned int> h_overlaps(this->m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
+    const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
+
     // we cannot rely on a valid AABB tree when there are 0 particles
     if (nptl_local > 0)
         {
@@ -371,7 +376,8 @@ std::set<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::findParticlesInExc
                                 // is particle j in depletant-excluded volume? if we cannot insert a depletant
                                 // at j's position without overlap
                                 unsigned int err_count = 0;
-                                if (test_overlap(r_ij, shape, shape_depletant, err_count) && j < this->m_pdata->getN())
+                                if (h_overlaps.data[overlap_idx(type_d,type)] &&
+                                    test_overlap(r_ij, shape, shape_depletant, err_count) && j < this->m_pdata->getN())
                                     remove_tags.insert(h_tag.data[j]);
                                 }
                             }
@@ -517,7 +523,6 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
         start, types, positions, orientations);
 
     // test sphere diameter and volume
-    Scalar d_dep;
     auto params = this->m_mc->getParams();
     Shape tmp(quat<Scalar>(), params[m_mc_implicit->getDepletantType()]);
     Shape shape(quat<Scalar>(), params[type]);
@@ -571,6 +576,7 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
 
 template<class Shape, class Integrator>
 unsigned int UpdaterMuVTImplicit<Shape,Integrator>::perfectSample(unsigned int timestep,
+    unsigned int maxit,
     unsigned int type_insert,
     unsigned int type,
     vec3<Scalar> pos,
@@ -709,17 +715,15 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::perfectSample(unsigned int t
             iseed--;
             }
 
-        if (cur_set_A == cur_set_B)
+        if (cur_set_A == cur_set_B || ++cur_sequence == maxit)
             {
             // converged, current Gibbs sampler state is final
-            positions = cur_pos_A;
-            orientations = cur_orientation_A;
-            types = cur_types_A;
+            positions = cur_pos_B;
+            orientations = cur_orientation_B;
+            types = cur_types_B;
             break;
             }
-
-        cur_sequence++;
-        } while (1);
+        } while (cur_sequence < maxit);
 
     // should always be zero ..
     return iseed;
@@ -1112,7 +1116,8 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::insertDepletantsIntoOverlapRegions(u
                     if (h_overlaps.data[overlap_idx(type_d, type_i)])
                         {
                         n_overlap_checks++;
-                        if (circumsphere_overlap && test_overlap(r_ij, shape_test, shape_i, overlap_err_count))
+                        if (circumsphere_overlap &&
+                            test_overlap(r_ij, shape_test, shape_i, overlap_err_count))
                             {
                             overlap_old = true;
                             }
@@ -2227,9 +2232,11 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
             {
             vec3<Scalar> pos_test_image = insert_position[l] + image_list[cur_image];
             vec3<Scalar> r_ij = pos - pos_test_image;
-            bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta;
+            bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta*delta;
             unsigned int err_count = 0;
-            if (circumsphere_overlap && test_overlap(r_ij, shape_test, shape, err_count))
+            if (h_overlaps.data[overlap_idx(type,type_d)]
+                && circumsphere_overlap
+                && test_overlap(r_ij, shape_test, shape, err_count))
                 {
                 // this looks counterintuitive, but in the end we retain only those particles with overlap[l] == 0
                 overlap[l] = 0;
@@ -2249,12 +2256,21 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
             shape_test.orientation = generateRandomOrientation(rng);
             }
 
+        // depletant has be in insertion volume (excluded volume)
+        vec3<Scalar> r_ij(pos_test-pos);
+        bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta*delta;
+        unsigned int err_count = 0;
+        if (!(h_overlaps.data[overlap_idx(type_d, type)]
+            && circumsphere_overlap
+            && test_overlap(r_ij, shape_test, shape, err_count)))
+            {
+            continue;
+            }
+
         // check against overlap with old configuration
         bool overlap_old = false;
 
         detail::AABB aabb_test_local = shape_test.getAABB(vec3<Scalar>(0,0,0));
-
-        unsigned int err_count = 0;
 
         if (this->m_pdata->getN()+this->m_pdata->getNGhosts())
             {
@@ -2367,8 +2383,6 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
                         && check_circumsphere_overlap(r_ij, shape_test, shape)
                         && test_overlap(r_ij, shape_test, shape_insert, err_count))
                         {
-                        // since we are already in depletant excluded volume, we should never get here
-                        // check if we can optimize this out
                         overlap[l] = 1;
                         break;
                         }
