@@ -1111,7 +1111,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             nonzero = 0;
                             }
 
-                        if (nonzero)
+                        if (nonzero && parallel_types.size()==1)
                             {
                                 {
                                 // mark particle as removed, so it doesn't get counted when generating random configuration
