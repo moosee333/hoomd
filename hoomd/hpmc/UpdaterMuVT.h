@@ -1288,6 +1288,9 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                 if (m_prof)
                     m_prof->push("Gibbs sampler");
 
+                if (m_prof)
+                    m_prof->push("generate config");
+
                 generateGibbsSamplerConfiguration(timestep);
 
                 if (m_prof)
@@ -1490,6 +1493,9 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     // types have changed
                     m_pdata->notifyParticleSort();
                     } // end loop over types that can be inserted in parallel
+
+                if (m_prof)
+                    m_prof->pop();
                 } // end else gibbs && !parallel
             } // end transfer move
         else
