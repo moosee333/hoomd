@@ -778,14 +778,17 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
     else
     #endif
         {
-        // generate random depletant number
-        unsigned int n_dep = getNumDepletants(timestep, V, seed);
+        if (nonzero)
+            {
+            // generate random depletant number
+            unsigned int n_dep = getNumDepletants(timestep, V, seed);
 
-        // count depletants overlapping with new config (but ignore overlap in old one)
-        unsigned int n_free;
-        n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type,
-            n_free, communicate, seed);
-        nonzero = !n_overlap;
+            // count depletants overlapping with new config (but ignore overlap in old one)
+            unsigned int n_free;
+            n_overlap = countDepletantOverlapsInNewPosition(timestep, n_dep, delta, pos, orientation, type,
+                n_free, communicate, seed);
+            nonzero = !n_overlap;
+            }
         }
 
     return nonzero;
