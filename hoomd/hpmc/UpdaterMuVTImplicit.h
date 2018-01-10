@@ -1799,7 +1799,11 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     // first reject the inserted particles that are not in depletant-excluded volume
     const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
     const unsigned int n_images = image_list.size();
+    #ifdef ENABLE_TBB
+    tbb::parallel_for((unsigned int)0,(unsigned int)insert_type.size(), [&](unsigned int l)
+    #else
     for (unsigned int l = 0; l < insert_type.size(); ++l)
+    #endif
         {
         // if we cannot insert a depletant at the inserted particle's position, we are good
         for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
@@ -1817,9 +1821,17 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
                 }
             } // end loop over images
         } // end loop over images
+    #ifdef ENABLE_TBB
+        );
+    #endif
 
     // for every test depletant
+
+    #ifdef ENABLE_TBB
+    tbb::parallel_for((unsigned int)0,n_insert, [&](unsigned int k)
+    #else
     for (unsigned int k = 0; k < n_insert; ++k)
+    #endif
         {
         // draw a random vector in the excluded volume sphere of the particle to be inserted
         vec3<Scalar> pos_test = generatePositionInSphere(rng, pos, 0.5*delta);
@@ -1838,7 +1850,11 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
             && circumsphere_overlap
             && test_overlap(r_ij, shape_test, shape, err_count)))
             {
+            #ifdef ENABLE_TBB
+            return;
+            #else
             continue;
+            #endif
             }
 
         // check against overlap with old configuration
@@ -1940,7 +1956,14 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
                 break;
             } // end loop over images
 
-        if (overlap_old) continue;
+        if (overlap_old)
+            {
+            #ifdef ENABLE_TBB
+            return;
+            #else
+            continue;
+            #endif
+            }
 
         for (unsigned int l = 0; l < insert_type.size(); ++l)
             {
@@ -1964,6 +1987,9 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
                 }
             } // end loop over inserted particles
         } // end loop over test depletants
+    #ifdef ENABLE_TBB
+        );
+    #endif
 
     std::vector<unsigned int> result;
     for (unsigned int l = 0; l < overlap.size(); ++l)
