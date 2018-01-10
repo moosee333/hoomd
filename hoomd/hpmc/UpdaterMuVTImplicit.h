@@ -815,6 +815,11 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
         insert_type, insert_pos, insert_orientation, seed,
         start, types, positions, orientations);
 
+    #ifdef ENABLE_TBB
+    // result may have nondeterministic order which makes comparison as set impossible, so sort
+    std::sort(temp_result.begin(), temp_result.end());
+    #endif
+
     // test sphere diameter and volume
     auto params = this->m_mc->getParams();
     Shape tmp(quat<Scalar>(), params[m_mc_implicit->getDepletantType()]);
@@ -1841,7 +1846,6 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
     const unsigned int n_images = image_list.size();
 
-    tbb::atomic<unsigned int> count = 0;
     #ifdef ENABLE_TBB
     tbb::parallel_for((unsigned int)0,(unsigned int)insert_type.size(), [&](unsigned int l)
     #else
@@ -1861,7 +1865,6 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
                 {
                 // this looks counterintuitive, but in the end we retain only those particles with overlap[l] == 0
                 overlap[l] = 0;
-                count++;
                 break;
                 }
             } // end loop over images
@@ -1902,18 +1905,22 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
             }
 
         // depletant has be in insertion volume (excluded volume)
-        vec3<Scalar> r_ij(pos_test-pos);
-        bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta*delta;
         unsigned int err_count = 0;
-        if (!(h_overlaps.data[overlap_idx(type_d, type)]
-            && circumsphere_overlap
-            && test_overlap(r_ij, shape_test, shape, err_count)))
+        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
             {
-            #ifdef ENABLE_TBB
-            return;
-            #else
-            continue;
-            #endif
+            vec3<Scalar> pos_image = pos + image_list[cur_image];
+            vec3<Scalar> r_ij(pos_test-pos);
+            bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta*delta;
+            if (!(h_overlaps.data[overlap_idx(type_d, type)]
+                && circumsphere_overlap
+                && test_overlap(r_ij, shape, shape_test, err_count)))
+                {
+                #ifdef ENABLE_TBB
+                return;
+                #else
+                continue;
+                #endif
+                }
             }
 
         // check against overlap with old configuration
