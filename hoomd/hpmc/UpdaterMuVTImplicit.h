@@ -796,43 +796,41 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
     Scalar V = Scalar(M_PI/6.0)*delta*delta*delta;
 
     // generate random depletant number
-    unsigned int n_dep = getNumDepletants(timestep, V, seed);
+    unsigned int n_dep = 0;
 
     // count depletants overlapping with new config (but ignore overlap in old one)
     std::vector<unsigned int> result;
     if (!start)
         {
-        std::vector<unsigned int> temp_type;
-        std::vector<vec3<Scalar> > temp_pos;
-        std::vector<quat<Scalar> > temp_orientation;
-        std::vector<unsigned int> temp_idx;
-        for (auto it = temp_result.begin(); it != temp_result.end(); ++it)
-            {
-            temp_type.push_back(insert_type[*it]);
-            temp_pos.push_back(insert_pos[*it]);
-            temp_orientation.push_back(insert_orientation[*it]);
-            temp_idx.push_back(*it);
-            }
-
-        auto keep = checkDepletantOverlaps(timestep, n_dep, seed,
-            type,
-            pos,
-            orientation,
-            temp_type,
-            temp_pos,
-            temp_orientation,
-            types,
-            positions,
-            orientations);
-
-        // write result list of insert-able particle indices
-        for (auto it = keep.begin(); it != keep.end(); ++it)
-            result.push_back(temp_idx[*it]);
+        n_dep = getNumDepletants(timestep, V, seed);
         }
-    else
+
+    std::vector<unsigned int> temp_type;
+    std::vector<vec3<Scalar> > temp_pos;
+    std::vector<quat<Scalar> > temp_orientation;
+    std::vector<unsigned int> temp_idx;
+    for (auto it = temp_result.begin(); it != temp_result.end(); ++it)
         {
-        result = temp_result;
+        temp_type.push_back(insert_type[*it]);
+        temp_pos.push_back(insert_pos[*it]);
+        temp_orientation.push_back(insert_orientation[*it]);
+        temp_idx.push_back(*it);
         }
+
+    auto keep = checkDepletantOverlaps(timestep, n_dep, seed,
+        type,
+        pos,
+        orientation,
+        temp_type,
+        temp_pos,
+        temp_orientation,
+        types,
+        positions,
+        orientations);
+
+    // write result list of insert-able particle indices
+    for (auto it = keep.begin(); it != keep.end(); ++it)
+        result.push_back(temp_idx[*it]);
 
     return result;
     }
@@ -880,15 +878,12 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::perfectSample(unsigned int t
 
     Shape shape_insert(quat<Scalar>(), params[type_insert]);
 
-    unsigned int iseed;
+    unsigned int last_seed;
 
     do
         {
-        // step in powers of two
-        l_sequence *= 2;
-
         // seed for Poisson process
-        iseed = l_sequence;
+        unsigned int iseed = l_sequence;
 
         cur_types_A.clear(); cur_types_B.clear();
         cur_pos_A.clear(); cur_pos_B.clear();
@@ -975,7 +970,8 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::perfectSample(unsigned int t
                 cur_pos_B.push_back(insert_pos[*it]);
                 cur_orientation_B.push_back(insert_orientation[*it]);
                 }
-            iseed--;
+
+            last_seed = iseed--;
             }
 
         if (cur_set_A == cur_set_B || ++cur_sequence == maxit)
@@ -986,10 +982,13 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::perfectSample(unsigned int t
             types = cur_types_B;
             break;
             }
+
+        // step in powers of two
+        l_sequence *= 2;
         } while (cur_sequence < maxit);
 
-    // should always be zero ..
-    return iseed;
+    // should always be one ..
+    return last_seed;
     }
 
 
@@ -1796,6 +1795,12 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     Shape shape(orientation, params[type]);
     Scalar delta = shape.getCircumsphereDiameter() + shape_test.getCircumsphereDiameter();
 
+    #ifdef ENABLE_TBB
+    // avoid race condition
+    if (this->m_pdata->getN() + this->m_pdata->getNGhosts())
+        this->m_mc->buildAABBTree();
+    #endif
+
     // first reject the inserted particles that are not in depletant-excluded volume
     const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
     const unsigned int n_images = image_list.size();
@@ -1818,6 +1823,7 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
                 {
                 // this looks counterintuitive, but in the end we retain only those particles with overlap[l] == 0
                 overlap[l] = 0;
+                break;
                 }
             } // end loop over images
         } // end loop over images
