@@ -579,7 +579,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticleGibbsSampling(unsig
         }
     #endif
 
-    return !overlap;
+    return nonzero && !overlap;
     }
 
 template<class Shape, class Integrator>
