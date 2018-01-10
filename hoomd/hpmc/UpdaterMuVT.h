@@ -920,7 +920,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                                     ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
                                     for (auto it = remove_tags.begin(); it != remove_tags.end(); ++it)
                                         {
-                                        assert(tag <= m_pdata->getMaximumTag());
+                                        assert(*it <= m_pdata->getMaximumTag());
                                         unsigned int idx = h_rtag.data[*it];
                                         if (idx < m_pdata->getN())
                                             {
