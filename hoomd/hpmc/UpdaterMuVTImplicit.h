@@ -1912,7 +1912,7 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
         for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
             {
             vec3<Scalar> pos_image = pos + image_list[cur_image];
-            vec3<Scalar> r_ij(pos_test-pos);
+            vec3<Scalar> r_ij(pos_test-pos_image);
             bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta*delta;
             if (!(h_overlaps.data[overlap_idx(type_d, type)]
                 && circumsphere_overlap
