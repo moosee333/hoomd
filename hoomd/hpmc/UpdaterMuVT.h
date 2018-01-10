@@ -763,7 +763,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                 }
             #endif
 
-            bool bulk_move = parallel_types.size() && rng.f() <= m_bulk_move_ratio;
+            bool bulk_move = parallel_types.size() && (rng.f() <= m_bulk_move_ratio || !transfer_types.size());
 
             if (m_gibbs || !bulk_move)
                 {
