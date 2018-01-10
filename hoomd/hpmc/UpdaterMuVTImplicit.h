@@ -1909,21 +1909,26 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
 
         // depletant has be in insertion volume (excluded volume)
         unsigned int err_count = 0;
+        bool in_excluded_volume = false;
         for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
             {
             vec3<Scalar> pos_image = pos + image_list[cur_image];
             vec3<Scalar> r_ij(pos_test-pos_image);
             bool circumsphere_overlap = dot(r_ij,r_ij)*4.0 <= delta*delta;
-            if (!(h_overlaps.data[overlap_idx(type_d, type)]
+            if (h_overlaps.data[overlap_idx(type_d, type)]
                 && circumsphere_overlap
-                && test_overlap(r_ij, shape, shape_test, err_count)))
+                && test_overlap(r_ij, shape, shape_test, err_count))
                 {
-                #ifdef ENABLE_TBB
-                return;
-                #else
-                continue;
-                #endif
+                in_excluded_volume = true;
                 }
+            }
+        if (! in_excluded_volume)
+            {
+            #ifdef ENABLE_TBB
+            return;
+            #else
+            continue;
+            #endif
             }
 
         // check against overlap with old configuration
