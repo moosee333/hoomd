@@ -394,8 +394,6 @@ void UpdaterMuVTImplicit<Shape, Integrator>::generateGibbsSamplerConfiguration(u
 
     std::mt19937 rng_mt(seed);
 
-    hoomd::detail::Saru rng(timestep, this->m_seed+this->m_exec_conf->getRank(), 0x1824d2df^this->m_exec_conf->getPartition());
-
     // how many depletants to insert
     unsigned int n_insert = poisson(rng_mt);
 
@@ -412,11 +410,33 @@ void UpdaterMuVTImplicit<Shape, Integrator>::generateGibbsSamplerConfiguration(u
     #endif
 
     #ifdef ENABLE_TBB
+    // create one RNG per thread
+    tbb::enumerable_thread_specific< hoomd::detail::Saru > rng_parallel([=]
+        {
+        std::vector<unsigned int> seed_seq(5);
+        seed_seq[0] = this->m_seed;
+        seed_seq[1] = timestep;
+        seed_seq[2] = this->m_exec_conf->getRank();
+        std::hash<std::thread::id> hash;
+        seed_seq[3] = hash(std::this_thread::get_id());
+        seed_seq[4] = 0x1824d2df;
+
+        std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+        std::vector<unsigned int> s(1);
+        seed.generate(s.begin(),s.end());
+        return s[0]; // initialize with single seed
+        });
+    #endif
+
+
+    #ifdef ENABLE_TBB
     tbb::parallel_for((unsigned int)0,n_insert, [&](unsigned int i)
     #else
     for (unsigned int i = 0; i < n_insert; ++i)
     #endif
         {
+        auto &rng = rng_parallel.local();
+
         // generate a position uniformly in the box
         Scalar3 f;
         f.x = rng.template s<Scalar>();
@@ -1780,10 +1800,7 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     {
     unsigned int type_d = m_mc_implicit->getDepletantType();
 
-    std::vector<bool> overlap(insert_type.size(),1);
-
-    // initialize rng
-    hoomd::detail::Saru rng(timestep, this->m_seed+seed, 0x1412459a );
+    std::vector<unsigned int> overlap(insert_type.size(),1);
 
     auto params = this->m_mc->getParams();
 
@@ -1791,9 +1808,9 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     const Index2D & overlap_idx = this->m_mc->getOverlapIndexer();
 
     // NOTE assume here depletant is isotropic
-    Shape shape_test(quat<Scalar>(), params[type_d]);
+    Shape shape_tmp(quat<Scalar>(), params[type_d]);
     Shape shape(orientation, params[type]);
-    Scalar delta = shape.getCircumsphereDiameter() + shape_test.getCircumsphereDiameter();
+    Scalar delta = shape.getCircumsphereDiameter() + shape_tmp.getCircumsphereDiameter();
 
     #ifdef ENABLE_TBB
     // avoid race condition
@@ -1804,6 +1821,8 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     // first reject the inserted particles that are not in depletant-excluded volume
     const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
     const unsigned int n_images = image_list.size();
+
+    tbb::atomic<unsigned int> count = 0;
     #ifdef ENABLE_TBB
     tbb::parallel_for((unsigned int)0,(unsigned int)insert_type.size(), [&](unsigned int l)
     #else
@@ -1819,10 +1838,11 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
             unsigned int err_count = 0;
             if (h_overlaps.data[overlap_idx(type,type_d)]
                 && circumsphere_overlap
-                && test_overlap(r_ij, shape_test, shape, err_count))
+                && test_overlap(r_ij, shape_tmp, shape, err_count))
                 {
                 // this looks counterintuitive, but in the end we retain only those particles with overlap[l] == 0
                 overlap[l] = 0;
+                count++;
                 break;
                 }
             } // end loop over images
@@ -1839,9 +1859,23 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::checkDepletantO
     for (unsigned int k = 0; k < n_insert; ++k)
     #endif
         {
+        // generate a reproducible pseudo RNG seed
+        std::vector<unsigned int> seed_seq(4);
+        seed_seq[0] = this->m_seed;
+        seed_seq[1] = k;
+        seed_seq[2] = seed;
+        seed_seq[3] = 0x1412459a;
+
+        std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+        std::vector<unsigned int> s(1);
+        seed.generate(s.begin(),s.end());
+
         // draw a random vector in the excluded volume sphere of the particle to be inserted
+        hoomd::detail::Saru rng(timestep, s[0], this->m_exec_conf->getRank());
+
         vec3<Scalar> pos_test = generatePositionInSphere(rng, pos, 0.5*delta);
 
+        Shape shape_test(quat<Scalar>(), params[type_d]);
         if (shape_test.hasOrientation())
             {
             // if the depletant is anisotropic, generate orientation

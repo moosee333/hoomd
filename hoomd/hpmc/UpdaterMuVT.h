@@ -1373,7 +1373,6 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     #endif
 
                     auto params = m_mc->getParams();
-                    Shape shape_test(quat<Scalar>(), params[type]);
 
                     #ifdef ENABLE_TBB
                     // create one RNG per thread
@@ -1420,6 +1419,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         f.z = my_rng.template s<Scalar>();
 
                         vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getBox().makeCoordinates(f));
+
+                        Shape shape_test(quat<Scalar>(), params[type]);
                         if (shape_test.hasOrientation())
                             {
                             // set particle orientation
@@ -1476,6 +1477,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             unsigned int idx = h_rtag.data[tag];
                             vec3<Scalar> pos = positions[n];
                             h_postype.data[idx] = make_scalar4(pos.x, pos.y, pos.z, __int_as_scalar(type));
+
+                            Shape shape_test(quat<Scalar>(), params[type]);
                             if (shape_test.hasOrientation())
                                 {
                                 h_orientation.data[idx] = quat_to_scalar4(orientations[n]);
