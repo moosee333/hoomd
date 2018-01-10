@@ -140,7 +140,12 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
          * \param orientations Orientations of particles inserted in previous step
          * \returns True if boltzmann weight is non-zero
          */
-        virtual std::vector<unsigned int> tryInsertPerfectSampling(unsigned int timestep,
+        #ifdef ENABLE_TBB
+        virtual tbb::concurrent_vector<unsigned int> tryInsertPerfectSampling(
+        #else
+        virtual std::vector<unsigned int> tryInsertPerfectSampling(
+        #endif
+            unsigned int timestep,
             unsigned int type,
             vec3<Scalar> pos,
             quat<Scalar> orientation,
@@ -787,7 +792,12 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticle(unsigned int times
     }
 
 template<class Shape, class Integrator>
-std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfectSampling(unsigned int timestep,
+#ifdef ENABLE_TBB
+tbb::concurrent_vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfectSampling(
+#else
+std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfectSampling(
+#endif
+    unsigned int timestep,
     unsigned int type,
     vec3<Scalar> pos,
     quat<Scalar> orientation,
@@ -819,7 +829,12 @@ std::vector<unsigned int> UpdaterMuVTImplicit<Shape,Integrator>::tryInsertPerfec
     unsigned int n_dep = 0;
 
     // count depletants overlapping with new config (but ignore overlap in old one)
+    #ifdef ENABLE_TBB
+    tbb::concurrent_vector<unsigned int> result;
+    #else
     std::vector<unsigned int> result;
+    #endif
+
     if (!start)
         {
         n_dep = getNumDepletants(timestep, V, seed);
@@ -890,7 +905,11 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::perfectSample(unsigned int t
     std::vector<vec3<Scalar> > cur_pos_A, cur_pos_B;
     std::vector<quat<Scalar> > cur_orientation_A, cur_orientation_B;
     std::vector<unsigned int> cur_types_A, cur_types_B;
+    #ifdef ENABLE_TBB
+    tbb::concurrent_vector<unsigned int> cur_set_A, cur_set_B; // keep track of inserted particles
+    #else
     std::vector<unsigned int> cur_set_A, cur_set_B; // keep track of inserted particles
+    #endif
 
     std::vector<unsigned int> insert_types;
     std::vector<vec3<Scalar> > insert_pos;

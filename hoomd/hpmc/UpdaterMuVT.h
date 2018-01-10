@@ -301,7 +301,12 @@ class UpdaterMuVT : public Updater
          * \param orientations Orientations of particles inserted in previous step
          * \returns True if boltzmann weight is non-zero
          */
-        virtual std::vector<unsigned int> tryInsertPerfectSampling(unsigned int timestep,
+        #ifdef ENABLE_TBB
+        virtual tbb::concurrent_vector<unsigned int> tryInsertPerfectSampling(
+        #else
+        virtual std::vector<unsigned int> tryInsertPerfectSampling(
+        #endif
+            unsigned int timestep,
             unsigned int type,
             vec3<Scalar> pos,
             quat<Scalar> orientation,
@@ -2432,7 +2437,11 @@ bool UpdaterMuVT<Shape>::trySwitchType(unsigned int timestep, unsigned int tag, 
     }
 
 template<class Shape>
+#ifdef ENABLE_TBB
+tbb::concurrent_vector<unsigned int> UpdaterMuVT<Shape>::tryInsertPerfectSampling(unsigned int timestep,
+#else
 std::vector<unsigned int> UpdaterMuVT<Shape>::tryInsertPerfectSampling(unsigned int timestep,
+#endif
     unsigned int type,
     vec3<Scalar> pos,
     quat<Scalar> orientation,
@@ -2445,8 +2454,17 @@ std::vector<unsigned int> UpdaterMuVT<Shape>::tryInsertPerfectSampling(unsigned 
     const std::vector<vec3<Scalar> >& positions,
     const std::vector<quat<Scalar> >& orientations)
     {
+    #ifdef ENABLE_TBB
+    tbb::concurrent_vector<unsigned int> result;
+    #else
     std::vector<unsigned int> result;
-    for (unsigned int l = 0; l < insert_type.size(); l++)
+    #endif
+
+    #ifdef ENABLE_TBB
+    tbb::parallel_for((unsigned int)0,(unsigned int)insert_type.size(), [&](unsigned int l)
+    #else
+    for (unsigned int l = 0; l < insert_type.size(); ++l)
+    #endif
         {
         Scalar lnb(0.0);
         bool overlap = !UpdaterMuVT<Shape>::tryInsertParticle(timestep, insert_type[l], insert_pos[l], insert_orientation[l], lnb, true, seed);
@@ -2489,6 +2507,9 @@ std::vector<unsigned int> UpdaterMuVT<Shape>::tryInsertPerfectSampling(unsigned 
         if (!overlap)
             result.push_back(l);
         } // end loop over particles to be inserted
+    #ifdef ENABLE_TBB
+        );
+    #endif
 
     return result;
     }
