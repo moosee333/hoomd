@@ -271,7 +271,9 @@ class UpdaterMuVT : public Updater
          * \param orientations Orientations of generated particles
          * \returns True if boltzmann weight is non-zero
          */
-        virtual unsigned int perfectSample(unsigned int timestep,
+        virtual unsigned int perfectSample(
+            unsigned int timestep,
+            unsigned int select,
             unsigned int maxit,
             unsigned int type_insert,
             unsigned int type,
@@ -310,6 +312,7 @@ class UpdaterMuVT : public Updater
             unsigned int type,
             vec3<Scalar> pos,
             quat<Scalar> orientation,
+            unsigned int other_type,
             const std::vector<unsigned int>& insert_types,
             const std::vector<vec3<Scalar> >& insert_pos,
             const std::vector< quat<Scalar> >& insert_orientation,
@@ -871,14 +874,12 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to insert a particle of type "
                             << m_pdata->getNameByType(type) << std::endl;
 
+                        unsigned int nonzero = 1;
 
                         // check if particle can be inserted without overlaps
-                        Scalar lnb(0.0);
-                        unsigned int nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
-                                lnb, true, m_exec_conf->getPartition());
-
                         if (parallel_types.size() == 1)
                             {
+
                                 {
                                 // remove existing configuration
                                 remove_tags = findParticlesInExcludedVolume(parallel_types[0], type, pos_test, shape_test.orientation);
@@ -895,60 +896,85 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                                     }
                                 }
 
-                            // sample perfectly in excluded volume in new configuration
-                            std::vector<unsigned int> insert_type(1,type);
-                            std::vector<vec3<Scalar> > insert_pos(1,pos_test);
-                            std::vector<quat<Scalar> > insert_orientation(1,shape_test.orientation);
+                            // sample in circumsphere with old configuration
+                            std::vector<unsigned int> insert_type;
+                            std::vector<vec3<Scalar> > insert_pos;
+                            std::vector<quat<Scalar> > insert_orientation;
 
-                            if (m_prof) m_prof->push("perfect sample");
-                            unsigned int seed = perfectSample(timestep, UINT_MAX, parallel_types[0], type, pos_test, shape_test.orientation,
+                            if (m_prof)
+                                m_prof->push("sample");
+
+                            std::vector<unsigned int> old_types;
+                            std::vector<vec3<Scalar> > old_positions;
+                            std::vector<quat<Scalar> > old_orientations;
+
+                            unsigned int maxit = 1;
+                            unsigned int seed_old = perfectSample(timestep, 0, maxit, parallel_types[0], type, pos_test, shape_test.orientation,
+                                old_types, old_positions, old_orientations, insert_type, insert_pos, insert_orientation);
+
+                            if (m_prof)
+                                m_prof->pop();
+
+                            // try inserting particle
+                            insert_type.push_back(type);
+                            insert_pos.push_back(pos_test);
+                            insert_orientation.push_back(shape_test.orientation);
+
+                            // sample perfectly in circumsphere in new configuration (trial move)
+                            if (m_prof)
+                                m_prof->push("sample");
+
+                            unsigned int seed = perfectSample(timestep, 1, maxit, parallel_types[0], type, pos_test, shape_test.orientation,
                                 types, positions, orientations, insert_type, insert_pos, insert_orientation);
-                            if (m_prof) m_prof->pop();
 
                             n_insert_tot = types.size();
 
+                            // reject if new configuration cannot be inserted in old configuration
+
+                            for (unsigned int i = 0; i < types.size(); ++i)
+                                {
+                                insert_type.push_back(types[i]);
+                                insert_pos.push_back(positions[i]);
+                                insert_orientation.push_back(orientations[i]);
+                                }
+
+                            auto res_old = tryInsertPerfectSampling(timestep, type, pos_test, shape_test.orientation, parallel_types[0],
+                                insert_type, insert_pos, insert_orientation,
+                                seed_old, false, old_types, old_positions, old_orientations);
+
+                            // acceptance
+                            nonzero = res_old.size() == insert_type.size();
+
+                            if (m_prof)
+                                m_prof->pop();
+
+                            n_insert_tot = types.size();
+
+                            // if forward move failed, try reverse move
+                            Scalar lnb(0.0);
                             if (!nonzero
                                 && UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, true,
                                     m_exec_conf->getPartition()))
                                 {
-                                // if forward move failed, try reverse move
-
-                                // try re-inserting removed particles in new configuration
-                                std::vector<unsigned int> reinsert_type;
-                                std::vector<vec3<Scalar> > reinsert_pos;
-                                std::vector<quat<Scalar> > reinsert_orientation;
-
-                                    {
-                                    // fetch previous positions, orientations and types
-                                    ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
-                                    ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
-                                    ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-                                    for (auto it = remove_tags.begin(); it != remove_tags.end(); ++it)
-                                        {
-                                        assert(*it <= m_pdata->getMaximumTag());
-                                        unsigned int idx = h_rtag.data[*it];
-                                        if (idx < m_pdata->getN())
-                                            {
-                                            reinsert_type.push_back(__scalar_as_int(h_postype.data[idx].w));
-                                            reinsert_pos.push_back(vec3<Scalar>(h_postype.data[idx]));
-                                            reinsert_orientation.push_back(quat<Scalar>(h_orientation.data[idx]));
-                                            }
-                                        }
-                                    } // end ArrayHandle scope
-
-                                // reinsert particles in new, perfectly sampled configuration (use same seed as previously)
-                                auto res = tryInsertPerfectSampling(timestep, type, pos_test, shape_test.orientation,
-                                    reinsert_type, reinsert_pos, reinsert_orientation,
-                                    seed, false, types, positions, orientations);
+                                // try re-inserting old config particles in new configuration
+                                auto res = tryInsertPerfectSampling(timestep, type, pos_test, shape_test.orientation, parallel_types[0],
+                                    old_types, old_positions, old_orientations,
+                                    seed, false, insert_type, insert_pos, insert_orientation);
 
                                 // if any re-insertion attempt fails, accept the forward move
-                                nonzero = res.size() != reinsert_type.size();
-                                } // end if parallel_types.size() == 1
-                           }
-
-                        if (nonzero)
+                                nonzero = res.size() != old_types.size();
+                                }
+                            } // end if parallel_types.size() == 1
+                        else
                             {
-                            lnboltzmann += lnb;
+                            Scalar lnb(0.0);
+                            nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
+                                lnb, true, m_exec_conf->getPartition());
+
+                            if (nonzero)
+                                {
+                                lnboltzmann += lnb;
+                                }
                             }
 
                         #ifdef ENABLE_MPI
@@ -1118,15 +1144,17 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         if (nonzero && parallel_types.size()==1)
                             {
-                                {
-                                // mark particle as removed, so it doesn't get counted when generating random configuration
-                                ArrayHandle<unsigned int> h_comm_flag(m_pdata->getCommFlags(), access_location::host, access_mode::readwrite);
-                                ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-                                unsigned int idx = h_rtag.data[tag];
-                                if (idx < m_pdata->getN())
-                                    h_comm_flag.data[idx] = 1;
-                                }
+                            // sample in circumsphere with old configuration
+                            std::vector<unsigned int> insert_type;
+                            std::vector<vec3<Scalar> > insert_pos;
+                            std::vector<quat<Scalar> > insert_orientation;
 
+                            if (m_prof)
+                                m_prof->push("sample");
+
+                            std::vector<unsigned int> old_types;
+                            std::vector<vec3<Scalar> > old_positions;
+                            std::vector<quat<Scalar> > old_orientations;
 
                             // getPosition() corrects for grid shift, add it back
                             Scalar3 p = this->m_pdata->getPosition(tag)+this->m_pdata->getOrigin();
@@ -1151,20 +1179,68 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                                     }
                                 }
 
-                            // sample perfectly in excluded volume in new configuration
-                            std::vector<unsigned int> insert_type;
-                            std::vector<vec3<Scalar> > insert_pos;
-                            std::vector<quat<Scalar> > insert_orientation;
-
-                            if (m_prof) m_prof->push("perfect sample");
-
                             unsigned int maxit = 1;
-                            perfectSample(timestep, maxit,  parallel_types[0], type, pos, orientation,
+                            unsigned int seed_old = perfectSample(timestep, 0, maxit, parallel_types[0], type, pos, orientation,
+                                old_types, old_positions, old_orientations, insert_type, insert_pos, insert_orientation);
+
+                            if (m_prof)
+                                m_prof->pop();
+
+                                {
+                                // mark particle as removed, so it doesn't get counted when generating random configuration
+                                ArrayHandle<unsigned int> h_comm_flag(m_pdata->getCommFlags(), access_location::host, access_mode::readwrite);
+                                ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
+                                unsigned int idx = h_rtag.data[tag];
+                                if (idx < m_pdata->getN())
+                                    h_comm_flag.data[idx] = 1;
+                                }
+
+
+                            // sample perfectly in circumsphere in new configuration (trial move)
+                            if (m_prof)
+                                m_prof->push("sample");
+
+                            unsigned int seed = perfectSample(timestep, 1, maxit, parallel_types[0], type, pos, orientation,
                                 types, positions, orientations, insert_type, insert_pos, insert_orientation);
-                            if (m_prof) m_prof->pop();
 
                             n_insert_tot = types.size();
-                            }
+
+                            // reject if new configuration cannot be inserted in old configuration
+                            insert_type.push_back(type);
+                            insert_pos.push_back(pos);
+                            insert_orientation.push_back(orientation);
+
+                            for (unsigned int i = 0; i < types.size(); ++i)
+                                {
+                                insert_type.push_back(types[i]);
+                                insert_pos.push_back(positions[i]);
+                                insert_orientation.push_back(orientations[i]);
+                                }
+
+                            auto res_old = tryInsertPerfectSampling(timestep, type, pos, orientation, parallel_types[0],
+                                insert_type, insert_pos, insert_orientation,
+                                seed_old, false, old_types, old_positions, old_orientations);
+
+                            // acceptance
+                            nonzero = res_old.size() == insert_type.size();
+
+                            if (m_prof)
+                                m_prof->pop();
+
+                            n_insert_tot = types.size();
+
+                            // if forward move failed, try reverse move
+                            if (!nonzero)
+                                {
+                                // try re-inserting old config particles in new configuration
+                                auto res = tryInsertPerfectSampling(timestep, type, pos, orientation, parallel_types[0],
+                                    old_types, old_positions, old_orientations,
+                                    seed, false, types, positions, orientations);
+
+                                // if any re-insertion attempt fails, accept the forward move
+                                nonzero = res.size() != old_types.size();
+                                }
+                            } // end if paralle_types
                         } // end if tag != UINT_MAX
 
                     if (m_gibbs)
@@ -1269,10 +1345,12 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     // types have changed
                     m_pdata->notifyParticleSort();
 
+                    #if 0
                     m_count_total.insert_accept_count += positions.size();
                     m_count_total.insert_reject_count += n_insert_tot - positions.size();
-                    m_count_total.insert_accept_count += remove_tags.size();
-                    m_count_total.insert_reject_count += n_remove_tot - remove_tags.size();
+                    m_count_total.remove_accept_count += remove_tags.size();
+                    m_count_total.remove_reject_count += n_remove_tot - remove_tags.size();
+                    #endif
                     }
                 else
                     {
@@ -1285,6 +1363,10 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         if (idx < m_pdata->getN())
                             h_comm_flag.data[idx] = 0;
                         }
+                    #if 0
+                    m_count_total.insert_reject_count += positions.size();
+                    m_count_total.remove_reject_count += remove_tags.size();
+                    #endif
                     }
                 }
             else // gibbs && ! parallel
@@ -1333,7 +1415,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                     if (m_prof) m_prof->push("Remove");
 
-                    #ifdef _OPENMP
+                    #ifdef ENABLE_TBB
                     // avoid a race condition
                     m_mc->updateImageList();
                     if (m_pdata->getN()+m_pdata->getNGhosts())
@@ -1447,10 +1529,12 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         );
                     #endif
 
+                    #if 0
                     m_count_total.remove_accept_count += remove_tags.size();
                     m_count_total.remove_reject_count += m_type_map[type].size()-remove_tags.size();
                     m_count_total.insert_accept_count += positions.size();
                     m_count_total.insert_reject_count += n_insert - positions.size();
+                    #endif
 
                     if (m_prof) m_prof->pop();
 
@@ -2445,6 +2529,7 @@ std::vector<unsigned int> UpdaterMuVT<Shape>::tryInsertPerfectSampling(unsigned 
     unsigned int type,
     vec3<Scalar> pos,
     quat<Scalar> orientation,
+    unsigned int other_type,
     const std::vector<unsigned int>& insert_type,
     const std::vector<vec3<Scalar> >& insert_pos,
     const std::vector<quat<Scalar> > & insert_orientation,
@@ -2458,6 +2543,13 @@ std::vector<unsigned int> UpdaterMuVT<Shape>::tryInsertPerfectSampling(unsigned 
     tbb::concurrent_vector<unsigned int> result;
     #else
     std::vector<unsigned int> result;
+    #endif
+
+    #ifdef ENABLE_TBB
+    // avoid a race condition
+    m_mc->updateImageList();
+    if (m_pdata->getN()+m_pdata->getNGhosts())
+        m_mc->buildAABBTree();
     #endif
 
     #ifdef ENABLE_TBB
