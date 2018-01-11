@@ -927,43 +927,23 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             unsigned int seed = perfectSample(timestep, 1, maxit, parallel_types[0], type, pos_test, shape_test.orientation,
                                 types, positions, orientations, insert_type, insert_pos, insert_orientation);
 
-                            n_insert_tot = types.size();
-
-                            // reject if new configuration cannot be inserted in old configuration
-
-                            for (unsigned int i = 0; i < types.size(); ++i)
-                                {
-                                insert_type.push_back(types[i]);
-                                insert_pos.push_back(positions[i]);
-                                insert_orientation.push_back(orientations[i]);
-                                }
-
-                            auto res_old = tryInsertPerfectSampling(timestep, type, pos_test, shape_test.orientation, parallel_types[0],
-                                insert_type, insert_pos, insert_orientation,
-                                seed_old, false, old_types, old_positions, old_orientations);
-
-                            // acceptance
-                            nonzero = res_old.size() == insert_type.size();
-
                             if (m_prof)
                                 m_prof->pop();
 
-                            n_insert_tot = types.size();
-
-                            // if forward move failed, try reverse move
                             Scalar lnb(0.0);
-                            if (!nonzero
-                                && UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, true,
-                                    m_exec_conf->getPartition()))
+                            nonzero = UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb, true,
+                                     m_exec_conf->getPartition());
+
+                            if (nonzero)
                                 {
-                                // try re-inserting old config particles in new configuration
                                 auto res = tryInsertPerfectSampling(timestep, type, pos_test, shape_test.orientation, parallel_types[0],
                                     old_types, old_positions, old_orientations,
                                     seed, false, insert_type, insert_pos, insert_orientation);
 
                                 // if any re-insertion attempt fails, accept the forward move
-                                nonzero = res.size() != old_types.size();
+                                nonzero = res.size() == old_types.size();
                                 }
+
                             } // end if parallel_types.size() == 1
                         else
                             {
@@ -1205,41 +1185,21 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                             n_insert_tot = types.size();
 
-                            // reject if new configuration cannot be inserted in old configuration
-                            insert_type.push_back(type);
-                            insert_pos.push_back(pos);
-                            insert_orientation.push_back(orientation);
+                            old_types.push_back(type);
+                            old_positions.push_back(pos);
+                            old_orientations.push_back(orientation);
 
-                            for (unsigned int i = 0; i < types.size(); ++i)
-                                {
-                                insert_type.push_back(types[i]);
-                                insert_pos.push_back(positions[i]);
-                                insert_orientation.push_back(orientations[i]);
-                                }
-
-                            auto res_old = tryInsertPerfectSampling(timestep, type, pos, orientation, parallel_types[0],
-                                insert_type, insert_pos, insert_orientation,
-                                seed_old, false, old_types, old_positions, old_orientations);
+                            auto res = tryInsertPerfectSampling(timestep, type, pos, orientation, parallel_types[0],
+                                old_types, old_positions, old_orientations,
+                                seed, false, insert_type, insert_pos, insert_orientation);
 
                             // acceptance
-                            nonzero = res_old.size() == insert_type.size();
+                            nonzero = res.size() == insert_type.size();
 
                             if (m_prof)
                                 m_prof->pop();
 
                             n_insert_tot = types.size();
-
-                            // if forward move failed, try reverse move
-                            if (!nonzero)
-                                {
-                                // try re-inserting old config particles in new configuration
-                                auto res = tryInsertPerfectSampling(timestep, type, pos, orientation, parallel_types[0],
-                                    old_types, old_positions, old_orientations,
-                                    seed, false, types, positions, orientations);
-
-                                // if any re-insertion attempt fails, accept the forward move
-                                nonzero = res.size() != old_types.size();
-                                }
                             } // end if paralle_types
                         } // end if tag != UINT_MAX
 
