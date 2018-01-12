@@ -41,6 +41,9 @@ const MPI_Datatype MPI_HOOMD_SCALAR = MPI_DOUBLE;
 const MPI_Datatype MPI_HOOMD_SCALAR_INT = MPI_DOUBLE_INT;
 #endif
 
+#ifdef ENABLE_TBB
+#include <tbb/concurrent_vector.h>
+#endif
 
 typedef struct{
     Scalar s;
@@ -105,6 +108,29 @@ namespace cereal
             ar & u.y;
             ar & u.z;
             }
+
+      #ifdef ENABLE_TBB
+      //! Serialization for tbb::concurrent_vector
+      template <class Archive, class T, class A> inline
+      void save( Archive & ar, tbb::concurrent_vector<T, A> const & vector )
+      {
+        ar( make_size_tag( static_cast<size_type>(vector.size()) ) ); // number of elements
+        for(auto && v : vector)
+          ar( v );
+      }
+
+      template <class Archive, class T, class A> inline
+      void load( Archive & ar, tbb::concurrent_vector<T, A> & vector )
+      {
+        size_type size;
+        ar( make_size_tag( size ) );
+
+        vector.resize( static_cast<std::size_t>( size ) );
+        for(auto && v : vector)
+          ar( v );
+      }
+
+    #endif
     }
 
 

@@ -21,32 +21,6 @@
 
 #include <random>
 
-#ifdef ENABLE_TBB
-namespace cereal
-{
-  //! Serialization for tbb::concurrent_vector
-  template <class Archive, class T, class A> inline
-  void save( Archive & ar, tbb::concurrent_vector<T, A> const & vector )
-  {
-    ar( make_size_tag( static_cast<size_type>(vector.size()) ) ); // number of elements
-    for(auto && v : vector)
-      ar( v );
-  }
-
-  template <class Archive, class T, class A> inline
-  void load( Archive & ar, tbb::concurrent_vector<T, A> & vector )
-  {
-    size_type size;
-    ar( make_size_tag( size ) );
-
-    vector.resize( static_cast<std::size_t>( size ) );
-    for(auto && v : vector)
-      ar( v );
-  }
-
-}
-#endif
-
 namespace hpmc
 {
 
@@ -1074,12 +1048,10 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     // types have changed
                     m_pdata->notifyParticleSort();
 
-                    #if 0
                     m_count_total.insert_accept_count += positions.size();
                     m_count_total.insert_reject_count += n_insert_tot - positions.size();
                     m_count_total.remove_accept_count += remove_tags.size();
                     m_count_total.remove_reject_count += n_remove_tot - remove_tags.size();
-                    #endif
                     }
                 else
                     {
