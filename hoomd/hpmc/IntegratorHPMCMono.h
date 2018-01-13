@@ -571,6 +571,9 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
             if (move_type_translate)
                 {
+                // skip if moves are disabled
+                if (h_d.data[typ_i] == Scalar(0.0)) continue;
+
                 move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
 
                 #ifdef ENABLE_MPI
@@ -584,6 +587,9 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                 }
             else
                 {
+                // skip if moves are disabled
+                if (h_a.data[typ_i] == Scalar(0.0)) continue;
+
                 move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
                 }
 
