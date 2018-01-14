@@ -206,10 +206,7 @@ class UpdaterMuVT : public Updater
             \returns True if boltzmann weight is non-zero
          */
         virtual bool tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
-            bool communicate, unsigned int seed,
-            std::vector<unsigned int> types = std::vector<unsigned int>(),
-            std::vector<vec3<Scalar> > positions = std::vector<vec3<Scalar> >(),
-            std::vector<quat<Scalar> > orientations = std::vector<quat<Scalar> >());
+            bool communicate, unsigned int seed);
 
         //! Generate a random configuration for a Gibbs sampler
         virtual void generateGibbsSamplerConfiguration(unsigned int timestep)
@@ -667,14 +664,6 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                 {
                 // whether we insert or remove a particle
                 bool insert = m_gibbs ? mod : rand_select(rng,1);
-
-                std::vector<vec3<Scalar> > positions;
-                std::vector<quat<Scalar> > orientations;
-                std::vector<unsigned int> types;
-                std::set<unsigned int> remove_tags;
-                unsigned int n_insert_tot = 0;
-                unsigned int n_remove_tot = 0;
-
                 bool accept = true;
 
                 if (insert)
@@ -735,7 +724,11 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         Scalar3 f;
                         f.x = rng.template s<Scalar>();
                         f.y = rng.template s<Scalar>();
-                        f.z = rng.template s<Scalar>();
+                        if (m_sysdef->getNDimensions() == 3)
+                            f.z = rng.template s<Scalar>();
+                        else
+                            f.z = Scalar(0.5);
+
                         vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getGlobalBox().makeCoordinates(f));
 
                         Shape shape_test(quat<Scalar>(), param);
@@ -850,9 +843,6 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             }
                         else
                             {
-                            ArrayHandle<unsigned int> h_comm_flag(m_pdata->getCommFlags(), access_location::host, access_mode::readwrite);
-                            ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-
                             m_count_total.insert_reject_count++;
                             }
                         }
@@ -936,7 +926,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         // get weight for removal
                         Scalar lnb(0.0);
-                        if (tryRemoveParticle(timestep, tag, lnb, true, m_exec_conf->getPartition(), types, positions, orientations))
+                        if (tryRemoveParticle(timestep, tag, lnb, true, m_exec_conf->getPartition()))
                             {
                             lnboltzmann += lnb;
                             }
@@ -992,83 +982,11 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         }
                     else
                         {
-                        if (tag != UINT_MAX)
-                            {
-                            // reset flag
-                            ArrayHandle<unsigned int> h_comm_flag(m_pdata->getCommFlags(), access_location::host, access_mode::readwrite);
-                            ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-                            unsigned int idx = h_rtag.data[tag];
-                            if (idx < m_pdata->getN())
-                                h_comm_flag.data[idx] = 0;
-                            }
-
                         m_count_total.remove_reject_count++;
                         }
 
                     if (m_prof) m_prof->pop();
                     } // end remove particle
-
-                if (accept)
-                    {
-                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << remove_tags.size()
-                         << " particles" << std::endl;
-
-                    // remove all particles of the given types
-                    m_pdata->removeParticlesGlobal(remove_tags);
-
-                    m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " inserting " << positions.size()
-                         << " particles " <<  std::endl;
-
-                    // bulk-insert the particles
-                    auto inserted_tags = m_pdata->addParticlesGlobal(positions.size());
-
-                    assert(inserted_tags.size() == positions.size());
-                    assert(inserted_tags.size() == orientations.size());
-
-                        {
-                        // set the particle properties
-                        ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-                        ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
-                        ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
-
-                        unsigned int n = 0;
-                        for (auto it_tag = inserted_tags.begin(); it_tag != inserted_tags.end(); ++it_tag)
-                            {
-                            unsigned int tag = *it_tag;
-                            assert(h_rtag.data[tag] < m_pdata->getN());
-
-                            unsigned int idx = h_rtag.data[tag];
-                            vec3<Scalar> pos = positions[n];
-                            h_postype.data[idx] = make_scalar4(pos.x, pos.y, pos.z, __int_as_scalar(types[n]));
-                            h_orientation.data[idx] = quat_to_scalar4(orientations[n]);
-                            n++;
-                            }
-                        }
-
-                    // types have changed
-                    m_pdata->notifyParticleSort();
-
-                    m_count_total.insert_accept_count += positions.size();
-                    m_count_total.insert_reject_count += n_insert_tot - positions.size();
-                    m_count_total.remove_accept_count += remove_tags.size();
-                    m_count_total.remove_reject_count += n_remove_tot - remove_tags.size();
-                    }
-                else
-                    {
-                    // reset flags
-                    ArrayHandle<unsigned int> h_comm_flag(m_pdata->getCommFlags(), access_location::host, access_mode::readwrite);
-                    ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
-                    for (auto it = remove_tags.begin(); it != remove_tags.end(); ++it)
-                        {
-                        unsigned int idx = h_rtag.data[*it];
-                        if (idx < m_pdata->getN())
-                            h_comm_flag.data[idx] = 0;
-                        }
-                    #if 0
-                    m_count_total.insert_reject_count += positions.size();
-                    m_count_total.remove_reject_count += remove_tags.size();
-                    #endif
-                    }
                 }
             else // gibbs && ! parallel
                 {
@@ -1087,6 +1005,11 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                 // perform parallel insertion/removal
                 for (auto it_type = parallel_types.begin(); it_type != parallel_types.end(); it_type++)
                     {
+                    #ifdef ENABLE_MPI
+                    if (m_comm)
+                        m_comm->communicate(false);
+                    #endif
+
                     unsigned int type = *it_type;
 
                     // combine four seeds
@@ -1207,7 +1130,11 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         f.x = my_rng.template s<Scalar>();
                         f.y = my_rng.template s<Scalar>();
-                        f.z = my_rng.template s<Scalar>();
+
+                        if (m_sysdef->getNDimensions() == 3)
+                            f.z = my_rng.template s<Scalar>();
+                        else
+                            f.z = Scalar(0.5);
 
                         vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getBox().makeCoordinates(f));
 
@@ -1549,7 +1476,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
         Scalar V = global_box_old.getVolume();
         unsigned int nglobal = m_pdata->getNGlobal();
 
-        Scalar V_new,V_new_other;
+        Scalar V_new(0.0),V_new_other(0.0);
         if (is_root)
             {
             if (mod == 0)
@@ -1725,10 +1652,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
 template<class Shape>
 bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
-    bool communicate, unsigned int seed,
-    std::vector<unsigned int> types,
-    std::vector<vec3<Scalar> > positions,
-    std::vector<quat<Scalar> > orientations)
+    bool communicate, unsigned int seed)
     {
     lnboltzmann = Scalar(0.0);
 
@@ -1740,158 +1664,126 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
     // do we have to compute energetic contribution?
     auto patch = m_mc->getPatchInteraction();
 
-    bool active = true;
+    // if not, no overlaps generated, return happily
+    if (!patch) return true;
 
-    #ifdef ENABLE_MPI
+    // type
+    unsigned int type = this->m_pdata->getType(tag);
+
+    // read in the current position and orientation
+    quat<Scalar> orientation(m_pdata->getOrientation(tag));
+
+    // charge and diameter
+    Scalar diameter = m_pdata->getDiameter(tag);
+    Scalar charge = m_pdata->getCharge(tag);
+
+    // getPosition() takes into account grid shift, correct for that
+    Scalar3 p = m_pdata->getPosition(tag)+m_pdata->getOrigin();
+    int3 tmp = make_int3(0,0,0);
+    m_pdata->getGlobalBox().wrap(p,tmp);
+    vec3<Scalar> pos(p);
+
     if (is_local)
         {
+        // update the aabb tree
+        const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
+
+        // update the image list
+        const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
+
+        // check for overlaps
+        ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
         ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
-        ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
 
-        // compute the width of the active region
-        const BoxDim& box = m_pdata->getBox();
-        Scalar3 npd = box.getNearestPlaneDistance();
-        Scalar3 ghost_fraction = m_mc->getNominalWidth() / npd;
+        // Check particle against AABB tree for neighbors
+        Scalar r_cut_patch = patch->getRCut();
+        OverlapReal R_query = std::max(0.0,r_cut_patch - m_mc->getMinCoreDiameter()/(OverlapReal)2.0);
+        detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
 
-        if (m_comm)
+        const unsigned int n_images = image_list.size();
+        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
             {
-            // only move particle if active
-            unsigned int idx = h_rtag.data[tag];
-            assert(idx < m_pdata->getN());
-            Scalar4 postype = h_postype.data[idx];
-            Scalar3 pos = make_scalar3(postype.x,postype.y,postype.z);
-            if (!isActive(pos, box, ghost_fraction))
-                active = false;
-            }
-        }
-    #endif
+            vec3<Scalar> pos_image = pos + image_list[cur_image];
 
-    // if not, no overlaps generated, return happily
-    if (active && !patch) return true;
-
-    if (active)
-        {
-        // type
-        unsigned int type = this->m_pdata->getType(tag);
-
-        // read in the current position and orientation
-        quat<Scalar> orientation(m_pdata->getOrientation(tag));
-
-        // charge and diameter
-        Scalar diameter = m_pdata->getDiameter(tag);
-        Scalar charge = m_pdata->getCharge(tag);
-
-        // getPosition() takes into account grid shift, correct for that
-        Scalar3 p = m_pdata->getPosition(tag)+m_pdata->getOrigin();
-        int3 tmp = make_int3(0,0,0);
-        m_pdata->getGlobalBox().wrap(p,tmp);
-        vec3<Scalar> pos(p);
-
-        if (is_local)
-            {
-            // update the aabb tree
-            const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
-
-            // update the image list
-            const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
-
-            // check for overlaps
-            ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
-            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
-            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
-            ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
-            ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
-
-            // Check particle against AABB tree for neighbors
-            Scalar r_cut_patch = patch->getRCut();
-            OverlapReal R_query = std::max(0.0,r_cut_patch - m_mc->getMinCoreDiameter()/(OverlapReal)2.0);
-            detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
-
-            const unsigned int n_images = image_list.size();
-            for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+            if (cur_image != 0)
                 {
-                vec3<Scalar> pos_image = pos + image_list[cur_image];
-
-                if (cur_image != 0)
+                vec3<Scalar> r_ij = pos - pos_image;
+                // self-energy
+                if (dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
                     {
-                    vec3<Scalar> r_ij = pos - pos_image;
-                    // self-energy
-                    if (dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
-                        {
-                        lnboltzmann += patch->energy(r_ij,
-                            type,
-                            quat<float>(orientation),
-                            diameter,
-                            charge,
-                            type,
-                            quat<float>(orientation),
-                            diameter,
-                            charge);
-                        }
+                    lnboltzmann += patch->energy(r_ij,
+                        type,
+                        quat<float>(orientation),
+                        diameter,
+                        charge,
+                        type,
+                        quat<float>(orientation),
+                        diameter,
+                        charge);
                     }
+                }
 
-                detail::AABB aabb = aabb_local;
-                aabb.translate(pos_image);
+            detail::AABB aabb = aabb_local;
+            aabb.translate(pos_image);
 
-                // stackless search
-                for (unsigned int cur_node_idx = 0; cur_node_idx < aabb_tree.getNumNodes(); cur_node_idx++)
+            // stackless search
+            for (unsigned int cur_node_idx = 0; cur_node_idx < aabb_tree.getNumNodes(); cur_node_idx++)
+                {
+                if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
                     {
-                    if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                    if (aabb_tree.isNodeLeaf(cur_node_idx))
                         {
-                        if (aabb_tree.isNodeLeaf(cur_node_idx))
+                        for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
                             {
-                            for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                            // read in its position and orientation
+                            unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                            Scalar4 postype_j = h_postype.data[j];
+                            Scalar4 orientation_j = h_orientation.data[j];
+
+                            // put particles in coordinate system of particle i
+                            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+
+                            unsigned int typ_j = __scalar_as_int(postype_j.w);
+
+                            // we computed the self-interaction above
+                            if (h_tag.data[j] == tag) continue;
+
+                            if (dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
                                 {
-                                // read in its position and orientation
-                                unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                                Scalar4 postype_j = h_postype.data[j];
-                                Scalar4 orientation_j = h_orientation.data[j];
-
-                                // put particles in coordinate system of particle i
-                                vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
-
-                                unsigned int typ_j = __scalar_as_int(postype_j.w);
-
-                                // we computed the self-interaction above
-                                if (h_tag.data[j] == tag) continue;
-
-                                if (dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
-                                    {
-                                    lnboltzmann += patch->energy(r_ij,
-                                        type,
-                                        quat<float>(orientation),
-                                        diameter,
-                                        charge,
-                                        typ_j,
-                                        quat<float>(orientation_j),
-                                        h_diameter.data[j],
-                                        h_charge.data[j]);
-                                    }
+                                lnboltzmann += patch->energy(r_ij,
+                                    type,
+                                    quat<float>(orientation),
+                                    diameter,
+                                    charge,
+                                    typ_j,
+                                    quat<float>(orientation_j),
+                                    h_diameter.data[j],
+                                    h_charge.data[j]);
                                 }
                             }
                         }
-                    else
-                        {
-                        // skip ahead
-                        cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
-                        }
-                    } // end loop over AABB nodes
-                } // end loop over images
-            }
-        } // end if active
+                    }
+                else
+                    {
+                    // skip ahead
+                    cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                    }
+                } // end loop over AABB nodes
+            } // end loop over images
+        }
 
     #ifdef ENABLE_MPI
     if (communicate && m_comm)
         {
         MPI_Allreduce(MPI_IN_PLACE, &lnboltzmann, 1, MPI_HOOMD_SCALAR, MPI_SUM, m_exec_conf->getMPICommunicator());
-        unsigned int result = active;
-        MPI_Allreduce(MPI_IN_PLACE, &result, 1, MPI_UNSIGNED, MPI_MAX, m_exec_conf->getMPICommunicator());
-        active = result;
         }
     #endif
 
-    return active;
+    return true;
     }
 
 
@@ -1917,26 +1809,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
 
     unsigned int nptl_local = m_pdata->getN() + m_pdata->getNGhosts();
 
-    bool active = true;
-
-    #ifdef ENABLE_MPI
-    // compute the width of the active region
-    const BoxDim& box = m_pdata->getBox();
-    Scalar3 npd = box.getNearestPlaneDistance();
-    Scalar3 ghost_fraction = m_mc->getNominalWidth() / npd;
-
-    if (m_comm)
-        {
-        // only move particle if active
-        if (!isActive(vec_to_scalar3(pos), box, ghost_fraction))
-            {
-            active = false;
-            overlap = 1;
-            }
-        }
-    #endif
-
-    if (is_local && active)
+    if (is_local)
         {
         // update the image list
         const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
@@ -2007,7 +1880,6 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
             ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
             ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
             ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
-            ArrayHandle<unsigned int> h_comm_flags(m_pdata->getCommFlags(), access_location::host, access_mode::read);
 
             OverlapReal R_query = std::max(shape.getCircumsphereDiameter()/OverlapReal(2.0), r_cut_patch - m_mc->getMinCoreDiameter()/(OverlapReal)2.0);
             detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
@@ -2030,9 +1902,6 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
                                 {
                                 // read in its position and orientation
                                 unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                                // skip removed particles
-                                if (h_comm_flags.data[j]) continue;
 
                                 Scalar4 postype_j = h_postype.data[j];
                                 Scalar4 orientation_j = h_orientation.data[j];

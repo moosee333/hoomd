@@ -71,10 +71,7 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
             \returns True if boltzmann weight is non-zero
          */
         virtual bool tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
-            bool communicate, unsigned int seed,
-            std::vector<unsigned int> types = std::vector<unsigned int>(),
-            std::vector<vec3<Scalar> > positions = std::vector<vec3<Scalar> >(),
-            std::vector<quat<Scalar> > orientations = std::vector<quat<Scalar> >());
+            bool communicate, unsigned int seed);
 
         //! Generate a random configuration for a Gibbs sampler
         virtual void generateGibbsSamplerConfiguration(unsigned int timestep);
@@ -727,15 +724,12 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::trySwitchType(unsigned int timestep,
 
 template<class Shape, class Integrator>
 bool UpdaterMuVTImplicit<Shape,Integrator>::tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
-    bool communicate, unsigned int seed,
-    std::vector<unsigned int> types,
-    std::vector<vec3<Scalar> > positions,
-    std::vector<quat<Scalar> > orientations)
+    bool communicate, unsigned int seed)
     {
     // call parent class method
     lnboltzmann = Scalar(0.0);
     Scalar lnb(0.0);
-    bool nonzero = UpdaterMuVT<Shape>::tryRemoveParticle(timestep, tag, lnb, communicate, seed, types, positions, orientations);
+    bool nonzero = UpdaterMuVT<Shape>::tryRemoveParticle(timestep, tag, lnb, communicate, seed);
 
     if (nonzero)
         {
@@ -1457,7 +1451,6 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
                 ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
                 ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
                 ArrayHandle<unsigned int> h_tag(this->m_pdata->getTags(), access_location::host, access_mode::read);
-                ArrayHandle<unsigned int> h_comm_flags(this->m_pdata->getCommFlags(), access_location::host, access_mode::read);
 
                 // All image boxes (including the primary)
                 const unsigned int n_images = image_list.size();
@@ -1478,9 +1471,6 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
                                     {
                                     // read in its position and orientation
                                     unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                                    // skip removed particles
-                                    if (h_comm_flags.data[j]) continue;
 
                                     Scalar4 postype_j;
                                     Scalar4 orientation_j;
@@ -1613,7 +1603,6 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInOldP
                 ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
                 ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
                 ArrayHandle<unsigned int> h_tag(this->m_pdata->getTags(), access_location::host, access_mode::read);
-                ArrayHandle<unsigned int> h_comm_flags(this->m_pdata->getCommFlags(), access_location::host, access_mode::read);
 
                 // All image boxes (including the primary)
                 const unsigned int n_images = image_list.size();
@@ -1634,9 +1623,6 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInOldP
                                     {
                                     // read in its position and orientation
                                     unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                                    // skip removed particles
-                                    if (h_comm_flags.data[j]) continue;
 
                                     if (h_tag.data[j] == tag) continue;
 
