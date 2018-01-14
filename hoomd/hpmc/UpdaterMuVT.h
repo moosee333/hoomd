@@ -356,11 +356,6 @@ UpdaterMuVT<Shape>::UpdaterMuVT(std::shared_ptr<SystemDefinition> sysdef,
         }
     #endif
 
-    if (m_sysdef->getNDimensions() == 2)
-        {
-        throw std::runtime_error("2D runs not supported with update.muvt().");
-        }
-
     // initialize list of tags per type
     mapTypes();
 
