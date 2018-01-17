@@ -12,6 +12,7 @@
 #include "hoomd/Autotuner.h"
 
 #include "hoomd/GPUVector.h"
+#include "hoomd/CellListGPU.h"
 
 #include <cuda_runtime.h>
 
@@ -59,16 +60,26 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
             if (ndim == 3)
                 {
                 m_tuner_update->setPeriod(period*this->m_nselect*8);
+                m_tuner_moves->setPeriod(period*this->m_nselect);
+                m_tuner_check_overlaps->setPeriod(period*this->m_nselect);
+                m_tuner_accept->setPeriod(period*this->m_nselect*8);
                 m_tuner_implicit->setPeriod(period*this->m_nselect*8);
                 }
             else
                 {
                 m_tuner_update->setPeriod(period*this->m_nselect*4);
+                m_tuner_moves->setPeriod(period*this->m_nselect);
+                m_tuner_check_overlaps->setPeriod(period*this->m_nselect);
+                m_tuner_accept->setPeriod(period*this->m_nselect*4);
                 m_tuner_implicit->setPeriod(period*this->m_nselect*4);
                 }
 
             m_tuner_update->setEnabled(enable);
             m_tuner_implicit->setEnabled(enable);
+
+            m_tuner_moves->setEnabled(enable);
+            m_tuner_check_overlaps->setEnabled(enable);
+            m_tuner_accept->setEnabled(enable);
 
             m_tuner_excell_block_size->setPeriod(period);
             m_tuner_excell_block_size->setEnabled(enable);
@@ -77,9 +88,13 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
 
     protected:
         std::shared_ptr<CellList> m_cl;           //!< Cell list
-        GPUArray<unsigned int> m_cell_sets;   //!< List of cells active during each subsweep
-        Index2D m_cell_set_indexer;           //!< Indexer into the cell set array
+
+        std::vector<std::unique_ptr<CellList> > m_cl_type;        //!< Per-type cell lists
+        std::vector<GPUArray<unsigned int> > m_cell_sets;         //!< List of cells active during each subsweep, per type
+        std::vector<GPUArray<unsigned int> > m_inverse_cell_set;  //!< Inverse permutation of cell sets per cell and type
+        std::vector<Index2D> m_cell_set_indexer;                  //!< Indexer into the cell set array per type
         uint3 m_last_dim;                     //!< Dimensions of the cell list on the last call to update
+        unsigned int m_last_ntypes;           //!< Number of types at last cell set initialization
         unsigned int m_last_nmax;             //!< Last cell list NMax value allocated in excell
         detail::UpdateOrder m_cell_set_order; //!< Update order for cell sets
 
@@ -87,12 +102,18 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         GPUVector<Scalar4> m_old_orientation;                    //!< List of old particle orientations
 
         GPUArray<unsigned int> m_excell_idx;  //!< Particle indices in expanded cells
+        GPUArray<unsigned int> m_excell_cell_set;  //!< Particle indices in expanded cells
         GPUArray<unsigned int> m_excell_size; //!< Number of particles in each expanded cell
         Index2D m_excell_list_indexer;        //!< Indexer to access elements of the excell_idx list
+        GPUArray<unsigned int> m_excell_overlap; //!< Per neighbor flag, == 1 if update in old config, == 2 if update in new config
 
         std::unique_ptr<Autotuner> m_tuner_update;             //!< Autotuner for the update step group and block sizes
         std::unique_ptr<Autotuner> m_tuner_excell_block_size;  //!< Autotuner for excell block_size
         std::unique_ptr<Autotuner> m_tuner_implicit;           //!< Autotuner for the depletant overlap check
+
+        std::unique_ptr<Autotuner> m_tuner_moves;             //!< Autotuner for proposing moves
+        std::unique_ptr<Autotuner> m_tuner_check_overlaps;    //!< Autotuner for checking overlaps
+        std::unique_ptr<Autotuner> m_tuner_accept;             //!< Autotuner for the acceptance stage
 
         GPUArray<curandState_t> m_curand_state_cell;               //!< Array of cuRAND states per active cell
         GPUArray<curandState_t> m_curand_state_cell_new;           //!< Array of cuRAND states per active cell after update
@@ -104,7 +125,19 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         GPUArray<unsigned int> m_active_cell_accept;   //!< List of accept/reject flags per active cell
         GPUArray<unsigned int> m_active_cell_move_type_translate;   //!< Type of move proposed in active cell
 
+        GPUVector<Scalar4> m_trial_postype;                   //!< New positions (and type) of particles
+        GPUVector<Scalar4> m_trial_orientation;               //!< New orientations
+        GPUVector<unsigned int > m_trial_updated;             //!< per-particle flag if trial move has been carried out
+        GPUVector<unsigned int> m_trial_move_type_translate;  //!< Flags to indicate which type of move
+
         cudaStream_t m_stream;                                  //! GPU kernel stream
+
+        Index2D m_queue_indexer;                                //!< Indexer for overlap check queue
+        GPUArray<unsigned int> m_queue_active_cell_idx;         //!< Queue of active cell indices
+        GPUArray<Scalar4> m_queue_postype;                      //!< Queue of new particle positions and types
+        GPUArray<Scalar4> m_queue_orientation;                  //!< Queue of new particle orientations
+        GPUArray<unsigned int> m_queue_excell_idx;              //!< Queue of excell indices of neighbors
+        GPUArray<unsigned int> m_cell_overlaps;                 //!< Result of queue overlap checks
 
         //! Take one timestep forward
         virtual void update(unsigned int timestep);
@@ -118,8 +151,33 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         //! Set up excell_list
         virtual void initializeExcellMem();
 
+        //! Set up queue
+        virtual void initializeQueueMem();
+
         //! Update the cell width
         virtual void updateCellWidth();
+
+        //! Update cell lists
+        virtual void slotNumTypesChange()
+            {
+            // base class method
+            IntegratorHPMCMonoImplicitNew<Shape>::slotNumTypesChange();
+
+            m_cl_type.clear();
+
+            for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
+                {
+                m_cl_type.push_back(std::unique_ptr<CellListGPU>(new CellListGPU(this->m_sysdef)));
+                m_cl_type[i]->setRadius(1);
+                m_cl_type[i]->setComputeTDB(false);
+                m_cl_type[i]->setFlagType();
+                m_cl_type[i]->setComputeIdx(true);
+                m_cl_type[i]->setFilterType(true);
+                m_cl_type[i]->setMultiple(2);
+                m_cl_type[i]->setType(i);
+                }
+            }
+
     };
 
 /*! \param sysdef System definition
@@ -131,7 +189,7 @@ template< class Shape >
 IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std::shared_ptr<SystemDefinition> sysdef,
                                                                    std::shared_ptr<CellList> cl,
                                                                    unsigned int seed)
-    : IntegratorHPMCMonoImplicitNew<Shape>(sysdef, seed), m_cl(cl), m_cell_set_order(seed+this->m_exec_conf->getRank())
+    : IntegratorHPMCMonoImplicitNew<Shape>(sysdef, seed), m_cl(cl), m_cell_set_order(this->m_exec_conf, seed+this->m_exec_conf->getRank())
     {
     this->m_exec_conf->msg->notice(5) << "Constructing IntegratorHPMCImplicitGPU" << std::endl;
 
@@ -146,6 +204,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     // set last dim to a bogus value so that it will re-init on the first call
     m_last_dim = make_uint3(0xffffffff, 0xffffffff, 0xffffffff);
     m_last_nmax = 0xffffffff;
+    m_last_ntypes = UINT_MAX;
 
     GPUArray<unsigned int> excell_size(0, this->m_exec_conf);
     m_excell_size.swap(excell_size);
@@ -153,61 +212,77 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     GPUArray<unsigned int> excell_idx(0, this->m_exec_conf);
     m_excell_idx.swap(excell_idx);
 
+    GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_excell_cell_set);
+    GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_excell_overlap);
+
     GPUVector<Scalar4> old_postype(this->m_exec_conf);
     m_old_postype.swap(old_postype);
 
     GPUVector<Scalar4> old_orientation(this->m_exec_conf);
     m_old_orientation.swap(old_orientation);
 
+    GPUVector<Scalar4>(this->m_exec_conf).swap(m_trial_postype);
+    GPUVector<Scalar4>(this->m_exec_conf).swap(m_trial_orientation);
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_trial_updated);
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_trial_move_type_translate);
+
     // initialize the autotuners
     // the full block size, stride and group size matrix is searched,
     // encoded as block_size*1000000 + stride*100 + group_size.
 
-    // parameters for count_overlaps kernel
-    std::vector<unsigned int> valid_params;
+    // valid params for dynamic parallelism kernel
+    std::vector<unsigned int> valid_params_dp;
+
+    // valid params for kernel without dynamic parallelism, but with extra shared memory tuning
+    std::vector<unsigned int> valid_params_tune_shared;
 
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
 
-    if (Shape::isParallel())
+    // whether to load extra data into shared mem or fetch directly from global mem
+    for (unsigned int load_shared = 0; load_shared < 2; ++load_shared)
         {
-        for (unsigned int block_size =dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size +=dev_prop.warpSize)
+        for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock;
+            block_size_overlaps += dev_prop.warpSize)
             {
-            unsigned int s=1;
-            while (s <= (unsigned int)dev_prop.warpSize)
+            for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
                 {
-                unsigned int stride = 1;
-                while (stride <= block_size)
+                for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
                     {
-                    // for parallel overlap checks, use 3d-layout where blockDim.z is limited
-                    if (block_size % (s*stride) == 0 && block_size/(s*stride) <= (unsigned int) dev_prop.maxThreadsDim[2])
-                        valid_params.push_back(block_size*1000000 + stride*100 + s);
-
-                    // increment stride in powers of two
-                    stride *= 2;
+                    if ((block_size % group_size) == 0)
+                        valid_params_dp.push_back(block_size*1000000 + block_size_overlaps*100 + group_size + load_shared * dev_prop.warpSize);
                     }
-                s++;
                 }
             }
-        }
-    else
-        {
-        // for serial overlap checks, force stride=1. And groups no longer need to evenly divide into warps: only into
-        // blocks
-        unsigned int stride = 1;
-
         for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
             {
             for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
                 {
                 if ((block_size % group_size) == 0)
-                    valid_params.push_back(block_size*1000000 + stride*100 + group_size);
+                    valid_params_tune_shared.push_back(block_size*1000000 + group_size + load_shared * dev_prop.warpSize);
                 }
+            }
+        }
+
+    // parameters for other kernels
+    std::vector<unsigned int> valid_params;
+
+    for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
+        {
+        for (unsigned int group_size=1; group_size <= (unsigned int)dev_prop.warpSize; group_size++)
+            {
+            if ((block_size % group_size) == 0)
+                valid_params.push_back(block_size*1000000 +  group_size);
             }
         }
 
     m_tuner_update.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_update", this->m_exec_conf));
     m_tuner_excell_block_size.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_excell_block_size", this->m_exec_conf));
-    m_tuner_implicit.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_insert_depletants", this->m_exec_conf));
+    m_tuner_implicit.reset(new Autotuner(valid_params_dp, 5, 1000000, "hpmc_insert_depletants", this->m_exec_conf));
+
+    m_tuner_moves.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_moves", this->m_exec_conf));
+    m_tuner_check_overlaps.reset(new Autotuner(Shape::isParallel() ? valid_params_dp : valid_params_tune_shared,
+        5, 1000000, "hpmc_check_overlaps", this->m_exec_conf));
+    m_tuner_accept.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_accept", this->m_exec_conf));
 
     GPUArray<hpmc_implicit_counters_t> implicit_count(1,this->m_exec_conf);
     this->m_implicit_count.swap(implicit_count);
@@ -220,6 +295,18 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     // create a CUDA stream for kernel execution
     cudaStreamCreate(&m_stream);
     CHECK_CUDA_ERROR();
+
+    if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
+        {
+        GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_queue_active_cell_idx);
+        GPUArray<Scalar4>(0, this->m_exec_conf).swap(m_queue_postype);
+        GPUArray<Scalar4>(0, this->m_exec_conf).swap(m_queue_orientation);
+        GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_queue_excell_idx);
+        GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_cell_overlaps);
+        }
+
+    // initialize cell lists
+    slotNumTypesChange();
     }
 
 //! Destructor
@@ -245,12 +332,15 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     {
     IntegratorHPMC::update(timestep);
 
-    // update poisson distributions
-    if (this->m_need_initialize_poisson)
+    if (this->m_exec_conf->getComputeCapability() < 350)
         {
-        this->updatePoissonParameters();
-        initializePoissonDistribution();
-        this->m_need_initialize_poisson = false;
+        // update poisson distributions
+        if (this->m_need_initialize_poisson)
+            {
+            this->updatePoissonParameters();
+            initializePoissonDistribution();
+            this->m_need_initialize_poisson = false;
+            }
         }
 
         {
@@ -274,6 +364,12 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     // update the cell list
     this->m_cl->compute(timestep);
 
+    // update per-type cell lists
+    for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
+        {
+        m_cl_type[itype]->compute(timestep);
+        }
+
     // start the profile
     if (this->m_prof) this->m_prof->push(this->m_exec_conf, "HPMC");
 
@@ -282,38 +378,49 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
     // if the cell list is a different size than last time, reinitialize the cell sets list
     uint3 cur_dim = this->m_cl->getDim();
-    unsigned int last_n_active = this->m_cell_set_indexer.getW();
-    if (this->m_last_dim.x != cur_dim.x || this->m_last_dim.y != cur_dim.y || this->m_last_dim.z != cur_dim.z)
+
+    if (this->m_last_dim.x != cur_dim.x || this->m_last_dim.y != cur_dim.y || this->m_last_dim.z != cur_dim.z || m_last_ntypes != this->m_pdata->getNTypes())
         {
         this->initializeCellSets();
         this->initializeExcellMem();
 
+        if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
+            {
+            this->initializeQueueMem();
+            }
+
         this->m_last_dim = cur_dim;
         this->m_last_nmax = this->m_cl->getNmax();
 
+        this->m_last_ntypes = this->m_pdata->getNTypes();
+
         // initialize the cell set update order
-        this->m_cell_set_order.resize(this->m_cell_set_indexer.getH());
+        assert(this->m_pdata->getNTypes() > 0);
+        this->m_cell_set_order.resize(m_cell_set_indexer[0].getH());
         }
 
+    unsigned int last_n_active = this->m_cell_set_indexer[0].getW();
+
     // initialize RNG states
-    if (this->m_cell_set_indexer.getW() != last_n_active)
+    // NOTE these arrays rely on all cell sets having the same dimensions
+    if (this->m_cell_set_indexer[0].getW() != last_n_active)
         {
-        GPUArray<curandState_t> curand_state_cell(this->m_cell_set_indexer.getW(), this->m_exec_conf);
+        GPUArray<curandState_t> curand_state_cell(this->m_cell_set_indexer[0].getW(), this->m_exec_conf);
         m_curand_state_cell.swap(curand_state_cell);
 
-        GPUArray<curandState_t> curand_state_cell_new(this->m_cell_set_indexer.getW(), this->m_exec_conf);
+        GPUArray<curandState_t> curand_state_cell_new(this->m_cell_set_indexer[0].getW(), this->m_exec_conf);
         m_curand_state_cell_new.swap(curand_state_cell_new);
 
-        GPUArray<unsigned int> overlap_cell(this->m_cell_set_indexer.getW(), this->m_exec_conf);
+        GPUArray<unsigned int> overlap_cell(this->m_cell_set_indexer[0].getW(), this->m_exec_conf);
         m_overlap_cell.swap(overlap_cell);
 
-        GPUArray<unsigned int> active_cell_ptl_idx(this->m_cell_set_indexer.getW(), this->m_exec_conf);
+        GPUArray<unsigned int> active_cell_ptl_idx(this->m_cell_set_indexer[0].getW(), this->m_exec_conf);
         m_active_cell_ptl_idx.swap(active_cell_ptl_idx);
 
-        GPUArray<unsigned int> active_cell_accept(this->m_cell_set_indexer.getW(), this->m_exec_conf);
+        GPUArray<unsigned int> active_cell_accept(this->m_cell_set_indexer[0].getW(), this->m_exec_conf);
         m_active_cell_accept.swap(active_cell_accept);
 
-        GPUArray<unsigned int> active_cell_move_type_translate(this->m_cell_set_indexer.getW(), this->m_exec_conf);
+        GPUArray<unsigned int> active_cell_move_type_translate(this->m_cell_set_indexer[0].getW(), this->m_exec_conf);
         m_active_cell_move_type_translate.swap(active_cell_move_type_translate);
         }
 
@@ -321,6 +428,12 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     if (this->m_last_nmax != this->m_cl->getNmax())
         {
         this->initializeExcellMem();
+
+        if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
+            {
+            this->initializeQueueMem();
+            }
+
         this->m_last_nmax = this->m_cl->getNmax();
         }
 
@@ -331,13 +444,18 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         domain_decomposition = true;
 #endif
 
+    bool have_depletants = this->getDepletantDensity() > Scalar(0.0);
+
+    this->m_old_postype.resize(this->m_pdata->getMaxN());
+    this->m_old_orientation.resize(this->m_pdata->getMaxN());
+
+    if (this->m_exec_conf->getComputeCapability() < 350)
         {
+        // no dynamic parallelism
+
         // access the particle data
         ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
         ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::readwrite);
-        ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::readwrite);
-
-        ArrayHandle< unsigned int > d_cell_sets(this->m_cell_sets, access_location::device, access_mode::read);
 
         ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::readwrite);
         ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::readwrite);
@@ -346,21 +464,12 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = this->getParams();
         ArrayHandle<unsigned int> d_overlaps(this->m_overlaps, access_location::device, access_mode::read);
 
-        // access the move sizes by type
-        ArrayHandle<Scalar> d_d(this->m_d, access_location::device, access_mode::read);
-        ArrayHandle<Scalar> d_a(this->m_a, access_location::device, access_mode::read);
-
         Scalar3 ghost_width = this->m_cl->getGhostWidth();
         Scalar3 ghost_fraction = this->m_nominal_width / npd;
 
-        // compute the ceiling of the average number of particles in each cell, accounting for ghost particles
-        int ncells = cur_dim.x * cur_dim.y * cur_dim.z;
-        int particles_per_cell = int(ceil(double(this->m_pdata->getN() + this->m_pdata->getNGhosts()) / double(ncells)));
             {
-            // access the cell list data
+            // access the global cell list data
             ArrayHandle<unsigned int> d_cell_size(this->m_cl->getCellSizeArray(), access_location::device, access_mode::read);
-            ArrayHandle<Scalar4> d_cell_xyzf(this->m_cl->getXYZFArray(), access_location::device, access_mode::read);
-            ArrayHandle<Scalar4> d_cell_orientation(this->m_cl->getOrientationArray(), access_location::device, access_mode::read);
             ArrayHandle<unsigned int> d_cell_idx(this->m_cl->getIndexArray(), access_location::device, access_mode::read);
             ArrayHandle<unsigned int> d_cell_adj(this->m_cl->getCellAdjArray(), access_location::device, access_mode::read);
 
@@ -382,79 +491,433 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
             this->m_tuner_excell_block_size->end();
             }
 
-        // access the cell list data
-        ArrayHandle<unsigned int> d_cell_size(this->m_cl->getCellSizeArray(), access_location::device, access_mode::read);
-        ArrayHandle<Scalar4> d_cell_xyzf(this->m_cl->getXYZFArray(), access_location::device, access_mode::read);
-        ArrayHandle<Scalar4> d_cell_orientation(this->m_cl->getOrientationArray(), access_location::device, access_mode::read);
-        ArrayHandle<unsigned int> d_cell_idx(this->m_cl->getIndexArray(), access_location::device, access_mode::read);
-        ArrayHandle<unsigned int> d_cell_adj(this->m_cl->getCellAdjArray(), access_location::device, access_mode::read);
-
-        this->m_old_postype.resize(this->m_pdata->getMaxN());
-        this->m_old_orientation.resize(this->m_pdata->getMaxN());
-
-        // process as many depletants in parallel as the maximum possible number of depletants
-        Scalar lambda_max(0.0);
-        for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
+        for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
             {
-            Scalar lambda = this->m_lambda[i];
-            if (lambda > lambda_max)
                 {
-                lambda_max = lambda;
+                // optimization
+                ArrayHandle<Scalar> h_d(this->m_d, access_location::host, access_mode::read);
+                ArrayHandle<Scalar> h_a(this->m_a, access_location::host, access_mode::read);
+
+                if (h_d.data[itype]==Scalar(0.0) && (!this->m_hasOrientation || h_a.data[itype] == 0))
+                    continue;
                 }
-            }
-        unsigned int groups_per_cell = ((unsigned int) lambda_max)+1;
 
-        // on first iteration, synchronize GPU execution stream and update shape parameters
-        bool first = true;
+            // access the move sizes by type
+            ArrayHandle<Scalar> d_d(this->m_d, access_location::device, access_mode::read);
+            ArrayHandle<Scalar> d_a(this->m_a, access_location::device, access_mode::read);
 
-        for (unsigned int i = 0; i < this->m_nselect*particles_per_cell; i++)
-            {
-            // loop over cell sets in a shuffled order
-            this->m_cell_set_order.shuffle(timestep,i);
+            // access the per-type cell list data
+            ArrayHandle<unsigned int> d_cell_size(this->m_cl_type[itype]->getCellSizeArray(), access_location::device, access_mode::read);
+            ArrayHandle<unsigned int> d_cell_idx(this->m_cl_type[itype]->getIndexArray(), access_location::device, access_mode::read);
+            ArrayHandle<unsigned int> d_cell_adj(this->m_cl_type[itype]->getCellAdjArray(), access_location::device, access_mode::read);
 
-            for (unsigned int j = 0; j < this->m_cell_set_indexer.getH(); j++)
+            // compute the ceiling of the average number of particles in each cell, accounting for ghost particles
+            uint3 dim = this->m_cl_type[itype]->getDim();
+            int ncells = dim.x * dim.y * dim.z;
+            int particles_per_cell = int(ceil(double(this->m_cl_type[itype]->getNumParticles()) / double(ncells)));
+
+            // access cell sets
+            ArrayHandle< unsigned int > d_cell_sets(this->m_cell_sets[itype], access_location::device, access_mode::read);
+
+            // on first iteration, synchronize GPU execution stream and update shape parameters
+            bool first = true;
+
+            for (unsigned int i = 0; i < this->m_nselect*particles_per_cell; i++)
                 {
-                unsigned cur_set = this->m_cell_set_order[j];
+                // loop over cell sets in a shuffled order
+                this->m_cell_set_order.shuffle(timestep,i);
 
-                // save old positions
-                ArrayHandle<Scalar4> d_old_postype(this->m_old_postype, access_location::device, access_mode::overwrite);
-                ArrayHandle<Scalar4> d_old_orientation(this->m_old_orientation, access_location::device, access_mode::overwrite);
+                for (unsigned int j = 0; j < this->m_cell_set_indexer[itype].getH(); j++)
+                    {
+                    unsigned cur_set = this->m_cell_set_order[j];
 
-                cudaMemcpy(d_old_postype.data, d_postype.data, sizeof(Scalar4)*(this->m_pdata->getN()+this->m_pdata->getNGhosts()), cudaMemcpyDeviceToDevice);
-                cudaMemcpy(d_old_orientation.data, d_orientation.data, sizeof(Scalar4)*(this->m_pdata->getN()+this->m_pdata->getNGhosts()), cudaMemcpyDeviceToDevice);
+                    // save old positions
+                    ArrayHandle<Scalar4> d_old_postype(this->m_old_postype, access_location::device, access_mode::overwrite);
+                    ArrayHandle<Scalar4> d_old_orientation(this->m_old_orientation, access_location::device, access_mode::overwrite);
 
-                // flags about updated particles
-                ArrayHandle<unsigned int> d_active_cell_ptl_idx(m_active_cell_ptl_idx, access_location::device, access_mode::overwrite);
-                ArrayHandle<unsigned int> d_active_cell_accept(m_active_cell_accept, access_location::device, access_mode::overwrite);
-                ArrayHandle<unsigned int> d_active_cell_move_type_translate(m_active_cell_move_type_translate, access_location::device, access_mode::overwrite);
+                    cudaMemcpyAsync(d_old_postype.data, d_postype.data, sizeof(Scalar4)*(this->m_pdata->getN()+this->m_pdata->getNGhosts()), cudaMemcpyDeviceToDevice, m_stream);
+                    cudaMemcpyAsync(d_old_orientation.data, d_orientation.data, sizeof(Scalar4)*(this->m_pdata->getN()+this->m_pdata->getNGhosts()), cudaMemcpyDeviceToDevice, m_stream);
 
+                    // flags about updated particles
+                    ArrayHandle<unsigned int> d_active_cell_ptl_idx(m_active_cell_ptl_idx, access_location::device, access_mode::overwrite);
+                    ArrayHandle<unsigned int> d_active_cell_accept(m_active_cell_accept, access_location::device, access_mode::overwrite);
+                    ArrayHandle<unsigned int> d_active_cell_move_type_translate(m_active_cell_move_type_translate, access_location::device, access_mode::overwrite);
+
+                    ArrayHandle<hpmc_counters_t> d_counters(this->m_count_total, access_location::device, access_mode::readwrite);
+
+                    // move particles
+                    this->m_tuner_update->begin();
+
+                    auto dev_prop = this->m_exec_conf->dev_prop;
+
+                    unsigned int param = this->m_tuner_update->getParam();
+                    unsigned int block_size = param / 1000000;
+                    unsigned int block_size_overlaps = (param % 1000000 ) / 100;
+                    unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
+
+                    auto args = detail::hpmc_args_t(d_postype.data,
+                            d_orientation.data,
+                            d_counters.data,
+                            d_cell_idx.data,
+                            d_cell_size.data,
+                            d_excell_idx.data,
+                            0, // excell_cell_set
+                            0, // excell_overlap
+                            d_excell_size.data,
+                            this->m_cl_type[itype]->getCellIndexer(),
+                            this->m_cl_type[itype]->getCellListIndexer(),
+                            this->m_excell_list_indexer,
+                            this->m_cl_type[itype]->getDim(),
+                            ghost_width,
+                            &d_cell_sets.data[this->m_cell_set_indexer[itype](0,cur_set)],
+                            this->m_cell_set_indexer[itype].getW(),
+                            this->m_pdata->getN(),
+                            this->m_pdata->getNTypes(),
+                            this->m_seed + this->m_exec_conf->getRank()*this->m_nselect,
+                            d_d.data,
+                            d_a.data,
+                            d_overlaps.data,
+                            this->m_overlap_idx,
+                            this->m_move_ratio,
+                            timestep,
+                            this->m_sysdef->getNDimensions(),
+                            box,
+                            i+particles_per_cell*this->m_nselect*(3*j),
+                            ghost_fraction,
+                            domain_decomposition,
+                            block_size,
+                            1, //stride
+                            group_size,
+                            this->m_hasOrientation,
+                            this->m_pdata->getMaxN(),
+                            dev_prop,
+                            first,
+                            m_stream,
+                            have_depletants ? d_active_cell_ptl_idx.data : 0,
+                            have_depletants ? d_active_cell_accept.data : 0,
+                            have_depletants ? d_active_cell_move_type_translate.data : 0);
+
+                    detail::gpu_hpmc_update<Shape>(args, params.data());
+
+                    if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                        CHECK_CUDA_ERROR();
+
+                    this->m_tuner_update->end();
+
+                    if (have_depletants)
+                        {
+                        if (this->m_prof) this->m_prof->push(this->m_exec_conf,"Depletants");
+
+                        // RNG state
+                        ArrayHandle<curandState_t> d_curand_state_cell(this->m_curand_state_cell, access_location::device, access_mode::readwrite);
+                        ArrayHandle<curandState_t> d_curand_state_cell_new(this->m_curand_state_cell_new, access_location::device, access_mode::readwrite);
+
+                        // overlap flags
+                        ArrayHandle<unsigned int> d_overlap_cell(this->m_overlap_cell, access_location::device, access_mode::overwrite);
+
+                        // min/max diameter of insertion sphere
+                        ArrayHandle<Scalar> d_d_min(this->m_d_min, access_location::device, access_mode::read);
+                        ArrayHandle<Scalar> d_d_max(this->m_d_max, access_location::device, access_mode::read);
+
+                        // Poisson distribution
+                        ArrayHandle<curandDiscreteDistribution_t> d_poisson_dist(m_poisson_dist, access_location::device, access_mode::read);
+
+                            {
+                            // counters
+                            ArrayHandle<hpmc_implicit_counters_t> d_implicit_count(this->m_implicit_count, access_location::device, access_mode::readwrite);
+
+                            // Kernel driver arguments
+                            unsigned int param = m_tuner_implicit->getParam();
+                            unsigned int block_size = param / 1000000;
+                            unsigned int stride = (param % 1000000) / 100;
+                            unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
+                            bool load_shared = ((param % 100)-1) / (dev_prop.warpSize);
+
+                            m_tuner_implicit->begin();
+
+                            unsigned int block_size_overlaps = 512; // for now
+
+                            // kernel parameters
+                            auto args =   detail::hpmc_implicit_args_new_t(d_postype.data,
+                                    d_orientation.data,
+                                    d_old_postype.data,
+                                    d_old_orientation.data,
+                                    d_cell_idx.data,
+                                    d_cell_size.data,
+                                    d_excell_idx.data,
+                                    d_excell_size.data,
+                                    this->m_cl_type[itype]->getCellIndexer(),
+                                    this->m_cl_type[itype]->getCellListIndexer(),
+                                    this->m_excell_list_indexer,
+                                    this->m_cl_type[itype]->getDim(),
+                                    ghost_width,
+                                    &d_cell_sets.data[this->m_cell_set_indexer[itype](0,cur_set)],
+                                    this->m_cell_set_indexer[itype].getW(),
+                                    this->m_pdata->getN(),
+                                    this->m_pdata->getNTypes(),
+                                    this->m_seed + this->m_exec_conf->getRank()*this->m_nselect,
+                                    d_overlaps.data,
+                                    this->m_overlap_idx,
+                                    timestep,
+                                    this->m_sysdef->getNDimensions(),
+                                    box,
+                                    i+particles_per_cell*this->m_nselect*(3*j+1),
+                                    block_size,
+                                    stride,
+                                    group_size,
+                                    this->m_hasOrientation,
+                                    this->m_pdata->getMaxN(),
+                                    this->m_exec_conf->dev_prop,
+                                    d_curand_state_cell.data,
+                                    d_curand_state_cell_new.data,
+                                    this->m_type,
+                                    d_counters.data,
+                                    d_implicit_count.data,
+                                    d_poisson_dist.data,
+                                    d_overlap_cell.data,
+                                    d_active_cell_ptl_idx.data,
+                                    d_active_cell_accept.data,
+                                    d_active_cell_move_type_translate.data,
+                                    d_d_min.data,
+                                    d_d_max.data,
+                                    first,
+                                    this->getDepletantDensity(),
+                                    m_stream,
+                                    this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                                    block_size_overlaps,
+                                    load_shared);
+
+                            detail::gpu_hpmc_insert_depletants_queue<Shape>(args, params.data());
+
+                            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                                CHECK_CUDA_ERROR();
+
+                            m_tuner_implicit->end();
+                            }
+
+                            {
+                            // counters
+                            ArrayHandle<hpmc_implicit_counters_t> d_implicit_count(this->m_implicit_count, access_location::device, access_mode::readwrite);
+
+                            // apply acceptance/rejection criterium
+                            detail::gpu_hpmc_implicit_accept_reject_new<Shape>(
+                                detail::hpmc_implicit_args_new_t(d_postype.data,
+                                    d_orientation.data,
+                                    d_old_postype.data,
+                                    d_old_orientation.data,
+                                    d_cell_idx.data,
+                                    d_cell_size.data,
+                                    d_excell_idx.data,
+                                    d_excell_size.data,
+                                    this->m_cl_type[itype]->getCellIndexer(),
+                                    this->m_cl_type[itype]->getCellListIndexer(),
+                                    this->m_excell_list_indexer,
+                                    this->m_cl_type[itype]->getDim(),
+                                    ghost_width,
+                                    &d_cell_sets.data[this->m_cell_set_indexer[itype](0,cur_set)],
+                                    this->m_cell_set_indexer[itype].getW(),
+                                    this->m_pdata->getN(),
+                                    this->m_pdata->getNTypes(),
+                                    this->m_seed + this->m_exec_conf->getRank(),
+                                    d_overlaps.data,
+                                    this->m_overlap_idx,
+                                    timestep,
+                                    this->m_sysdef->getNDimensions(),
+                                    box,
+                                    i+particles_per_cell*this->m_nselect*(3*j+2),
+                                    256, // block_size
+                                    1, // stride
+                                    1, //group_size
+                                    this->m_hasOrientation,
+                                    this->m_pdata->getMaxN(),
+                                    this->m_exec_conf->dev_prop,
+                                    d_curand_state_cell.data,
+                                    d_curand_state_cell_new.data,
+                                    this->m_type,
+                                    d_counters.data,
+                                    d_implicit_count.data,
+                                    d_poisson_dist.data,
+                                    d_overlap_cell.data,
+                                    d_active_cell_ptl_idx.data,
+                                    d_active_cell_accept.data,
+                                    d_active_cell_move_type_translate.data,
+                                    d_d_min.data,
+                                    d_d_max.data,
+                                    first,
+                                    this->getDepletantDensity(),
+                                    m_stream,
+                                    this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                                    block_size_overlaps,
+                                    false // load_shared
+                                    ),
+                                params.data());
+
+                            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                                CHECK_CUDA_ERROR();
+                            }
+                        if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
+                        }
+
+                    first = false;
+                    } // end loop over cell sets
+                } // end loop nselect*particles_per_cell
+            } // end loop over types
+        }
+    else
+        { // compute capability >= 350
+
+        // access the particle data
+        ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
+        ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::readwrite);
+
+        // access the parameters and interaction matrix
+        const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = this->getParams();
+        ArrayHandle<unsigned int> d_overlaps(this->m_overlaps, access_location::device, access_mode::read);
+
+        Scalar3 ghost_width = this->m_cl->getGhostWidth();
+        Scalar3 ghost_fraction = this->m_nominal_width / npd;
+
+        for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
+            {
+                {
+                // optimization
+                ArrayHandle<Scalar> h_d(this->m_d, access_location::host, access_mode::read);
+                ArrayHandle<Scalar> h_a(this->m_a, access_location::host, access_mode::read);
+
+                if (h_d.data[itype]==Scalar(0.0) && (!this->m_hasOrientation || h_a.data[itype] == 0))
+                    continue;
+                }
+
+
+            // access the move sizes by type
+            ArrayHandle<Scalar> d_d(this->m_d, access_location::device, access_mode::read);
+            ArrayHandle<Scalar> d_a(this->m_a, access_location::device, access_mode::read);
+
+            // accces cell set
+            ArrayHandle< unsigned int > d_cell_sets(this->m_cell_sets[itype], access_location::device, access_mode::read);
+
+            // compute the ceiling of the average number of particles in each cell, accounting for ghost particles
+            uint3 dim = this->m_cl_type[itype]->getDim();
+            int ncells = dim.x * dim.y * dim.z;
+            int particles_per_cell = int(ceil(double(this->m_cl_type[itype]->getNumParticles()) / double(ncells)));
+
+                {
+                if (this->m_prof)
+                    this->m_prof->push(this->m_exec_conf, "ex_cell");
+
+                // access the global cell list data
+                ArrayHandle<unsigned int> d_cell_size(this->m_cl->getCellSizeArray(), access_location::device, access_mode::read);
+                ArrayHandle<unsigned int> d_cell_idx(this->m_cl->getIndexArray(), access_location::device, access_mode::read);
+                ArrayHandle<unsigned int> d_cell_adj(this->m_cl->getCellAdjArray(), access_location::device, access_mode::read);
+
+                // cell sets for this type
+
+                // for now, we are writing out an expanded cell list for every type separately
+                // this is certainly not efficient, but we need the cell set pointer to be updated
+
+                // NOTE this works only if all cell lists have equal dimensions!
+                assert(m_cl_type[itype]->getDim() == m_cl->getDim());
+                ArrayHandle<unsigned int> d_inverse_cell_set(this->m_inverse_cell_set[itype], access_location::device, access_mode::read);
+
+                ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::overwrite);
+                ArrayHandle< unsigned int > d_excell_cell_set(this->m_excell_cell_set, access_location::device, access_mode::overwrite);
+                ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::readwrite);
+
+                // update the expanded cells and update cell set lookup
+                this->m_tuner_excell_block_size->begin();
+                detail::gpu_hpmc_excell_and_cell_set(d_inverse_cell_set.data,
+                                        d_excell_idx.data,
+                                        d_excell_cell_set.data,
+                                        d_excell_size.data,
+                                        this->m_excell_list_indexer,
+                                        d_cell_idx.data,
+                                        d_cell_size.data,
+                                        d_cell_adj.data,
+                                        this->m_cl->getCellIndexer(),
+                                        this->m_cl->getCellListIndexer(),
+                                        this->m_cl->getCellAdjIndexer(),
+                                        this->m_tuner_excell_block_size->getParam());
+                if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                    CHECK_CUDA_ERROR();
+
+                this->m_tuner_excell_block_size->end();
+
+                if (this->m_prof)
+                    this->m_prof->pop(this->m_exec_conf);
+                }
+
+            // access the cell list data
+            ArrayHandle<unsigned int> d_cell_size(this->m_cl_type[itype]->getCellSizeArray(), access_location::device, access_mode::read);
+            ArrayHandle<unsigned int> d_cell_idx(this->m_cl_type[itype]->getIndexArray(), access_location::device, access_mode::read);
+            ArrayHandle<unsigned int> d_cell_adj(this->m_cl_type[itype]->getCellAdjArray(), access_location::device, access_mode::read);
+
+            m_trial_postype.resize(this->m_pdata->getMaxN());
+            m_trial_orientation.resize(this->m_pdata->getMaxN());
+            m_trial_updated.resize(this->m_pdata->getMaxN());
+            m_trial_move_type_translate.resize(this->m_cl_type[itype]->getCellIndexer().getNumElements());
+
+            // access data for proposed moves
+            ArrayHandle<Scalar4> d_trial_postype(m_trial_postype, access_location::device, access_mode::overwrite);
+            ArrayHandle<Scalar4> d_trial_orientation(m_trial_orientation, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_trial_updated(m_trial_updated, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_trial_move_type_translate(m_trial_move_type_translate, access_location::device, access_mode::overwrite);
+
+            // queue arrays for overlap checks
+            ArrayHandle<unsigned int> d_queue_active_cell_idx(m_queue_active_cell_idx, access_location::device, access_mode::overwrite);
+            ArrayHandle<Scalar4> d_queue_postype(m_queue_postype, access_location::device, access_mode::overwrite);
+            ArrayHandle<Scalar4> d_queue_orientation(m_queue_orientation, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_queue_excell_idx(m_queue_excell_idx, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_cell_overlaps(m_cell_overlaps, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_excell_overlap(m_excell_overlap, access_location::device, access_mode::overwrite);
+
+            // on first iteration, synchronize GPU execution stream and update shape parameters
+            bool first = true;
+
+            // flags about updated particles
+            ArrayHandle<unsigned int> d_active_cell_ptl_idx(m_active_cell_ptl_idx, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_active_cell_accept(m_active_cell_accept, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_active_cell_move_type_translate(m_active_cell_move_type_translate, access_location::device, access_mode::overwrite);
+
+            // backup of particle positions and orientations
+            ArrayHandle<Scalar4> d_old_postype(this->m_old_postype, access_location::device, access_mode::overwrite);
+            ArrayHandle<Scalar4> d_old_orientation(this->m_old_orientation, access_location::device, access_mode::overwrite);
+
+            ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::read);
+            ArrayHandle< unsigned int > d_excell_cell_set(this->m_excell_cell_set, access_location::device, access_mode::read);
+            ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::read);
+
+            for (unsigned int i = 0; i < this->m_nselect*particles_per_cell; i++)
+                {
+                // loop over cell sets in a shuffled order
+                this->m_cell_set_order.shuffle(timestep,i);
+
+                // propose moves
                 ArrayHandle<hpmc_counters_t> d_counters(this->m_count_total, access_location::device, access_mode::readwrite);
 
-                // move particles
-                this->m_tuner_update->begin();
+                // move particles in all active cells
+                this->m_tuner_moves->begin();
+                unsigned int block_size = m_tuner_moves->getParam();
+                auto dev_prop = this->m_exec_conf->dev_prop;
 
-                unsigned int param = this->m_tuner_update->getParam();
-                unsigned int block_size = param / 1000000;
-                unsigned int stride = (param % 1000000 ) / 100;
-                unsigned int group_size = param % 100;
-                detail::gpu_hpmc_update<Shape> (
-                    detail::hpmc_args_t(d_postype.data,
+                auto args = detail::hpmc_args_t(d_postype.data,
                         d_orientation.data,
                         d_counters.data,
                         d_cell_idx.data,
                         d_cell_size.data,
                         d_excell_idx.data,
+                        d_excell_cell_set.data,
+                        d_excell_overlap.data,
                         d_excell_size.data,
-                        this->m_cl->getCellIndexer(),
-                        this->m_cl->getCellListIndexer(),
+                        this->m_cl_type[itype]->getCellIndexer(),
+                        this->m_cl_type[itype]->getCellListIndexer(),
                         this->m_excell_list_indexer,
-                        this->m_cl->getDim(),
+                        this->m_cl_type[itype]->getDim(),
                         ghost_width,
-                        &d_cell_sets.data[this->m_cell_set_indexer(0,cur_set)],
-                        this->m_cell_set_indexer.getW(),
+                        d_cell_sets.data,
+                        this->m_cell_set_indexer[itype].getW(),
                         this->m_pdata->getN(),
                         this->m_pdata->getNTypes(),
-                        this->m_seed + this->m_exec_conf->getRank(),
+                        this->m_seed + this->m_exec_conf->getRank()*this->m_nselect,
                         d_d.data,
                         d_a.data,
                         d_overlaps.data,
@@ -463,176 +926,257 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         timestep,
                         this->m_sysdef->getNDimensions(),
                         box,
-                        i+particles_per_cell*this->m_nselect*(3*j),
+                        i+particles_per_cell*this->m_nselect,
                         ghost_fraction,
                         domain_decomposition,
                         block_size,
-                        stride,
-                        group_size,
+                        1, //stride
+                        0, // group_size
                         this->m_hasOrientation,
                         this->m_pdata->getMaxN(),
-                        this->m_exec_conf->dev_prop,
+                        dev_prop,
                         first,
                         m_stream,
-                        (lambda_max > 0.0) ? d_active_cell_ptl_idx.data : 0,
-                        (lambda_max > 0.0) ? d_active_cell_accept.data : 0,
-                        (lambda_max > 0.0) ? d_active_cell_move_type_translate.data : 0),
-                    params.data());
+                        have_depletants ? d_active_cell_ptl_idx.data : 0,
+                        have_depletants ? d_active_cell_accept.data : 0,
+                        have_depletants ? d_active_cell_move_type_translate.data : 0,
+                        m_queue_indexer,
+                        d_queue_active_cell_idx.data,
+                        d_queue_postype.data,
+                        d_queue_orientation.data,
+                        d_queue_excell_idx.data,
+                        d_cell_overlaps.data,
+                        m_queue_indexer.getH(),
+                        this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                        0, // block_size_overlaps
+                        0, // load_shared
+                        d_trial_postype.data,
+                        d_trial_orientation.data,
+                        d_trial_updated.data,
+                        d_trial_move_type_translate.data,
+                        0, // d_update_order
+                        0, // cur_set
+                        this->m_cell_set_indexer[itype]
+                        );
+
+                    {
+                    ArrayHandle<unsigned int> d_update_order(this->m_cell_set_order.getInverse(), access_location::device, access_mode::read);
+                    args.d_update_order = d_update_order.data;
+                    }
+
+                detail::gpu_hpmc_moves<Shape>(args, params.data());
+
+                if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                    CHECK_CUDA_ERROR();
+                m_tuner_moves->end();
+
+                // check for overlaps between old and old, and old and new configuration
+                m_tuner_check_overlaps->begin();
+
+                unsigned int param = this->m_tuner_check_overlaps->getParam();
+                block_size = param / 1000000;
+                unsigned int block_size_overlaps = (param % 1000000 ) / 100;
+                unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
+                bool load_shared = ((param % 100)-1) / (dev_prop.warpSize);
+
+                args.group_size = group_size;
+                args.block_size_overlaps = block_size_overlaps;
+                args.block_size = block_size;
+                args.load_shared = load_shared;
+
+                detail::gpu_hpmc_check_overlaps<Shape>(args, params.data());
 
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
 
-                this->m_tuner_update->end();
+                m_tuner_check_overlaps->end();
 
-                if (lambda_max > Scalar(0.0))
+                ArrayHandle<unsigned int> h_update_order(this->m_cell_set_order.get(), access_location::host, access_mode::read);
+
+                // acceptance, this part is serial over the cell sets
+                for (unsigned int j = 0; j < this->m_cell_set_indexer[itype].getH(); j++)
                     {
-                    if (this->m_prof) this->m_prof->push(this->m_exec_conf,"Depletants");
+                    unsigned cur_set = h_update_order.data[j];
 
-                    // RNG state
-                    ArrayHandle<curandState_t> d_curand_state_cell(this->m_curand_state_cell, access_location::device, access_mode::readwrite);
-                    ArrayHandle<curandState_t> d_curand_state_cell_new(this->m_curand_state_cell_new, access_location::device, access_mode::readwrite);
-
-                    // overlap flags
-                    ArrayHandle<unsigned int> d_overlap_cell(this->m_overlap_cell, access_location::device, access_mode::readwrite);
-
-                    // min/max diameter of insertion sphere
-                    ArrayHandle<Scalar> d_d_min(this->m_d_min, access_location::device, access_mode::read);
-                    ArrayHandle<Scalar> d_d_max(this->m_d_max, access_location::device, access_mode::read);
-
-                    // Poisson distribution
-                    ArrayHandle<curandDiscreteDistribution_t> d_poisson_dist(m_poisson_dist, access_location::device, access_mode::read);
-
+                    if (have_depletants)
                         {
-                        // counters
-                        ArrayHandle<hpmc_implicit_counters_t> d_implicit_count(this->m_implicit_count, access_location::device, access_mode::readwrite);
-
-                        // Kernel driver arguments
-                        unsigned int param = m_tuner_implicit->getParam();
-                        unsigned int block_size = param / 1000000;
-                        unsigned int stride = (param % 1000000 ) / 100;
-                        unsigned int group_size = param % 100;
-
-                        m_tuner_implicit->begin();
-
-                        // invoke kernel
-//                        detail::gpu_hpmc_implicit_count_overlaps<Shape>(
-                        detail::gpu_hpmc_insert_depletants_queue<Shape>(
-                            detail::hpmc_implicit_args_new_t(d_postype.data,
-                                d_orientation.data,
-                                d_old_postype.data,
-                                d_old_orientation.data,
-                                d_cell_idx.data,
-                                d_cell_size.data,
-                                d_excell_idx.data,
-                                d_excell_size.data,
-                                this->m_cl->getCellIndexer(),
-                                this->m_cl->getCellListIndexer(),
-                                this->m_excell_list_indexer,
-                                this->m_cl->getDim(),
-                                ghost_width,
-                                &d_cell_sets.data[this->m_cell_set_indexer(0,cur_set)],
-                                this->m_cell_set_indexer.getW(),
-                                this->m_pdata->getN(),
-                                this->m_pdata->getNTypes(),
-                                this->m_seed + this->m_exec_conf->getRank(),
-                                d_overlaps.data,
-                                this->m_overlap_idx,
-                                timestep,
-                                this->m_sysdef->getNDimensions(),
-                                box,
-                                i+particles_per_cell*this->m_nselect*(3*j+1),
-                                block_size,
-                                stride,
-                                group_size,
-                                this->m_hasOrientation,
-                                this->m_pdata->getMaxN(),
-                                this->m_exec_conf->dev_prop,
-                                d_curand_state_cell.data,
-                                d_curand_state_cell_new.data,
-                                this->m_type,
-                                d_counters.data,
-                                d_implicit_count.data,
-                                d_poisson_dist.data,
-                                d_overlap_cell.data,
-                                groups_per_cell,
-                                d_active_cell_ptl_idx.data,
-                                d_active_cell_accept.data,
-                                d_active_cell_move_type_translate.data,
-                                d_d_min.data,
-                                d_d_max.data,
-                                first,
-                                m_stream),
-                            params.data());
-
-                        if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
-                            CHECK_CUDA_ERROR();
-
-                        m_tuner_implicit->end();
+                        // save old positions
+                        cudaMemcpyAsync(d_old_postype.data, d_postype.data, sizeof(Scalar4)*(this->m_pdata->getN()+this->m_pdata->getNGhosts()), cudaMemcpyDeviceToDevice, m_stream);
+                        cudaMemcpyAsync(d_old_orientation.data, d_orientation.data, sizeof(Scalar4)*(this->m_pdata->getN()+this->m_pdata->getNGhosts()), cudaMemcpyDeviceToDevice, m_stream);
                         }
 
+                    // accept particle moves from overlap checks
+                    this->m_tuner_accept->begin();
+
+                    param = this->m_tuner_accept->getParam();
+                    block_size = param / 1000000;
+                    group_size = param % 100;
+
+                    args.cur_set = cur_set;
+                    args.block_size = block_size;
+                    args.group_size = group_size;
+
+                    detail::gpu_hpmc_accept<Shape>(args, params.data());
+
+                    if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                        CHECK_CUDA_ERROR();
+
+                    this->m_tuner_accept->end();
+
+                    if (have_depletants)
                         {
-                        // counters
-                        ArrayHandle<hpmc_implicit_counters_t> d_implicit_count(this->m_implicit_count, access_location::device, access_mode::readwrite);
+                        if (this->m_prof) this->m_prof->push(this->m_exec_conf,"Depletants");
 
-                        // apply acceptance/rejection criterium
-                        detail::gpu_hpmc_implicit_accept_reject_new<Shape>(
-                            detail::hpmc_implicit_args_new_t(d_postype.data,
-                                d_orientation.data,
-                                d_old_postype.data,
-                                d_old_orientation.data,
-                                d_cell_idx.data,
-                                d_cell_size.data,
-                                d_excell_idx.data,
-                                d_excell_size.data,
-                                this->m_cl->getCellIndexer(),
-                                this->m_cl->getCellListIndexer(),
-                                this->m_excell_list_indexer,
-                                this->m_cl->getDim(),
-                                ghost_width,
-                                &d_cell_sets.data[this->m_cell_set_indexer(0,cur_set)],
-                                this->m_cell_set_indexer.getW(),
-                                this->m_pdata->getN(),
-                                this->m_pdata->getNTypes(),
-                                this->m_seed + this->m_exec_conf->getRank(),
-                                d_overlaps.data,
-                                this->m_overlap_idx,
-                                timestep,
-                                this->m_sysdef->getNDimensions(),
-                                box,
-                                i+particles_per_cell*this->m_nselect*(3*j+2),
-                                256, // block_size
-                                1, // stride
-                                1, //group_size
-                                this->m_hasOrientation,
-                                this->m_pdata->getMaxN(),
-                                this->m_exec_conf->dev_prop,
-                                d_curand_state_cell.data,
-                                d_curand_state_cell_new.data,
-                                this->m_type,
-                                d_counters.data,
-                                d_implicit_count.data,
-                                d_poisson_dist.data,
-                                d_overlap_cell.data,
-                                groups_per_cell,
-                                d_active_cell_ptl_idx.data,
-                                d_active_cell_accept.data,
-                                d_active_cell_move_type_translate.data,
-                                d_d_min.data,
-                                d_d_max.data,
-                                first,
-                                m_stream),
-                            params.data());
+                        // overlap flags
+                        ArrayHandle<unsigned int> d_overlap_cell(this->m_overlap_cell, access_location::device, access_mode::overwrite);
 
-                        if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
-                            CHECK_CUDA_ERROR();
+                            {
+                            // insert depletants
+
+                            // counters
+                            ArrayHandle<hpmc_implicit_counters_t> d_implicit_count(this->m_implicit_count, access_location::device, access_mode::readwrite);
+
+                            // Kernel driver arguments
+                            unsigned int param = m_tuner_implicit->getParam();
+                            unsigned int block_size = param / 1000000;
+                            unsigned int block_size_overlaps = (param % 1000000) / 100;
+                            unsigned int group_size = ((param % 100)-1) % (dev_prop.warpSize) + 1;
+                            bool load_shared = ((param % 100)-1) / (dev_prop.warpSize);
+
+                            m_tuner_implicit->begin();
+
+                            // kernel parameters
+                            auto args = detail::hpmc_implicit_args_new_t(d_postype.data,
+                                    d_orientation.data,
+                                    d_old_postype.data,
+                                    d_old_orientation.data,
+                                    d_cell_idx.data,
+                                    d_cell_size.data,
+                                    d_excell_idx.data,
+                                    d_excell_size.data,
+                                    this->m_cl_type[itype]->getCellIndexer(),
+                                    this->m_cl_type[itype]->getCellListIndexer(),
+                                    this->m_excell_list_indexer,
+                                    this->m_cl_type[itype]->getDim(),
+                                    ghost_width,
+                                    &d_cell_sets.data[this->m_cell_set_indexer[itype](0,cur_set)],
+                                    this->m_cell_set_indexer[itype].getW(),
+                                    this->m_pdata->getN(),
+                                    this->m_pdata->getNTypes(),
+                                    this->m_seed + this->m_exec_conf->getRank()*this->m_nselect,
+                                    d_overlaps.data,
+                                    this->m_overlap_idx,
+                                    timestep,
+                                    this->m_sysdef->getNDimensions(),
+                                    box,
+                                    i+particles_per_cell*this->m_nselect*(3*j+1),
+                                    block_size,
+                                    1, //stride
+                                    group_size,
+                                    this->m_hasOrientation,
+                                    this->m_pdata->getMaxN(),
+                                    this->m_exec_conf->dev_prop,
+                                    0,// curand_state_cell
+                                    0,// curand_state_cell_new
+                                    this->m_type,
+                                    d_counters.data,
+                                    d_implicit_count.data,
+                                    0, // d_poisson_dist
+                                    d_overlap_cell.data,
+                                    d_active_cell_ptl_idx.data,
+                                    d_active_cell_accept.data,
+                                    d_active_cell_move_type_translate.data,
+                                    0, // d_min
+                                    0, // dmax
+                                    first,
+                                    this->getDepletantDensity(),
+                                    m_stream,
+                                    this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                                    block_size_overlaps,
+                                    load_shared);
+
+                            detail::gpu_hpmc_insert_depletants_dp<Shape>(args, params.data());
+
+                            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                                CHECK_CUDA_ERROR();
+
+                            m_tuner_implicit->end();
+                            }
+
+                            {
+                            // counters
+                            ArrayHandle<hpmc_implicit_counters_t> d_implicit_count(this->m_implicit_count, access_location::device, access_mode::readwrite);
+
+                            // apply depletant acceptance/rejection criterium
+                            detail::gpu_hpmc_implicit_accept_reject_new<Shape>(
+                                detail::hpmc_implicit_args_new_t(d_postype.data,
+                                    d_orientation.data,
+                                    d_old_postype.data,
+                                    d_old_orientation.data,
+                                    d_cell_idx.data,
+                                    d_cell_size.data,
+                                    d_excell_idx.data,
+                                    d_excell_size.data,
+                                    this->m_cl_type[itype]->getCellIndexer(),
+                                    this->m_cl_type[itype]->getCellListIndexer(),
+                                    this->m_excell_list_indexer,
+                                    this->m_cl_type[itype]->getDim(),
+                                    ghost_width,
+                                    &d_cell_sets.data[this->m_cell_set_indexer[itype](0,cur_set)],
+                                    this->m_cell_set_indexer[itype].getW(),
+                                    this->m_pdata->getN(),
+                                    this->m_pdata->getNTypes(),
+                                    this->m_seed + this->m_exec_conf->getRank(),
+                                    d_overlaps.data,
+                                    this->m_overlap_idx,
+                                    timestep,
+                                    this->m_sysdef->getNDimensions(),
+                                    box,
+                                    i+particles_per_cell*this->m_nselect*(3*j+2),
+                                    256, // block_size
+                                    1, // stride
+                                    1, //group_size
+                                    this->m_hasOrientation,
+                                    this->m_pdata->getMaxN(),
+                                    this->m_exec_conf->dev_prop,
+                                    0, // curand_state
+                                    0, // curand_state_new
+                                    this->m_type,
+                                    d_counters.data,
+                                    d_implicit_count.data,
+                                    0, // poisson_dst
+                                    d_overlap_cell.data,
+                                    d_active_cell_ptl_idx.data,
+                                    d_active_cell_accept.data,
+                                    d_active_cell_move_type_translate.data,
+                                    0, // d_min
+                                    0, // d_max
+                                    first,
+                                    this->getDepletantDensity(),
+                                    m_stream,
+                                    this->m_exec_conf->isCUDAErrorCheckingEnabled(),
+                                    block_size_overlaps,
+                                    false,// load_shared
+                                    d_trial_updated.data
+                                    ),
+                                params.data());
+
+                            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                                CHECK_CUDA_ERROR();
+                            }
+                        if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
                         }
-                    if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
-                    }
 
-                first = false;
-                } // end loop over cell sets
-            } // end loop nselect*particles_per_cell
+                    first = false;
+                    } // end loop over cell sets
+                } // end loop nselect*particles_per_cell
+            } // end loop over types
+        } // end compute capability >= 350
 
+    // wait for kernels to catch up and release managed memory to host
+    cudaDeviceSynchronize();
+
+        {
         // shift particles
         Scalar3 shift = make_scalar3(0,0,0);
         shift.x = rng.s(-this->m_nominal_width/Scalar(2.0),this->m_nominal_width/Scalar(2.0));
@@ -641,6 +1185,9 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
             {
             shift.z = rng.s(-this->m_nominal_width/Scalar(2.0),this->m_nominal_width/Scalar(2.0));
             }
+
+        ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
+        ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::readwrite);
 
         detail::gpu_hpmc_shift(d_postype.data,
                                d_image.data,
@@ -654,7 +1201,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
         if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
             CHECK_CUDA_ERROR();
-        } // end of ArrayHandle scope
+        }
 
     if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
 
@@ -713,44 +1260,60 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeCellSets()
     // we should not run into a multiple issue since the base multiple is 2 and the ghost cells added are 2 in each
     // direction. Check just to be on the safe side
 
-    // compute the number of cells in each set
-    // every other cell is active along each direction, excluding ghost cells
-    uint3 dim = this->m_cl->getDim();
-    const Index3D& cell_indexer = this->m_cl->getCellIndexer();
-    unsigned int n_active = dim.x / 2 * dim.y / 2;
-    unsigned int n_sets = 4;
+    m_cell_sets.resize(this->m_pdata->getNTypes());
+    m_inverse_cell_set.resize(this->m_pdata->getNTypes());
+    m_cell_set_indexer.resize(this->m_pdata->getNTypes());
 
-    if (this->m_sysdef->getNDimensions() == 3)
+    for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
         {
-        n_active *= dim.z / 2;
-        n_sets = 8;
-        }
+        // compute the number of cells in each set
+        // every other cell is active along each direction, excluding ghost cells
+        uint3 dim = m_cl_type[itype]->getDim();
+        const Index3D& cell_indexer = m_cl_type[itype]->getCellIndexer();
+        unsigned int n_active = dim.x / 2 * dim.y / 2;
+        unsigned int n_sets = 4;
 
-    GPUArray< unsigned int > cell_sets(n_active, n_sets, this->m_exec_conf);
-    m_cell_sets.swap(cell_sets);
-    m_cell_set_indexer = Index2D(n_active, n_sets);
+        if (this->m_sysdef->getNDimensions() == 3)
+            {
+            n_active *= dim.z / 2;
+            n_sets = 8;
+            }
 
-    // build a list of active cells
-    ArrayHandle< unsigned int > h_cell_sets(m_cell_sets, access_location::host, access_mode::overwrite);
+        GPUArray< unsigned int > cell_sets(n_active, n_sets, this->m_exec_conf);
+        m_cell_sets[itype].swap(cell_sets);
 
-    // offsets for x and y based on the set index
-    unsigned int ox[] = {0, 1, 0, 1, 0, 1, 0, 1};
-    unsigned int oy[] = {0, 0, 1, 1, 0, 0, 1, 1};
-    unsigned int oz[] = {0, 0, 0, 0, 1, 1, 1, 1};
+        GPUArray< unsigned int > inverse_cell_set(cell_indexer.getNumElements(), this->m_exec_conf);
+        m_inverse_cell_set[itype].swap(inverse_cell_set);
 
-    for (unsigned int cur_set = 0; cur_set < n_sets; cur_set++)
-        {
-        unsigned int active_idx = 0;
-        // loop over all cells in the active region, using information from num_ghost cells to avoid adding ghost cells
-        // to the active set
-        for (int k = oz[cur_set]; k < int(dim.z); k+=2)
-            for (int j = oy[cur_set]; j < int(dim.y); j+=2)
-                for (int i = ox[cur_set]; i < int(dim.x); i+=2)
-                    {
-                    h_cell_sets.data[m_cell_set_indexer(active_idx, cur_set)] = cell_indexer(i,j,k);
-                    active_idx++;
-                    }
-        }
+        m_cell_set_indexer[itype] = Index2D(n_active, n_sets);
+
+        // build a list of active cells
+        ArrayHandle< unsigned int > h_cell_sets(m_cell_sets[itype], access_location::host, access_mode::overwrite);
+        ArrayHandle< unsigned int > h_inverse_cell_set(m_inverse_cell_set[itype], access_location::host, access_mode::overwrite);
+
+        // offsets for x and y based on the set index
+        unsigned int ox[] = {0, 1, 0, 1, 0, 1, 0, 1};
+        unsigned int oy[] = {0, 0, 1, 1, 0, 0, 1, 1};
+        unsigned int oz[] = {0, 0, 0, 0, 1, 1, 1, 1};
+
+        // set inverse cell set to a defined value for ghost cells
+        memset(h_inverse_cell_set.data, UINT_MAX, sizeof(unsigned int)*cell_indexer.getNumElements());
+
+        for (unsigned int cur_set = 0; cur_set < n_sets; cur_set++)
+            {
+            unsigned int active_idx = 0;
+            // loop over all cells in the active region, using information from num_ghost cells to avoid adding ghost cells
+            // to the active set
+            for (int k = oz[cur_set]; k < int(dim.z); k+=2)
+                for (int j = oy[cur_set]; j < int(dim.y); j+=2)
+                    for (int i = ox[cur_set]; i < int(dim.x); i+=2)
+                        {
+                        h_cell_sets.data[m_cell_set_indexer[itype](active_idx, cur_set)] = cell_indexer(i,j,k);
+                        h_inverse_cell_set.data[cell_indexer(i,j,k)] = cur_set;
+                        active_idx++;
+                        }
+            }
+        } // end loop over types
     }
 
 template< class Shape >
@@ -768,7 +1331,31 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeExcellMem()
 
     // reallocate memory
     m_excell_idx.resize(m_excell_list_indexer.getNumElements());
+    m_excell_cell_set.resize(m_excell_list_indexer.getNumElements());
+    m_excell_overlap.resize(m_excell_list_indexer.getNumElements());
     m_excell_size.resize(num_cells);
+    }
+
+template< class Shape >
+void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeQueueMem()
+    {
+    this->m_exec_conf->msg->notice(4) << "hpmc resizing queue" << std::endl;
+
+    unsigned int num_adj = this->m_cl->getCellAdjIndexer().getW();
+    unsigned int num_max = this->m_cl->getNmax();
+
+    // the number of active cells is an upper bound for the number of queues
+    m_queue_indexer = Index2D(this->m_cell_set_indexer[0].getNumElements(), num_max*num_adj);
+
+    if (Shape::isParallel())
+        {
+        m_queue_active_cell_idx.resize(m_queue_indexer.getNumElements());
+        m_queue_postype.resize(m_queue_indexer.getNumElements());
+        m_queue_orientation.resize(m_queue_indexer.getNumElements());
+        m_queue_excell_idx.resize(m_queue_indexer.getNumElements());
+        }
+
+    m_cell_overlaps.resize(this->m_cell_set_indexer[0].getW());
     }
 
 template< class Shape >
@@ -778,10 +1365,17 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
 
     this->m_cl->setNominalWidth(this->m_nominal_width);
 
+    for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
+        {
+        m_cl_type[itype]->setNominalWidth(this->m_nominal_width);
+        }
+
     // attach the parameters to the kernel stream so that they are visible
     // when other kernels are called
+
     cudaStreamAttachMemAsync(m_stream, this->m_params.data(), 0, cudaMemAttachSingle);
     CHECK_CUDA_ERROR();
+
     #if (CUDART_VERSION >= 8000)
     cudaMemAdvise(this->m_params.data(), this->m_params.size()*sizeof(typename Shape::param_type), cudaMemAdviseSetReadMostly, 0);
     CHECK_CUDA_ERROR();

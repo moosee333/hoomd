@@ -19,11 +19,19 @@ template cudaError_t gpu_hpmc_free_volume<ShapeSpheropolyhedron >(const hpmc_fre
                                                        const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSpheropolyhedron >(const hpmc_args_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
+template cudaError_t gpu_hpmc_moves<ShapeSpheropolyhedron >(const hpmc_args_t& args,
+                                                  const typename ShapeSpheropolyhedron ::param_type *d_params);
+template cudaError_t gpu_hpmc_check_overlaps<ShapeSpheropolyhedron >(const hpmc_args_t& args,
+                                                  const typename ShapeSpheropolyhedron ::param_type *d_params);
+template cudaError_t gpu_hpmc_accept<ShapeSpheropolyhedron >(const hpmc_args_t& args,
+                                                  const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_count_overlaps<ShapeSpheropolyhedron >(const hpmc_implicit_args_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject<ShapeSpheropolyhedron >(const hpmc_implicit_args_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_insert_depletants_queue<ShapeSpheropolyhedron >(const hpmc_implicit_args_new_t& args,
+                                                  const typename ShapeSpheropolyhedron ::param_type *d_params);
+template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeSpheropolyhedron >(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeSpheropolyhedron >(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSpheropolyhedron ::param_type *d_params);

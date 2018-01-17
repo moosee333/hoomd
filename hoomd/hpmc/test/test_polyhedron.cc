@@ -65,7 +65,7 @@ GPUTree build_tree(poly3d_data &data)
         internal_coordinates.push_back(face_vec);
         }
     unsigned int capacity = 4;
-    tree.buildTree(obbs, internal_coordinates, data.sweep_radius, data.n_faces, capacity);
+    tree.buildTree(obbs, internal_coordinates, data.sweep_radius, data.n_faces, capacity, false);
     GPUTree gpu_tree(tree);
     free(obbs);
     return gpu_tree;

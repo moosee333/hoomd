@@ -128,6 +128,21 @@ class CellList : public Compute
             m_params_changed = true;
             }
 
+        //! Specifiy if we should only include particles of a given type
+        void setFilterType(bool filter_type)
+            {
+            m_filter_type = filter_type;
+            m_params_changed = true;
+            }
+
+        //! Specify which type we should include (only)
+        void setType(unsigned int type)
+            {
+            m_type = type;
+            m_params_changed = true;
+            }
+
+
         //! Specify if the orientation cell list is to be computed
         void setComputeOrientation(bool compute_orientation)
             {
@@ -299,6 +314,11 @@ class CellList : public Compute
             return m_idx;
             }
 
+        //! Return number of particles in cell list
+        unsigned int getNumParticles() const
+            {
+            return m_nparticles;
+            }
 
         //! Compute the cell list given the current particle positions
         void compute(unsigned int timestep);
@@ -336,6 +356,9 @@ class CellList : public Compute
         bool m_particles_sorted;     //!< Set to true when the particles have been sorted
         bool m_box_changed;          //!< Set to ttrue when the box size has changed
         unsigned int m_multiple;     //!< Round cell dimensions down to a multiple of this value
+        bool m_filter_type;          //!< True if we are only including particles of a given type
+        unsigned int m_type;         //!< Type of particles we are restricting to
+        unsigned int m_nparticles;   //!< Number of particles actually in cell list
 
         // parameters determined by initialize
         uint3 m_dim;                 //!< Current dimensions

@@ -244,6 +244,7 @@ inline ShapePolyhedron::param_type make_poly3d_data(pybind11::list verts,pybind1
     std::vector<std::vector<vec3<OverlapReal> > > internal_coordinates;
 
     // construct bounding box tree
+    bool is_sphere = len(face_offs)-1 == 1;
     for (unsigned int i = 0; i < len(face_offs)-1; ++i)
         {
         std::vector<vec3<OverlapReal> > face_vec;
@@ -256,14 +257,15 @@ inline ShapePolyhedron::param_type make_poly3d_data(pybind11::list verts,pybind1
             n_vert++;
             }
 
+        if (n_vert > 1) is_sphere = false;
         std::vector<OverlapReal> vertex_radii(n_vert, result.sweep_radius);
-        obbs[i] = hpmc::detail::compute_obb(face_vec, vertex_radii, false);
+        obbs[i] = hpmc::detail::compute_obb(face_vec, vertex_radii, n_vert == 1);
         obbs[i].mask = result.face_overlap[i];
         internal_coordinates.push_back(face_vec);
         }
 
     OBBTree tree;
-    tree.buildTree(obbs, internal_coordinates, result.sweep_radius, len(face_offs)-1, leaf_capacity);
+    tree.buildTree(obbs, internal_coordinates, result.sweep_radius, len(face_offs)-1, leaf_capacity, is_sphere);
     result.tree = GPUTree(tree, exec_conf->isCUDAEnabled());
     delete [] obbs;
 

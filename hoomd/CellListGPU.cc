@@ -81,13 +81,14 @@ void CellListGPU::computeCellList()
                           m_cell_indexer,
                           m_cell_list_indexer,
                           getGhostWidth(),
-                          m_tuner->getParam());
+                          m_filter_type,
+                          m_type,
+                          m_nparticles,
+                          m_tuner->getParam(),
+                          this->m_exec_conf->getCachedAllocator());
     if(m_exec_conf->isCUDAErrorCheckingEnabled())
         CHECK_CUDA_ERROR();
     m_tuner->end();
-
-    if(m_exec_conf->isCUDAErrorCheckingEnabled())
-        CHECK_CUDA_ERROR();
 
     if (m_sort_cell_list)
         {

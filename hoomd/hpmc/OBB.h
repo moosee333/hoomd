@@ -135,6 +135,35 @@ struct OBB
 
     };
 
+//! Closest point on OBB
+DEVICE inline void closestPtPointOBB(const vec3<OverlapReal>& p, const OBB& b, vec3<OverlapReal>& q)
+    {
+    q = vec3<OverlapReal>(0,0,0);
+
+    // for each OBB axis...
+    OverlapReal dist = p.x;
+
+    if (dist > b.lengths.x) dist = b.lengths.x;
+    if (dist < -b.lengths.x) dist = -b.lengths.x;
+
+    q.x += dist;
+
+    dist = p.y;
+
+    if (dist > b.lengths.y) dist = b.lengths.y;
+    if (dist < -b.lengths.y) dist = -b.lengths.y;
+
+    q.y += dist;
+
+    dist = p.z;
+
+    if (dist > b.lengths.z) dist = b.lengths.z;
+    if (dist < -b.lengths.z) dist = -b.lengths.z;
+
+    q.z += dist;
+    }
+
+
 //! Check if two OBBs overlap
 /*! \param a First OBB
     \param b Second OBB
@@ -150,19 +179,43 @@ DEVICE inline bool overlap(const OBB& a, const OBB& b, bool exact=true)
     // exit early if the masks don't match
     if (! (a.mask & b.mask)) return false;
 
-    // translation vector
+    // the center-to-center translation
     vec3<OverlapReal> t = b.center - a.center;
 
-    // if both OBBs are spheres, simplify overlap check
-    if (a.isSphere() && b.isSphere())
+    if (a.isSphere())
         {
-        OverlapReal rsq = dot(t,t);
-        OverlapReal RaRb = a.lengths.x + b.lengths.x;
-        return rsq <= RaRb*RaRb;
+        if (b.isSphere())
+            {
+            // if both OBBs are spheres, simplify overlap check
+            OverlapReal rsq = dot(t,t);
+            OverlapReal RaRb = a.lengths.x + b.lengths.x;
+            return rsq <= RaRb*RaRb;
+            }
+        else
+            {
+            // check sphere against OBB
+            vec3<OverlapReal> a_rot = rotate(conj(b.rotation),-t);
+
+            vec3<OverlapReal> q;
+            closestPtPointOBB(a_rot, b, q);
+            vec3<OverlapReal> dr(a_rot-q);
+            return dot(dr,dr) <= a.lengths.x*a.lengths.x;
+            }
+        }
+    else if (b.isSphere())
+        {
+        // check OBB against sphere
+        vec3<OverlapReal> b_rot = rotate(conj(a.rotation),t);
+
+        vec3<OverlapReal> q;
+        closestPtPointOBB(b_rot, a, q);
+        vec3<OverlapReal> dr(b_rot-q);
+        return dot(dr,dr) <= b.lengths.x*b.lengths.x;
         }
 
     // rotate B in A's coordinate frame
     rotmat3<OverlapReal> r(conj(a.rotation) * b.rotation);
+
 
     // rotate translation into A's frame
     t = rotate(conj(a.rotation),t);
