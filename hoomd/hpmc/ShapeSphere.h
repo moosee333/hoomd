@@ -247,6 +247,18 @@ DEVICE inline bool test_overlap<ShapeSphere, ShapeSphere>(const vec3<Scalar>& r_
         }
     }
 
+//! Returns the number of GPU threads requested for the overlap check
+/*! \param a first shape
+    \param b second shape
+
+    The default implementation requests one thread
+ */
+template<class ShapeA, class ShapeB>
+DEVICE inline unsigned int get_num_requested_threads(const ShapeA& a, const ShapeB& b)
+    {
+    return 1;
+    }
+
 }; // end namespace hpmc
 
 #endif //__SHAPE_SPHERE_H__

@@ -133,9 +133,9 @@ cudaError_t gpu_hpmc_free_volume(const hpmc_free_volume_args_t &args, const type
 
 #ifdef NVCC
 //! Texture for reading postype
-scalar4_tex_t free_volume_postype_tex;
+static scalar4_tex_t free_volume_postype_tex;
 //! Texture for reading orientation
-scalar4_tex_t free_volume_orientation_tex;
+static scalar4_tex_t free_volume_orientation_tex;
 
 //! Compute the cell that a particle sits in
 __device__ inline unsigned int compute_cell_idx(const Scalar3 p,

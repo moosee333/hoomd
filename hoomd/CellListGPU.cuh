@@ -13,6 +13,8 @@
 #include "Index1D.h"
 #include "ParticleData.cuh"
 
+#include "CachedAllocator.h"
+
 /*! \file CellListGPU.cuh
     \brief Declares GPU kernel code for cell list generation on the GPU
 */
@@ -38,7 +40,11 @@ cudaError_t gpu_compute_cell_list(unsigned int *d_cell_size,
                                   const Index3D& ci,
                                   const Index2D& cli,
                                   const Scalar3& ghost_width,
-                                  const unsigned int block_size);
+                                  const bool filter_type,
+                                  const unsigned int type,
+                                  unsigned int &nparticles,
+                                  const unsigned int block_size,
+                                  const CachedAllocator& alloc);
 
 cudaError_t gpu_sort_cell_list(unsigned int *d_cell_size,
                         Scalar4 *d_xyzf,

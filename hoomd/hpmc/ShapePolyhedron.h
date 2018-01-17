@@ -43,8 +43,7 @@
   uncommenting the below line.
   */
 
-// uncomment for parallel overlap checks
-//#define LEAVES_AGAINST_TREE_TRAVERSAL
+#define PARALLEL_TRAVERSAL_ON_GPU
 
 namespace hpmc
 {
@@ -115,19 +114,6 @@ struct poly3d_data : param_base
 
 }; // end namespace detail
 
-#if defined(NVCC) && (__CUDA_ARCH__ >= 300)
-//! CTA allreduce
-static __device__ int warp_reduce(int val, int width)
-    {
-    #pragma unroll
-    for (int i = 1; i < width; i *= 2)
-        {
-        val += __shfl_xor(val,i,width);
-        }
-    return val;
-    }
-#endif
-
 //!  Polyhedron shape template
 /*! ShapePolyhedron implements IntegragorHPMC's shape protocol.
 
@@ -182,7 +168,7 @@ struct ShapePolyhedron
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
     HOSTDEVICE static bool isParallel()
         {
-        #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
+        #if defined(PARALLEL_TRAVERSAL_ON_GPU)
         return true;
         #else
         return false;
@@ -558,48 +544,66 @@ DEVICE inline bool test_narrow_phase_overlap( vec3<OverlapReal> dr,
         unsigned int offs_a = a.data.face_offs[iface];
         unsigned mask_a = a.data.face_overlap[iface];
 
-        float U[3][3];
-
+        float3 u0, u1, u2;
         quat<OverlapReal> q(conj(quat<OverlapReal>(b.orientation))*quat<OverlapReal>(a.orientation));
 
         if (nverts_a > 2)
             {
-            for (unsigned int ivert = 0; ivert < 3; ++ivert)
-                {
-                unsigned int idx_a = a.data.face_verts[offs_a+ivert];
-                vec3<float> v = a.data.verts[idx_a];
-                v = rotate(q,v) + dr;
-                U[ivert][0] = v.x; U[ivert][1] = v.y; U[ivert][2] = v.z;
-                }
+            vec3<float> v(a.data.verts[a.data.face_verts[offs_a]]);
+            v = rotate(q,v) + dr;
+            u0 = make_float3(v.x,v.y,v.z);
+
+            v = vec3<float>(a.data.verts[a.data.face_verts[offs_a+1]]);
+            v = rotate(q,v) + dr;
+            u1 = make_float3(v.x,v.y,v.z);
+
+            v = vec3<float>(a.data.verts[a.data.face_verts[offs_a+2]]);
+            v = rotate(q,v) + dr;
+            u2 = make_float3(v.x,v.y,v.z);
+            }
+
+        unsigned int next_offs_end = 0;
+        unsigned int next_offs = 0;
+        unsigned int next_mask = 0;
+        if (nb > 0)
+            {
+            unsigned int jface = b.tree.getParticle(cur_node_b, 0);
+
+            next_offs = b.data.face_offs[jface];
+            next_offs_end = b.data.face_offs[jface+1];
+            next_mask = b.data.face_overlap[jface];
             }
 
         // loop through faces of cur_node_b
         for (unsigned int j= 0; j< nb; j++)
             {
-            unsigned int nverts_b, offs_b;
-
-            unsigned int jface = b.tree.getParticle(cur_node_b, j);
-
             // fetch next face of particle b
-            nverts_b = b.data.face_offs[jface + 1] - b.data.face_offs[jface];
-            offs_b = b.data.face_offs[jface];
-            unsigned int mask_b = b.data.face_overlap[jface];
+            unsigned int nverts_b = next_offs_end-next_offs;
+            unsigned int offs_b = next_offs;
+            unsigned int mask_b = next_mask;
+
+            if (j + 1 < nb)
+                {
+                // prefetch
+                unsigned int jface = b.tree.getParticle(cur_node_b, j + 1);
+
+                next_offs = b.data.face_offs[jface];
+                next_offs_end = b.data.face_offs[jface + 1];
+                next_mask = b.data.face_overlap[jface];
+                }
 
             // only check overlaps if required
             if (! (mask_a & mask_b)) continue;
 
             if (nverts_a > 2 && nverts_b > 2)
                 {
-                float V[3][3];
-                for (unsigned int ivert = 0; ivert < 3; ++ivert)
-                    {
-                    unsigned int idx_b = b.data.face_verts[offs_b+ivert];
-                    vec3<float> v = b.data.verts[idx_b];
-                    V[ivert][0] = v.x; V[ivert][1] = v.y; V[ivert][2] = v.z;
-                    }
+                unsigned int v0 = b.data.face_verts[offs_b];
+                unsigned int v1 = b.data.face_verts[offs_b+1];
+                unsigned int v2 = b.data.face_verts[offs_b+2];
 
                 // check collision between triangles
-                if (NoDivTriTriIsect(V[0],V[1],V[2],U[0],U[1],U[2],abs_tol))
+                if (NoDivTriTriIsect((float *)&b.data.verts[v0].x, (float *)&b.data.verts[v1].x, (float *)&b.data.verts[v2].x,
+                    (float *)&u0.x,(float *)&u1.x,(float *)&u2.x,abs_tol))
                     {
                     return true;
                     }
@@ -786,6 +790,22 @@ inline bool BVHCollision(const ShapePolyhedron& a, const ShapePolyhedron &b,
     }
 #endif
 
+//! Returns the number of GPU threads requested for the overlap check
+/*! \param a first shape
+    \param b second shape
+ */
+DEVICE inline unsigned int get_num_requested_threads(const ShapePolyhedron& a, const ShapePolyhedron& b)
+    {
+    #ifdef PARALLEL_TRAVERSAL_ON_GPU
+    if (a.tree.getNumLeaves() < b.tree.getNumLeaves())
+        return a.tree.getNumLeaves();
+    else
+        return b.tree.getNumLeaves();
+    #else
+    return 1;
+    #endif
+    }
+
 //! Polyhedron overlap test
 /*! \param r_ab Vector defining the position of shape b relative to shape a (r_b - r_a)
     \param a first shape
@@ -800,18 +820,6 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
                                  const ShapePolyhedron& b,
                                  unsigned int& err)
     {
-    // test overlap of convex hulls
-    if (a.isSpheroPolyhedron() || b.isSpheroPolyhedron())
-        {
-        if (!test_overlap(r_ab, ShapeSpheropolyhedron(a.orientation,a.data.convex_hull_verts),
-               ShapeSpheropolyhedron(b.orientation,b.data.convex_hull_verts),err)) return false;
-        }
-    else
-        {
-        if (!test_overlap(r_ab, ShapeConvexPolyhedron(a.orientation,a.data.convex_hull_verts),
-           ShapeConvexPolyhedron(b.orientation,b.data.convex_hull_verts),err)) return false;
-        }
-
     OverlapReal DaDb = a.getCircumsphereDiameter() + b.getCircumsphereDiameter();
     const OverlapReal abs_tol(DaDb*1e-12);
     vec3<OverlapReal> dr = r_ab;
@@ -825,16 +833,16 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
      * a) an edge of one polyhedron intersects the face of the other
      * b) the center of mass of one polyhedron is contained in the other
      */
-    #ifdef NVCC
+    #if defined(NVCC)
     const detail::GPUTree& tree_a = a.tree;
     const detail::GPUTree& tree_b = b.tree;
     #endif
 
-    #ifdef LEAVES_AGAINST_TREE_TRAVERSAL
+    #if defined(NVCC) && defined(PARALLEL_TRAVERSAL_ON_GPU)
     #ifdef NVCC
     // Parallel tree traversal
-    unsigned int offset = threadIdx.x;
-    unsigned int stride = blockDim.x;
+    unsigned int offset = threadIdx.x + blockIdx.x*blockDim.x;
+    unsigned int stride = gridDim.x*blockDim.x;
     #else
     unsigned int offset = 0;
     unsigned int stride = 1;

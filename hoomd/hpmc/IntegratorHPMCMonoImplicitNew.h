@@ -124,7 +124,7 @@ class IntegratorHPMCMonoImplicitNew : public IntegratorHPMCMono<Shape>
             }
 
         //! Slot to be called when number of types changes
-        void slotNumTypesChange();
+        virtual void slotNumTypesChange();
 
         //! Returns true if the exponent of the Boltzmann weight is proportional to overlap volume
         bool depletantModeOverlapRegions() const

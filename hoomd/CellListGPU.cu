@@ -9,6 +9,10 @@
 #include "hoomd/extern/util/mgpucontext.h"
 #include "hoomd/extern/kernels/localitysort.cuh"
 
+#include <thrust/device_ptr.h>
+#include <thrust/reduce.h>
+#include <thrust/execution_policy.h>
+
 /*! \file CellListGPU.cu
     \brief Defines GPU kernel code for cell list generation on the GPU
 */
@@ -56,7 +60,9 @@ __global__ void gpu_compute_cell_list_kernel(unsigned int *d_cell_size,
                                              const BoxDim box,
                                              const Index3D ci,
                                              const Index2D cli,
-                                             const Scalar3 ghost_width)
+                                             const Scalar3 ghost_width,
+                                             const bool filter_type,
+                                             const unsigned int type_included)
     {
     // read in the particle that belongs to this thread
     unsigned int idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -65,6 +71,9 @@ __global__ void gpu_compute_cell_list_kernel(unsigned int *d_cell_size,
 
     Scalar4 postype = d_pos[idx];
     Scalar3 pos = make_scalar3(postype.x, postype.y, postype.z);
+
+    if (filter_type && __scalar_as_int(postype.w) != type_included)
+        return;
 
     Scalar flag = 0;
     Scalar diameter = 0;
@@ -175,7 +184,11 @@ cudaError_t gpu_compute_cell_list(unsigned int *d_cell_size,
                                   const Index3D& ci,
                                   const Index2D& cli,
                                   const Scalar3& ghost_width,
-                                  const unsigned int block_size)
+                                  const bool filter_type,
+                                  const unsigned int type,
+                                  unsigned int &nparticles,
+                                  const unsigned int block_size,
+                                  const CachedAllocator& alloc)
     {
     cudaError_t err;
     err = cudaMemsetAsync(d_cell_size, 0, sizeof(unsigned int)*ci.getNumElements(),0);
@@ -213,7 +226,20 @@ cudaError_t gpu_compute_cell_list(unsigned int *d_cell_size,
                                                                box,
                                                                ci,
                                                                cli,
-                                                               ghost_width);
+                                                               ghost_width,
+                                                               filter_type,
+                                                               type);
+
+    if (filter_type)
+        {
+        // do a reduction of the particles actually inserted
+        thrust::device_ptr<unsigned int> cell_size(d_cell_size);
+        nparticles = thrust::reduce(thrust::cuda::par(alloc), cell_size, cell_size + ci.getNumElements());
+        }
+    else
+        {
+        nparticles = N+n_ghost;
+        }
 
     return cudaSuccess;
     }
