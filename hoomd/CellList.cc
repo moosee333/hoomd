@@ -34,6 +34,10 @@ CellList::CellList(std::shared_ptr<SystemDefinition> sysdef)
     m_box_changed = false;
     m_multiple = 1;
 
+    m_filter_type = false;
+    m_type = UINT_MAX;
+    m_nparticles = 0;
+
     GPUFlags<uint3> conditions(exec_conf);
     m_conditions.swap(conditions);
     resetConditions();
@@ -481,6 +485,10 @@ void CellList::computeCellList()
             }
 
 
+        unsigned int t = __scalar_as_int(h_pos.data[n].w);
+        if (m_filter_type && t != m_type)
+            continue;
+
         // find the bin each particle belongs in
         Scalar3 f = box.makeFraction(p,ghost_width);
         int ib = (int)(f.x * m_dim.x);
@@ -563,6 +571,8 @@ void CellList::computeCellList()
 
         // increment the cell occupancy counter
         h_cell_size.data[bin]++;
+
+        m_nparticles++;
         }
 
     // write out conditions
@@ -662,7 +672,7 @@ void CellList::printStats()
             }
 
         // divide to get the average
-        Scalar n_avg = Scalar(m_pdata->getN() + m_pdata->getNGhosts()) / Scalar(m_cell_indexer.getNumElements());
+        Scalar n_avg = Scalar(m_nparticles) / Scalar(m_cell_indexer.getNumElements());
         m_exec_conf->msg->notice(1) << "n_min    : " << n_min << " / n_max: " << n_max << " / n_avg: " << n_avg << endl;
         }
     }

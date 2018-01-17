@@ -123,7 +123,7 @@ class IntegratorHPMCMonoImplicitNew : public IntegratorHPMCMono<Shape>
             }
 
         //! Slot to be called when number of types changes
-        void slotNumTypesChange();
+        virtual void slotNumTypesChange();
 
     protected:
         Scalar m_n_R;                                            //!< Average depletant number density in free volume
