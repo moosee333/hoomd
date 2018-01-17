@@ -2,6 +2,7 @@
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
 #include "ComputeFreeVolumeGPU.cuh"
+#include "UpdaterMuVTGPU.cuh"
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
@@ -35,6 +36,8 @@ template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeSphinx>(const hpmc_impli
                                                   const typename ShapeSphinx::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeSphinx>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSphinx::param_type *d_params);
+template cudaError_t gpu_hpmc_muvt<ShapeSphinx>(const hpmc_muvt_args_t &args,
+                                                       const typename ShapeSphinx::param_type *d_params);
 #endif
 }; // end namespace detail
 

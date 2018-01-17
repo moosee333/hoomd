@@ -397,6 +397,9 @@ void UpdaterMuVTImplicit<Shape, Integrator>::generateGibbsSamplerConfiguration(u
 
     // update the AABB tree
     buildGibbsSamplerAABBTree();
+
+    // AABB tree is now prepared, call base class method
+    UpdaterMuVT<Shape>::generateGibbsSamplerConfiguration(timestep);
     }
 
 template<class Shape, class Integrator>
