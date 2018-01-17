@@ -205,7 +205,7 @@ class UpdaterMuVTImplicit : public UpdaterMuVT<Shape>
         tbb::concurrent_vector<vec3<Scalar> > m_gibbs_position;
         tbb::concurrent_vector<quat<Scalar> > m_gibbs_orientation;
         #else
-        std::vector<Scalar3> m_gibbs_position;      //!< Internal list of coordinates for Gibbs sampler
+        std::vector<vec3<Scalar> > m_gibbs_position;      //!< Internal list of coordinates for Gibbs sampler
         std::vector<quat<Scalar> > m_gibbs_orientation; //!< Internal list of orientations
         #endif
 
@@ -310,7 +310,11 @@ void UpdaterMuVTImplicit<Shape, Integrator>::generateGibbsSamplerConfiguration(u
     std::vector<unsigned int> seed_seq(5);
     seed_seq[0] = this->m_seed;
     seed_seq[1] = timestep;
+    #ifdef ENABLE_MPI
     seed_seq[2] = this->m_exec_conf->getPartition();
+    #else
+    seed_seq[2] = 0;
+    #endif
     seed_seq[3] = this->m_exec_conf->getRank();
     seed_seq[4] = 0x4823b4a1;
     std::seed_seq seed(seed_seq.begin(), seed_seq.end());
@@ -351,6 +355,9 @@ void UpdaterMuVTImplicit<Shape, Integrator>::generateGibbsSamplerConfiguration(u
         });
     #endif
 
+    #ifndef ENABLE_TBB
+    hoomd::detail::Saru rng(timestep, this->m_seed+this->m_exec_conf->getRank(), 0x1824d2df);
+    #endif
 
     #ifdef ENABLE_TBB
     tbb::parallel_for((unsigned int)0,n_insert, [&](unsigned int i)
@@ -358,7 +365,9 @@ void UpdaterMuVTImplicit<Shape, Integrator>::generateGibbsSamplerConfiguration(u
     for (unsigned int i = 0; i < n_insert; ++i)
     #endif
         {
+        #ifdef ENABLE_TBB
         auto &rng = rng_parallel.local();
+        #endif
 
         // generate a position uniformly in the box
         Scalar3 f;

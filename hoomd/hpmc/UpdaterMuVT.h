@@ -760,8 +760,14 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                         unsigned int nonzero = 1;
 
                         Scalar lnb(0.0);
+
+                        #ifdef ENABLE_MPI
                         nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
                             lnb, true, m_exec_conf->getPartition());
+                        #else
+                        nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
+                            lnb, true, 0);
+                        #endif
 
                         if (nonzero)
                             {
@@ -921,7 +927,11 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
 
                         // get weight for removal
                         Scalar lnb(0.0);
+                        #ifdef ENABLE_MPI
                         if (tryRemoveParticle(timestep, tag, lnb, true, m_exec_conf->getPartition()))
+                        #else
+                        if (tryRemoveParticle(timestep, tag, lnb, true, 0))
+                        #endif
                             {
                             lnboltzmann += lnb;
                             }
