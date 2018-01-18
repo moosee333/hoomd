@@ -356,7 +356,6 @@ IntegratorHPMCMono<Shape>::IntegratorHPMCMono(std::shared_ptr<SystemDefinition> 
               m_image_list_is_initialized(false),
               m_image_list_valid(false),
               m_hasOrientation(true),
-              m_past_first_run(false)
               m_aabb_tree(m_exec_conf->isCUDAEnabled())
     {
     // allocate the parameter storage
