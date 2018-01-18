@@ -43,8 +43,6 @@
   uncommenting the below line.
   */
 
-#define PARALLEL_TRAVERSAL_ON_GPU
-
 namespace hpmc
 {
 
@@ -168,11 +166,7 @@ struct ShapePolyhedron
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
     HOSTDEVICE static bool isParallel()
         {
-        #if defined(PARALLEL_TRAVERSAL_ON_GPU)
         return true;
-        #else
-        return false;
-        #endif
         }
 
     quat<Scalar> orientation;    //!< Orientation of the polyhedron
@@ -796,128 +790,25 @@ inline bool BVHCollision(const ShapePolyhedron& a, const ShapePolyhedron &b,
  */
 DEVICE inline unsigned int get_num_requested_threads(const ShapePolyhedron& a, const ShapePolyhedron& b)
     {
-    #ifdef PARALLEL_TRAVERSAL_ON_GPU
     if (a.tree.getNumLeaves() < b.tree.getNumLeaves())
         return a.tree.getNumLeaves();
     else
         return b.tree.getNumLeaves();
-    #else
-    return 1;
-    #endif
     }
 
-//! Polyhedron overlap test
-/*! \param r_ab Vector defining the position of shape b relative to shape a (r_b - r_a)
-    \param a first shape
-    \param b second shape
-    \param err in/out variable incremented when error conditions occur in the overlap test
-    \returns true when *a* and *b* overlap, and false when they are disjoint
-
-    \ingroup shape
-*/
-DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
-                                 const ShapePolyhedron& a,
-                                 const ShapePolyhedron& b,
-                                 unsigned int& err)
+DEVICE inline bool test_contained_in(const vec3<Scalar>& r_ab,
+                             const ShapePolyhedron& a,
+                             const ShapePolyhedron& b,
+                             unsigned int& err)
     {
-    OverlapReal DaDb = a.getCircumsphereDiameter() + b.getCircumsphereDiameter();
-    const OverlapReal abs_tol(DaDb*1e-12);
-    vec3<OverlapReal> dr = r_ab;
-
-    /*
-     * This overlap test checks if an edge of one polyhedron is overlapping with a face of the other
-     */
-
-    /*
-     * This overlap test checks if either
-     * a) an edge of one polyhedron intersects the face of the other
-     * b) the center of mass of one polyhedron is contained in the other
-     */
-    #if defined(NVCC)
-    const detail::GPUTree& tree_a = a.tree;
-    const detail::GPUTree& tree_b = b.tree;
-    #endif
-
-    #if defined(NVCC) && defined(PARALLEL_TRAVERSAL_ON_GPU)
-    #ifdef NVCC
-    // Parallel tree traversal
-    unsigned int offset = threadIdx.x + blockIdx.x*blockDim.x;
-    unsigned int stride = gridDim.x*blockDim.x;
-    #else
-    unsigned int offset = 0;
-    unsigned int stride = 1;
-    #endif
-
-    if (tree_a.getNumLeaves() <= tree_b.getNumLeaves())
-        {
-        for (unsigned int cur_leaf_a = offset; cur_leaf_a < tree_a.getNumLeaves(); cur_leaf_a += stride)
-            {
-            unsigned int cur_node_a = tree_a.getLeafNode(cur_leaf_a);
-            hpmc::detail::OBB obb_a = tree_a.getOBB(cur_node_a);
-            // rotate and translate a's obb into b's body frame
-            vec3<OverlapReal> dr_rot(rotate(conj(b.orientation),-r_ab));
-            obb_a.affineTransform(conj(b.orientation)*a.orientation, dr_rot);
-
-            unsigned cur_node_b = 0;
-            while (cur_node_b < tree_b.getNumNodes())
-                {
-                unsigned int query_node = cur_node_b;
-                if (tree_b.queryNode(obb_a, cur_node_b) && test_narrow_phase_overlap(dr_rot, a, b, cur_node_a, query_node, err, abs_tol)) return true;
-                }
-            }
-        }
-    else
-        {
-        for (unsigned int cur_leaf_b = offset; cur_leaf_b < tree_b.getNumLeaves(); cur_leaf_b += stride)
-            {
-            unsigned int cur_node_b = tree_b.getLeafNode(cur_leaf_b);
-            hpmc::detail::OBB obb_b = tree_b.getOBB(cur_node_b);
-
-            // rotate and translate b's obb into a's body frame
-            vec3<OverlapReal> dr_rot(rotate(conj(a.orientation),r_ab));
-            obb_b.affineTransform(conj(a.orientation)*b.orientation, dr_rot);
-
-            unsigned cur_node_a = 0;
-            while (cur_node_a < tree_a.getNumNodes())
-                {
-                unsigned int query_node = cur_node_a;
-                if (tree_a.queryNode(obb_b, cur_node_a) && test_narrow_phase_overlap(dr_rot, b, a, cur_node_b, query_node, err,abs_tol)) return true;
-                }
-            }
-        }
-    #else
-    vec3<OverlapReal> dr_rot(rotate(conj(b.orientation),-r_ab));
-    quat<OverlapReal> q(conj(b.orientation)*a.orientation);
-
-    #ifndef NVCC
-    if (BVHCollision(a,b,0,0, q, dr_rot, err, abs_tol)) return true;
-    #else
-    // stackless traversal on GPU
-    unsigned long int stack = 0;
-    unsigned int cur_node_a = 0;
-    unsigned int cur_node_b = 0;
-
-    detail::OBB obb_a = tree_a.getOBB(cur_node_a);
-    obb_a.affineTransform(q, dr_rot);
-
-    detail::OBB obb_b = tree_b.getOBB(cur_node_b);
-
-
-    while (cur_node_a != tree_a.getNumNodes() && cur_node_b != tree_b.getNumNodes())
-        {
-        unsigned int query_node_a = cur_node_a;
-        unsigned int query_node_b = cur_node_b;
-
-        if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, obb_a, obb_b, q,dr_rot)
-            && test_narrow_phase_overlap(dr_rot, a, b, query_node_a, query_node_b, err, abs_tol)) return true;
-        }
-    #endif
-    #endif
-
     // no intersecting edge, check if one polyhedron is contained in the other
+    vec3<OverlapReal> dr = r_ab;
 
     // if shape(A) == shape(B), only consider intersections
     if (&a.data == &b.data) return false;
+
+    OverlapReal DaDb = a.getCircumsphereDiameter() + b.getCircumsphereDiameter();
+    const OverlapReal abs_tol(DaDb*1e-12);
 
     for (unsigned int ord = 0; ord < 2; ++ord)
         {
@@ -1008,6 +899,133 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
 
     return false;
     }
+
+
+//! Polyhedron overlap test
+/*! \param r_ab Vector defining the position of shape b relative to shape a (r_b - r_a)
+    \param a first shape
+    \param b second shape
+    \param err in/out variable incremented when error conditions occur in the overlap test
+    \returns true when *a* and *b* overlap, and false when they are disjoint
+
+    \ingroup shape
+*/
+DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
+                                 const ShapePolyhedron& a,
+                                 const ShapePolyhedron& b,
+                                 unsigned int& err)
+    {
+    OverlapReal DaDb = a.getCircumsphereDiameter() + b.getCircumsphereDiameter();
+    const OverlapReal abs_tol(DaDb*1e-12);
+
+    /*
+     * This overlap test checks if an edge of one polyhedron is overlapping with a face of the other
+     */
+
+    /*
+     * This overlap test checks if either
+     * a) an edge of one polyhedron intersects the face of the other
+     * b) the center of mass of one polyhedron is contained in the other
+     */
+    vec3<OverlapReal> dr_rot(rotate(conj(b.orientation),-r_ab));
+    quat<OverlapReal> q(conj(b.orientation)*a.orientation);
+
+    #ifndef NVCC
+    if (BVHCollision(a,b,0,0, q, dr_rot, err, abs_tol)) return true;
+    #else
+    // stackless traversal on GPU
+    unsigned long int stack = 0;
+    unsigned int cur_node_a = 0;
+    unsigned int cur_node_b = 0;
+
+    const detail::GPUTree& tree_a = a.tree;
+    const detail::GPUTree& tree_b = b.tree;
+
+    detail::OBB obb_a = tree_a.getOBB(cur_node_a);
+    obb_a.affineTransform(q, dr_rot);
+
+    detail::OBB obb_b = tree_b.getOBB(cur_node_b);
+
+
+    while (cur_node_a != tree_a.getNumNodes() && cur_node_b != tree_b.getNumNodes())
+        {
+        unsigned int query_node_a = cur_node_a;
+        unsigned int query_node_b = cur_node_b;
+
+        if (detail::traverseBinaryStack(tree_a, tree_b, cur_node_a, cur_node_b, stack, obb_a, obb_b, q,dr_rot)
+            && test_narrow_phase_overlap(dr_rot, a, b, query_node_a, query_node_b, err, abs_tol)) return true;
+        }
+    #endif
+
+    return test_contained_in(r_ab, a, b, err);
+    }
+
+#if defined(NVCC)
+DEVICE inline bool test_overlap_parallel(const vec3<Scalar>& r_ab,
+                                 const ShapePolyhedron& a,
+                                 const ShapePolyhedron& b,
+                                 unsigned int& err)
+    {
+    OverlapReal DaDb = a.getCircumsphereDiameter() + b.getCircumsphereDiameter();
+    const OverlapReal abs_tol(DaDb*1e-12);
+
+    /*
+     * This overlap test checks if an edge of one polyhedron is overlapping with a face of the other
+     */
+
+    /*
+     * This overlap test checks if either
+     * a) an edge of one polyhedron intersects the face of the other
+     * b) the center of mass of one polyhedron is contained in the other
+     */
+    const detail::GPUTree& tree_a = a.tree;
+    const detail::GPUTree& tree_b = b.tree;
+
+    // Parallel tree traversal, using .x component of thread block and grid
+    unsigned int offset = threadIdx.x + blockIdx.x*blockDim.x;
+    unsigned int stride = gridDim.x*blockDim.x;
+
+    if (tree_a.getNumLeaves() <= tree_b.getNumLeaves())
+        {
+        for (unsigned int cur_leaf_a = offset; cur_leaf_a < tree_a.getNumLeaves(); cur_leaf_a += stride)
+            {
+            unsigned int cur_node_a = tree_a.getLeafNode(cur_leaf_a);
+            hpmc::detail::OBB obb_a = tree_a.getOBB(cur_node_a);
+            // rotate and translate a's obb into b's body frame
+            vec3<OverlapReal> dr_rot(rotate(conj(b.orientation),-r_ab));
+            obb_a.affineTransform(conj(b.orientation)*a.orientation, dr_rot);
+
+            unsigned cur_node_b = 0;
+            while (cur_node_b < tree_b.getNumNodes())
+                {
+                unsigned int query_node = cur_node_b;
+                if (tree_b.queryNode(obb_a, cur_node_b) && test_narrow_phase_overlap(dr_rot, a, b, cur_node_a, query_node, err, abs_tol)) return true;
+                }
+            }
+        }
+    else
+        {
+        for (unsigned int cur_leaf_b = offset; cur_leaf_b < tree_b.getNumLeaves(); cur_leaf_b += stride)
+            {
+            unsigned int cur_node_b = tree_b.getLeafNode(cur_leaf_b);
+            hpmc::detail::OBB obb_b = tree_b.getOBB(cur_node_b);
+
+            // rotate and translate b's obb into a's body frame
+            vec3<OverlapReal> dr_rot(rotate(conj(a.orientation),r_ab));
+            obb_b.affineTransform(conj(a.orientation)*b.orientation, dr_rot);
+
+            unsigned cur_node_a = 0;
+            while (cur_node_a < tree_a.getNumNodes())
+                {
+                unsigned int query_node = cur_node_a;
+                if (tree_a.queryNode(obb_b, cur_node_a) && test_narrow_phase_overlap(dr_rot, b, a, cur_node_b, query_node, err,abs_tol)) return true;
+                }
+            }
+        }
+
+    return test_contained_in(r_ab, a, b, err);
+    }
+#endif // NVCC
 
 }; // end namespace hpmc
 
