@@ -139,6 +139,8 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         GPUArray<unsigned int> m_queue_excell_idx;              //!< Queue of excell indices of neighbors
         GPUArray<unsigned int> m_cell_overlaps;                 //!< Result of queue overlap checks
 
+        bool m_cell_lists_reinitialized;                        //!< True if we just initialized the cell lists
+
         //! Take one timestep forward
         virtual void update(unsigned int timestep);
 
@@ -163,19 +165,38 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
             // base class method
             IntegratorHPMCMonoImplicitNew<Shape>::slotNumTypesChange();
 
+            initializeCellLists();
+            }
+
+        virtual void initializeCellLists()
+            {
+            // don't do the expensive reinitialization if not necessary
+            if (m_last_ntypes == this->m_pdata->getNTypes())
+                return;
+
             m_cl_type.clear();
 
             for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
                 {
                 m_cl_type.push_back(std::unique_ptr<CellListGPU>(new CellListGPU(this->m_sysdef)));
+
+                // set standard cell list flags
                 m_cl_type[i]->setRadius(1);
                 m_cl_type[i]->setComputeTDB(false);
                 m_cl_type[i]->setFlagType();
                 m_cl_type[i]->setComputeIdx(true);
-                m_cl_type[i]->setFilterType(true);
                 m_cl_type[i]->setMultiple(2);
+
+                // specialize to this type
+                m_cl_type[i]->setFilterType(true);
                 m_cl_type[i]->setType(i);
+
+                // set nominal width
+                m_cl_type[i]->setNominalWidth(this->m_nominal_width);
                 }
+
+            m_cell_lists_reinitialized = true;
+            m_last_ntypes = this->m_pdata->getNTypes();
             }
 
     };
@@ -205,6 +226,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     m_last_dim = make_uint3(0xffffffff, 0xffffffff, 0xffffffff);
     m_last_nmax = 0xffffffff;
     m_last_ntypes = UINT_MAX;
+    m_cell_lists_reinitialized = false;
 
     GPUArray<unsigned int> excell_size(0, this->m_exec_conf);
     m_excell_size.swap(excell_size);
@@ -306,7 +328,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
         }
 
     // initialize cell lists
-    slotNumTypesChange();
+    initializeCellLists();
     }
 
 //! Destructor
@@ -379,7 +401,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     // if the cell list is a different size than last time, reinitialize the cell sets list
     uint3 cur_dim = this->m_cl->getDim();
 
-    if (this->m_last_dim.x != cur_dim.x || this->m_last_dim.y != cur_dim.y || this->m_last_dim.z != cur_dim.z || m_last_ntypes != this->m_pdata->getNTypes())
+    if (this->m_last_dim.x != cur_dim.x || this->m_last_dim.y != cur_dim.y || this->m_last_dim.z != cur_dim.z
+        || m_cell_lists_reinitialized)
         {
         this->initializeCellSets();
         this->initializeExcellMem();
@@ -391,8 +414,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
         this->m_last_dim = cur_dim;
         this->m_last_nmax = this->m_cl->getNmax();
-
-        this->m_last_ntypes = this->m_pdata->getNTypes();
 
         // initialize the cell set update order
         assert(this->m_pdata->getNTypes() > 0);
@@ -1365,13 +1386,23 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
 
     this->m_cl->setNominalWidth(this->m_nominal_width);
 
+    initializeCellLists();
+
     for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
         {
         m_cl_type[itype]->setNominalWidth(this->m_nominal_width);
         }
 
+    cudaDeviceSynchronize();
+    CHECK_CUDA_ERROR();
+
     // attach the parameters to the kernel stream so that they are visible
     // when other kernels are called
+    for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
+        {
+        // attach nested memory regions
+        this->m_params[i].attach_to_stream(m_stream);
+        }
 
     cudaStreamAttachMemAsync(m_stream, this->m_params.data(), 0, cudaMemAttachSingle);
     CHECK_CUDA_ERROR();
@@ -1380,12 +1411,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::updateCellWidth()
     cudaMemAdvise(this->m_params.data(), this->m_params.size()*sizeof(typename Shape::param_type), cudaMemAdviseSetReadMostly, 0);
     CHECK_CUDA_ERROR();
     #endif
-
-    for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
-        {
-        // attach nested memory regions
-        this->m_params[i].attach_to_stream(m_stream);
-        }
     }
 
 

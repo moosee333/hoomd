@@ -142,7 +142,7 @@ void ComputeFreeVolume<Shape>::computeFreeVolume(unsigned int timestep)
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    std::vector<vec3<Scalar> > image_list = this->m_mc->updateImageList();
+    auto& image_list = this->m_mc->updateImageList();
 
     if (m_prof) m_prof->push("Free volume");
 

@@ -434,7 +434,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::tryInsertParticleGibbsSampling(unsig
     if (nonzero && is_local && nptl_gibbs)
         {
         // update the image list
-        const std::vector<vec3<Scalar> >&image_list = m_mc_implicit->updateImageList();
+        auto&image_list = m_mc_implicit->updateImageList();
 
         // check for overlaps
         auto params = this->m_mc->getParams();
@@ -842,7 +842,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsInUpdatedRegion(unsign
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto&image_list = this->m_mc->updateImageList();
 
     unsigned int zero = 0;
 
@@ -1043,7 +1043,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoNewPosition(unsign
     #endif
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto&image_list = this->m_mc->updateImageList();
 
     if (is_local)
         {
@@ -1222,7 +1222,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoOldPosition(unsign
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto&image_list = this->m_mc->updateImageList();
 
     unsigned int zero = 0;
 
@@ -1453,7 +1453,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
             unsigned int err_count = 0;
 
             // update the image list
-            const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+            auto&image_list = this->m_mc->updateImageList();
 
             if (this->m_pdata->getN()+this->m_pdata->getNGhosts())
                 {
@@ -1525,7 +1525,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
                 n_free++;
 
                 // see if it overlaps with inserted particle
-                const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+                auto&image_list = this->m_mc->updateImageList();
                 for (unsigned int cur_image = 0; cur_image < image_list.size(); cur_image++)
                     {
                     Shape shape(orientation, params[type]);
@@ -1610,7 +1610,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInOldP
                 const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
                 // update the image list
-                const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+                auto&image_list = this->m_mc->updateImageList();
 
                 ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
                 ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
@@ -1677,7 +1677,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInOldP
             if (! overlap_old)
                 {
                 // see if it overlaps with re-inserted particle
-                const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+                auto&image_list = this->m_mc->updateImageList();
                 for (unsigned int cur_image = 0; cur_image < image_list.size(); cur_image++)
                     {
                     Shape shape(orientation, params[type]);
@@ -1733,7 +1733,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlaps(unsig
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto&image_list = this->m_mc->updateImageList();
 
     if (is_local)
         {
@@ -1898,7 +1898,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::boxResizeAndScale(unsigned int times
         const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
         // update the image list
-        const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+        auto&image_list = this->m_mc->updateImageList();
 
         if (this->m_prof) this->m_prof->push(this->m_exec_conf, "HPMC implicit volume move ");
 

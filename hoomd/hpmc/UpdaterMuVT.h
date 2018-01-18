@@ -1433,6 +1433,13 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
     // type
     unsigned int type = this->m_pdata->getType(tag);
 
+
+    // if not, no overlaps generated, return happily
+    if (!patch) return true;
+
+    // type
+    unsigned int type = this->m_pdata->getType(tag);
+
     // read in the current position and orientation
     quat<Scalar> orientation(m_pdata->getOrientation(tag));
 
@@ -1452,7 +1459,7 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
         const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
 
         // update the image list
-        const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
+        auto &image_list = m_mc->updateImageList();
 
         // check for overlaps
         ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
@@ -1575,7 +1582,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
     if (is_local)
         {
         // update the image list
-        const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
+        auto& image_list = m_mc->updateImageList();
 
         // check for overlaps
         auto params = m_mc->getParams();
@@ -1963,7 +1970,7 @@ bool UpdaterMuVT<Shape>::trySwitchType(unsigned int timestep, unsigned int tag, 
     const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
+    auto& image_list = m_mc->updateImageList();
 
     quat<Scalar> orientation(m_pdata->getOrientation(tag));
 
