@@ -163,21 +163,32 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
             // base class method
             IntegratorHPMCMonoImplicitNew<Shape>::slotNumTypesChange();
 
+            initializeCellLists();
+            }
+
+        virtual void initializeCellLists()
+            {
             m_cl_type.clear();
 
             for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
                 {
                 m_cl_type.push_back(std::unique_ptr<CellListGPU>(new CellListGPU(this->m_sysdef)));
+
+                // set standard cell list flags
                 m_cl_type[i]->setRadius(1);
                 m_cl_type[i]->setComputeTDB(false);
                 m_cl_type[i]->setFlagType();
                 m_cl_type[i]->setComputeIdx(true);
-                m_cl_type[i]->setFilterType(true);
                 m_cl_type[i]->setMultiple(2);
+
+                // specialize to this type
+                m_cl_type[i]->setFilterType(true);
                 m_cl_type[i]->setType(i);
+
+                // set nominal width
+                m_cl_type[i]->setNominalWidth(this->m_nominal_width);
                 }
             }
-
     };
 
 /*! \param sysdef System definition
@@ -306,7 +317,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
         }
 
     // initialize cell lists
-    slotNumTypesChange();
+    initializeCellLists();
     }
 
 //! Destructor
