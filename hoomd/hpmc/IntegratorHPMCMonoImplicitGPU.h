@@ -548,7 +548,6 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                         d_cell_idx.data,
                         d_cell_size.data,
                         d_excell_idx.data,
-                        0, // cell set
                         0, // overlap
                         d_excell_size.data,
                         this->m_cl->getCellIndexer(),

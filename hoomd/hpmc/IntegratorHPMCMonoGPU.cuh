@@ -44,7 +44,6 @@ struct hpmc_args_t
                 const unsigned int *_d_cell_idx,
                 const unsigned int *_d_cell_size,
                 const unsigned int *_d_excell_idx,
-                const unsigned int *_d_excell_cell_set,
                 unsigned int *_d_excell_overlap,
                 const unsigned int *_d_excell_size,
                 const Index3D& _ci,
@@ -94,6 +93,7 @@ struct hpmc_args_t
                 unsigned int *_d_trial_updated = 0,
                 unsigned int *_d_trial_move_type_translate = 0,
                 unsigned int *_d_update_order = 0,
+                unsigned int *_d_cell_set_by_ptl = 0,
                 unsigned int _cur_set = 0,
                 Index2D _csi = Index2D())
                 : d_postype(_d_postype),
@@ -102,7 +102,6 @@ struct hpmc_args_t
                   d_cell_idx(_d_cell_idx),
                   d_cell_size(_d_cell_size),
                   d_excell_idx(_d_excell_idx),
-                  d_excell_cell_set(_d_excell_cell_set),
                   d_excell_overlap(_d_excell_overlap),
                   d_excell_size(_d_excell_size),
                   ci(_ci),
@@ -152,6 +151,7 @@ struct hpmc_args_t
                   d_trial_updated(_d_trial_updated),
                   d_trial_move_type_translate(_d_trial_move_type_translate),
                   d_update_order(_d_update_order),
+                  d_cell_set_by_ptl(_d_cell_set_by_ptl),
                   cur_set(_cur_set),
                   csi(_csi)
         {
@@ -163,7 +163,6 @@ struct hpmc_args_t
     const unsigned int *d_cell_idx;   //!< Index data for each cell
     const unsigned int *d_cell_size;  //!< Number of particles in each cell
     const unsigned int *d_excell_idx; //!< Index data for each expanded cell
-    const unsigned int *d_excell_cell_set; //!< active cell set for each expanded cell
     unsigned int *d_excell_overlap;   //!< Per-neighbor overlap flag, ==1 if overlap in old config, ==2 if overlap in new config
     const unsigned int *d_excell_size;//!< Number of particles in each expanded cell
     const Index3D& ci;                //!< Cell indexer
@@ -213,6 +212,7 @@ struct hpmc_args_t
     unsigned int *d_trial_updated;    //!< ==1 if this particle has been moved
     unsigned int *d_trial_move_type_translate;  //!< per cell flag, whether it is a translation or rotation (UINT_MAX if no move)
     unsigned int *d_update_order;     //!< The update sequence of cell sets
+    unsigned int *d_cell_set_by_ptl;  //!< Lookup of active cell set by ptl index
     unsigned int cur_set;             //!< the current active cell set
     Index2D csi;                      //!< The cell set indexer
     };
@@ -228,17 +228,13 @@ cudaError_t gpu_hpmc_excell(unsigned int *d_excell_idx,
                             const Index2D& cadji,
                             const unsigned int block_size);
 
-cudaError_t gpu_hpmc_excell_and_cell_set(unsigned int *d_inverse_cell_set,
-                            unsigned int *d_excell_idx,
-                            unsigned int *d_excell_cell_set,
-                            unsigned int *d_excell_size,
-                            const Index2D& excli,
+cudaError_t gpu_hpmc_cell_set_lookup(
+                            unsigned int *d_inverse_cell_set,
+                            unsigned int *d_cell_set_by_ptl,
                             const unsigned int *d_cell_idx,
                             const unsigned int *d_cell_size,
-                            const unsigned int *d_cell_adj,
                             const Index3D& ci,
                             const Index2D& cli,
-                            const Index2D& cadji,
                             const unsigned int block_size);
 
 template< class Shape >
@@ -1390,7 +1386,6 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                                      const unsigned int *d_cell_idx,
                                      const unsigned int *d_cell_size,
                                      const unsigned int *d_excell_idx,
-                                     const unsigned int *d_excell_cell_set,
                                      unsigned int *d_excell_overlap,
                                      const unsigned int *d_excell_size,
                                      const Index3D ci,
@@ -1431,7 +1426,8 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                                      Scalar4 *d_trial_orientation,
                                      const unsigned int *d_trial_updated,
                                      const unsigned int *d_trial_move_type_translate,
-                                     const unsigned int *d_update_order
+                                     const unsigned int *d_update_order,
+                                     const unsigned int *d_cell_set_by_ptl
                                      )
     {
     // flags to tell what type of thread we are
@@ -1655,7 +1651,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                 {
                 #if (__CUDA_ARCH__ > 300)
                 next_j = __ldg(&d_excell_idx[excli(k, my_cell)]);
-                next_cell_set = __ldg(&d_excell_cell_set[excli(k,my_cell)]);
+                next_cell_set = __ldg(&d_cell_set_by_ptl[next_j]);
                 #endif
                 }
 
@@ -1693,7 +1689,7 @@ __global__ void gpu_hpmc_schedule_overlaps_kernel(Scalar4 *d_postype,
                         {
                         #if (__CUDA_ARCH__ > 300)
                         next_j = __ldg(&d_excell_idx[excli(k,my_cell)]);
-                        next_cell_set = __ldg(&d_excell_cell_set[excli(k,my_cell)]);
+                        next_cell_set = __ldg(&d_cell_set_by_ptl[next_j]);
                         #endif
                         }
 
@@ -1989,7 +1985,6 @@ __global__ void gpu_hpmc_accept_kernel(Scalar4 *d_postype,
                                      const unsigned int *d_cell_idx,
                                      const unsigned int *d_cell_size,
                                      const unsigned int *d_excell_idx,
-                                     const unsigned int *d_excell_cell_set,
                                      const unsigned int *d_excell_overlap,
                                      const unsigned int *d_excell_size,
                                      const Index3D ci,
@@ -2018,6 +2013,7 @@ __global__ void gpu_hpmc_accept_kernel(Scalar4 *d_postype,
                                      unsigned int cur_set,
                                      unsigned int max_queue_size,
                                      const unsigned int *d_update_order,
+                                     const unsigned int *d_cell_set_by_ptl,
                                      unsigned int *d_active_cell_ptl_idx,
                                      unsigned int *d_active_cell_accept,
                                      unsigned int *d_active_cell_move_type_translate)
@@ -2267,14 +2263,13 @@ __global__ void gpu_hpmc_accept_kernel(Scalar4 *d_postype,
             unsigned int check_group = s_queue_gid[tidx_1d];
             unsigned int check_excell_idx = s_queue_excell_idx[tidx_1d];
             unsigned int check_j = d_excell_idx[check_excell_idx];
-            bool j_has_been_updated = d_trial_updated[check_j];
+            bool j_has_been_updated = d_trial_updated[check_j] &&
+                d_update_order[d_cell_set_by_ptl[check_j]] < cur_update_order;
 
             unsigned int excell_overlap = d_excell_overlap[check_excell_idx];
-            unsigned int check_update_order = d_update_order[d_excell_cell_set[check_excell_idx]];
 
-            bool check_against_new_j = j_has_been_updated && check_update_order < cur_update_order;
-            if ( (check_against_new_j && (excell_overlap & OVERLAP_IN_NEW_CONFIG))
-                ||  (!check_against_new_j && (excell_overlap & OVERLAP_IN_OLD_CONFIG)))
+            if ( (j_has_been_updated && (excell_overlap & OVERLAP_IN_NEW_CONFIG))
+                ||  (!j_has_been_updated && (excell_overlap & OVERLAP_IN_OLD_CONFIG)))
                 {
                 // flag for overlap
                 atomicAdd(&s_overlap[check_group],1);
@@ -2510,7 +2505,6 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
                                                                  args.d_cell_idx,
                                                                  args.d_cell_size,
                                                                  args.d_excell_idx,
-                                                                 args.d_excell_cell_set,
                                                                  args.d_excell_overlap,
                                                                  args.d_excell_size,
                                                                  args.ci,
@@ -2551,7 +2545,8 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
                                                                  args.d_trial_orientation,
                                                                  args.d_trial_updated,
                                                                  args.d_trial_move_type_translate,
-                                                                 args.d_update_order);
+                                                                 args.d_update_order,
+                                                                 args.d_cell_set_by_ptl);
 
     return cudaSuccess;
     }
@@ -2636,7 +2631,6 @@ cudaError_t gpu_hpmc_accept(const hpmc_args_t& args, const typename Shape::param
                                                                  args.d_cell_idx,
                                                                  args.d_cell_size,
                                                                  args.d_excell_idx,
-                                                                 args.d_excell_cell_set,
                                                                  args.d_excell_overlap,
                                                                  args.d_excell_size,
                                                                  args.ci,
@@ -2665,6 +2659,7 @@ cudaError_t gpu_hpmc_accept(const hpmc_args_t& args, const typename Shape::param
                                                                  args.cur_set,
                                                                  max_queue_size,
                                                                  args.d_update_order,
+                                                                 args.d_cell_set_by_ptl,
                                                                  args.d_active_cell_ptl_idx,
                                                                  args.d_active_cell_accept,
                                                                  args.d_active_cell_move_type_translate);
