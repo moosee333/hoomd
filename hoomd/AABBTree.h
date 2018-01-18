@@ -120,10 +120,10 @@ class AABBTree
         DEVICE inline void update(unsigned int idx, const AABB& aabb);
 
         //! Get the height of a given particle's leaf node
-        inline unsigned int height(unsigned int idx);
+        DEVICE inline unsigned int height(unsigned int idx);
 
         //! Get the number of nodes
-        inline unsigned int getNumNodes() const
+        DEVICE inline unsigned int getNumNodes() const
             {
             return m_num_nodes;
             }
@@ -218,6 +218,7 @@ class AABBTree
     };
 
 
+#ifndef NVCC
 /*! \param N Number of particles to allocate space for
 
     Initialize the tree with room for N particles.
@@ -273,7 +274,7 @@ inline unsigned int AABBTree::query(std::vector<unsigned int>& hits, const AABB&
 
     return box_overlap_counts;
     }
-
+#endif
 
 /*! \param idx Particle index to update
     \param aabb New AABB for particle *idx*
@@ -281,7 +282,7 @@ inline unsigned int AABBTree::query(std::vector<unsigned int>& hits, const AABB&
     Update the node for particle *idx* and its parent nodes to reflect a new position and/or extents. update() does not
     change the tree topology, so it is best for slight changes.
 */
-inline void AABBTree::update(unsigned int idx, const AABB& aabb)
+DEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
     {
     assert(idx < m_mapping.size());
 
@@ -310,7 +311,7 @@ inline void AABBTree::update(unsigned int idx, const AABB& aabb)
 /*! \param idx Particle to get height for
     \returns Height of the node
 */
-inline unsigned int AABBTree::height(unsigned int idx)
+DEVICE inline unsigned int AABBTree::height(unsigned int idx)
     {
     assert(idx < m_mapping.size());
 
@@ -335,6 +336,7 @@ inline unsigned int AABBTree::height(unsigned int idx)
     }
 
 
+#ifndef NVCC
 /*! \param aabbs List of AABBs for each particle (must be 32-byte aligned)
     \param N Number of AABBs in the list
 
@@ -559,6 +561,7 @@ inline unsigned int AABBTree::allocateNode()
     m_num_nodes++;
     return m_num_nodes-1;
     }
+#endif
 
 // end group overlap
 /*! @}*/
