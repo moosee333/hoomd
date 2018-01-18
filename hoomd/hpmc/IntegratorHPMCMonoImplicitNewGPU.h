@@ -139,6 +139,8 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         GPUArray<unsigned int> m_queue_excell_idx;              //!< Queue of excell indices of neighbors
         GPUArray<unsigned int> m_cell_overlaps;                 //!< Result of queue overlap checks
 
+        bool m_cell_lists_reinitialized;                        //!< True if we just initialized the cell lists
+
         //! Take one timestep forward
         virtual void update(unsigned int timestep);
 
@@ -168,6 +170,10 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
 
         virtual void initializeCellLists()
             {
+            // don't do the expensive reinitialization if not necessary
+            if (m_last_ntypes == this->m_pdata->getNTypes())
+                return;
+
             m_cl_type.clear();
 
             for (unsigned int i = 0; i < this->m_pdata->getNTypes(); ++i)
@@ -188,7 +194,11 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
                 // set nominal width
                 m_cl_type[i]->setNominalWidth(this->m_nominal_width);
                 }
+
+            m_cell_lists_reinitialized = true;
+            m_last_ntypes = this->m_pdata->getNTypes();
             }
+
     };
 
 /*! \param sysdef System definition
@@ -216,6 +226,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     m_last_dim = make_uint3(0xffffffff, 0xffffffff, 0xffffffff);
     m_last_nmax = 0xffffffff;
     m_last_ntypes = UINT_MAX;
+    m_cell_lists_reinitialized = false;
 
     GPUArray<unsigned int> excell_size(0, this->m_exec_conf);
     m_excell_size.swap(excell_size);
@@ -390,7 +401,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     // if the cell list is a different size than last time, reinitialize the cell sets list
     uint3 cur_dim = this->m_cl->getDim();
 
-    if (this->m_last_dim.x != cur_dim.x || this->m_last_dim.y != cur_dim.y || this->m_last_dim.z != cur_dim.z || m_last_ntypes != this->m_pdata->getNTypes())
+    if (this->m_last_dim.x != cur_dim.x || this->m_last_dim.y != cur_dim.y || this->m_last_dim.z != cur_dim.z
+        || m_cell_lists_reinitialized)
         {
         this->initializeCellSets();
         this->initializeExcellMem();
@@ -402,8 +414,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
         this->m_last_dim = cur_dim;
         this->m_last_nmax = this->m_cl->getNmax();
-
-        this->m_last_ntypes = this->m_pdata->getNTypes();
 
         // initialize the cell set update order
         assert(this->m_pdata->getNTypes() > 0);
