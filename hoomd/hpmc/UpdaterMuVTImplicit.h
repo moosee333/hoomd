@@ -502,7 +502,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsInUpdatedRegion(unsign
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto& image_list = this->m_mc->updateImageList();
 
     unsigned int zero = 0;
 
@@ -706,7 +706,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoNewPosition(unsign
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto &image_list = this->m_mc->updateImageList();
 
     if (is_local)
         {
@@ -879,7 +879,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::moveDepletantsIntoOldPosition(unsign
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto& image_list = this->m_mc->updateImageList();
 
     unsigned int zero = 0;
 
@@ -1076,7 +1076,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlapsInNewP
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto& image_list = this->m_mc->updateImageList();
 
     n_free = 0;
 
@@ -1237,7 +1237,7 @@ unsigned int UpdaterMuVTImplicit<Shape,Integrator>::countDepletantOverlaps(unsig
     const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+    auto& image_list = this->m_mc->updateImageList();
 
     if (is_local)
         {
@@ -1399,7 +1399,7 @@ bool UpdaterMuVTImplicit<Shape,Integrator>::boxResizeAndScale(unsigned int times
         const detail::AABBTree& aabb_tree = this->m_mc->buildAABBTree();
 
         // update the image list
-        const std::vector<vec3<Scalar> >&image_list = this->m_mc->updateImageList();
+        auto& image_list = this->m_mc->updateImageList();
 
         if (this->m_prof) this->m_prof->push(this->m_exec_conf, "HPMC implicit volume move ");
 

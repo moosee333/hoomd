@@ -1282,7 +1282,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
     const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
+    auto &image_list = m_mc->updateImageList();
 
     // check for overlaps
     ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
@@ -1394,7 +1394,7 @@ bool UpdaterMuVT<Shape>::trySwitchType(unsigned int timestep, unsigned int tag, 
     const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
 
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
+    auto &image_list = m_mc->updateImageList();
 
     quat<Scalar> orientation(m_pdata->getOrientation(tag));
 

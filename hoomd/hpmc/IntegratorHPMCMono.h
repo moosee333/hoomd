@@ -276,7 +276,14 @@ class IntegratorHPMCMono : public IntegratorHPMC
         const detail::AABBTree& buildAABBTree();
 
         //! Make list of image indices for boxes to check in small-box mode
-        const std::vector<vec3<Scalar> >& updateImageList();
+        const ManagedArray<vec3<Scalar> >& updateImageList();
+
+        //! Return list of integer shift vectors for periodic images
+        const ManagedArray<int3>& getImageHKL()
+            {
+            updateImageList();
+            return m_image_hkl;
+            }
 
         //! Method to be called when number of types changes
         virtual void slotNumTypesChange();
@@ -298,7 +305,8 @@ class IntegratorHPMCMono : public IntegratorHPMC
         detail::UpdateOrder m_update_order;         //!< Update order
         bool m_image_list_is_initialized;                    //!< true if image list has been used
         bool m_image_list_valid;                             //!< image list is invalid if the box dimensions or particle parameters have changed.
-        std::vector<vec3<Scalar> > m_image_list;             //!< List of potentially interacting simulation box images
+        ManagedArray<vec3<Scalar> > m_image_list;             //!< List of potentially interacting simulation box images
+        ManagedArray<int3> m_image_hkl;                      //!< List of potentially interacting simulation box images (integer shifts)
         unsigned int m_image_list_rebuilds;                  //!< Number of times the image list has been rebuilt
         bool m_image_list_warning_issued;                    //!< True if the image list warning has been issued
         bool m_hkl_max_warning_issued;                       //!< True if the image list size warning has been issued
@@ -887,7 +895,7 @@ void IntegratorHPMCMono<Shape>::setOverlapChecks(unsigned int typi, unsigned int
 
 //! Calculate a list of box images within interaction range of the simulation box, innermost first
 template <class Shape>
-inline const std::vector<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImageList()
+inline const ManagedArray<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImageList()
     {
     // cancel if the image list is up to date
     if (m_image_list_valid)
@@ -904,7 +912,6 @@ inline const std::vector<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImageL
 
     m_image_list_valid = true;
     m_image_list_is_initialized = true;
-    m_image_list.clear();
     m_image_list_rebuilds++;
 
     // Get box vectors
@@ -947,6 +954,9 @@ inline const std::vector<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImageL
     Scalar range_sq = range*range;
 
     // initialize loop
+    std::vector<vec3<Scalar> > images;
+    std::vector<int3> image_hkl;
+
     int3 hkl;
     bool added_images = true;
     int hkl_max = 0;
@@ -990,7 +1000,8 @@ inline const std::vector<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImageL
                         if (dot(r,r) <= range_sq)
                             {
                             vec3<Scalar> img = (Scalar)hkl.x*e1+(Scalar)hkl.y*e2+(Scalar)hkl.z*e3;
-                            m_image_list.push_back(img);
+                            images.push_back(img);
+                            image_hkl.push_back(make_int3(hkl.x, hkl.y, hkl.z));
                             added_images = true;
                             }
                         }
@@ -1008,6 +1019,16 @@ inline const std::vector<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImageL
             }
 
         hkl_max++;
+        }
+
+    // create a new image list, copy over
+    m_image_list = ManagedArray<vec3<Scalar> >(images.size(), m_exec_conf->isCUDAEnabled());
+    m_image_hkl = ManagedArray<int3 >(image_hkl.size(), m_exec_conf->isCUDAEnabled());
+
+    for (unsigned int i = 0; i < images.size(); ++i)
+        {
+        m_image_list[i] = images[i];
+        m_image_hkl[i] = image_hkl[i];
         }
 
     // cout << "built image list" << std::endl;

@@ -333,7 +333,7 @@ void AnalyzerSDF<Shape>::countHistogram(unsigned int timestep)
     // update the aabb tree
     const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
     // update the image list
-    const std::vector<vec3<Scalar> >&image_list = m_mc->updateImageList();
+    auto& image_list = m_mc->updateImageList();
 
     Scalar extra_width = m_lmax / (1 - m_lmax) * m_mc->getMaxDiameter();
 
