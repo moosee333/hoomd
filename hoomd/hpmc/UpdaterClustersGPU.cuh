@@ -1,8 +1,8 @@
 // Copyright (c) 2009-2017 The Regents of the University of Michigan
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
-#ifndef _UPDATER_MUVT_GPU_CUH_
-#define _UPDATER_MUVT_GPU_CUH_
+#ifndef _UPDATER_CLUSTERS_GPU_CUH_
+#define _UPDATER_CLUSTERS_GPU_CUH_
 
 #include "HPMCPrecisionSetup.h"
 
@@ -521,5 +521,5 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
 
 } // end namespace hpmc
 
-#endif // _UPDATER_MUVT_GPU_CUH_
+#endif // _UPDATER_CLUSTERS_GPU_CUH_
 
