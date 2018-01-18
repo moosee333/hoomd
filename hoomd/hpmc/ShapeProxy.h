@@ -498,13 +498,13 @@ public:
     //!Ignore flag for acceptance statistics
     bool getIgnoreStatistics() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return (m_access(params[m_typeid]).ignore & IGNORE_STATS);
         }
 
     void setIgnoreStatistics(bool stat)
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         if(stat)    m_access(params[m_typeid]).ignore |= IGNORE_STATS;
         else        m_access(params[m_typeid]).ignore &= ~IGNORE_STATS;
         }
@@ -529,13 +529,13 @@ public:
 
     OverlapReal getDiameter()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return OverlapReal(2.0)*m_access(params[m_typeid]).radius;
         }
 
     bool getOrientable()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).isOriented;
         }
 };
@@ -554,19 +554,19 @@ public:
 
     OverlapReal getX()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).x;
         }
 
     OverlapReal getY()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).y;
         }
 
     OverlapReal getZ()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).z;
         }
 };
@@ -585,13 +585,13 @@ public:
 
     pybind11::list getVerts() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return poly2d_verts_to_python(m_access(params[m_typeid]));
         }
 
     OverlapReal getSweepRadius() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).sweep_radius;
         }
 };
@@ -610,13 +610,13 @@ public:
 
     pybind11::list getVerts() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return poly3d_verts_to_python(m_access(params[m_typeid]));
         }
 
     OverlapReal getSweepRadius() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).sweep_radius;
         }
 
@@ -636,8 +636,8 @@ public:
 
     pybind11::list getVerts()
         {
-        auto params = m_mc->getParams();
-        access_type& param = m_access(params[m_typeid]);
+        auto& params = m_mc->getParams();
+        const access_type& param = m_access(params[m_typeid]);
 
         pybind11::list verts;
         for(size_t i = 0; i < param.n_verts; i++)
@@ -655,7 +655,7 @@ public:
         {
         pybind11::list faces;
         // populate faces.
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         for(size_t i = 0; i < param.n_faces; i++)
             {
@@ -671,7 +671,7 @@ public:
 
     pybind11::list getOverlap()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list overlap;
         for(size_t i = 0; i < param.n_faces; i++)
@@ -681,26 +681,26 @@ public:
 
     pybind11::tuple getOrigin()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         vec3<OverlapReal> origin(m_access(params[m_typeid]).origin);
         return pybind11::make_tuple(origin.x, origin.y, origin.z);
         }
 
     OverlapReal getSweepRadius() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).sweep_radius;
         }
 
     unsigned int getCapacity() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).tree.getLeafNodeCapacity();
         }
 
     bool getHullOnly() const
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return m_access(params[m_typeid]).hull_only;
         }
 
@@ -722,13 +722,13 @@ public:
 
     pybind11::list getVerts()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         return poly3d_verts_to_python(m_access(params[m_typeid]).verts);
         }
 
     pybind11::list getNormals()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list normals;
         for(size_t i = 0; i < param.N; i++ ) normals.append(vec3_to_python(param.n[i]));
@@ -737,21 +737,21 @@ public:
 
     pybind11::list getOrigin()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         return vec3_to_python(param.origin);
         }
 
     OverlapReal getDiameter()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         return param.diameter;
         }
 
     pybind11::list getOffsets()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list offsets;
         for(size_t i = 0; i < param.N; i++) offsets.append(pybind11::cast<Scalar>(param.offset[i]));
@@ -775,7 +775,7 @@ public:
 
     pybind11::list getCenters()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list centers;
         for(size_t i = 0; i < param.N; i++) centers.append(vec3_to_python(param.center[i]));
@@ -784,7 +784,7 @@ public:
 
     pybind11::list getDiameters()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list diams;
         for(size_t i = 0; i < param.N; i++) diams.append(pybind11::cast<Scalar>(param.diameter[i]));
@@ -793,7 +793,7 @@ public:
 
     OverlapReal getCircumsphereDiameter()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         return param.circumsphereDiameter;
         }
@@ -847,7 +847,7 @@ public:
         {}
     pybind11::list getPositions()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list pos;
         for(size_t i = 0; i < param.N; i++) pos.append(vec3_to_python(param.mpos[i]));
@@ -856,7 +856,7 @@ public:
 
     pybind11::list getOrientations()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list orient;
         for(size_t i = 0; i < param.N; i++)
@@ -866,7 +866,7 @@ public:
 
     std::vector< std::shared_ptr< proxy_type > > getMembers()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         std::vector< std::shared_ptr< proxy_type > > members;
         for(size_t i = 0; i < param.N; i++)
@@ -880,7 +880,7 @@ public:
 
     pybind11::list getOverlap()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         pybind11::list overlap;
         for(size_t i = 0; i < param.N; i++)
@@ -891,7 +891,7 @@ public:
 
     OverlapReal getDiameter()
         {
-        auto params = m_mc->getParams();
+        auto& params = m_mc->getParams();
         access_type& param = m_access(params[m_typeid]);
         return param.diameter;
         }
