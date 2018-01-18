@@ -879,88 +879,119 @@ class clusters(_updater):
         # initialize base class
         _updater.__init__(self);
 
-        if not mc.implicit:
+        if not hoomd.context.exec_conf.isCUDAEnabled():
+            if not mc.implicit:
+                if isinstance(mc, integrate.sphere):
+                   cls = _hpmc.UpdaterClustersSphere;
+                elif isinstance(mc, integrate.convex_polygon):
+                    cls = _hpmc.UpdaterClustersConvexPolygon;
+                elif isinstance(mc, integrate.simple_polygon):
+                    cls = _hpmc.UpdaterClustersSimplePolygon;
+                elif isinstance(mc, integrate.convex_polyhedron):
+                    cls = _hpmc.UpdaterClustersConvexPolyhedron;
+                elif isinstance(mc, integrate.convex_spheropolyhedron):
+                    cls = _hpmc.UpdaterClustersSpheropolyhedron;
+                elif isinstance(mc, integrate.ellipsoid):
+                    cls = _hpmc.UpdaterClustersEllipsoid;
+                elif isinstance(mc, integrate.convex_spheropolygon):
+                    cls =_hpmc.UpdaterClustersSpheropolygon;
+                elif isinstance(mc, integrate.faceted_sphere):
+                    cls =_hpmc.UpdaterClustersFacetedSphere;
+                elif isinstance(mc, integrate.sphere_union):
+                    cls =_hpmc.UpdaterClustersSphereUnion;
+                elif isinstance(mc, integrate.convex_polyhedron_union):
+                    cls =_hpmc.UpdaterClustersConvexPolyhedronUnion;
+                elif isinstance(mc, integrate.polyhedron):
+                    cls =_hpmc.UpdaterClustersPolyhedron;
+                elif isinstance(mc, integrate.sphinx):
+                    cls =_hpmc.UpdaterClustersSphinx;
+                else:
+                    raise RuntimeError("Unsupported integrator.\n");
+            else:
+                if mc.depletant_mode == 'overlap_regions':
+                    if isinstance(mc, integrate.sphere):
+                       cls = _hpmc.UpdaterClustersImplicitNewSphere;
+                    elif isinstance(mc, integrate.convex_polygon):
+                        cls = _hpmc.UpdaterClustersImplicitNewConvexPolygon;
+                    elif isinstance(mc, integrate.simple_polygon):
+                        cls = _hpmc.UpdaterClustersImplicitNewSimplePolygon;
+                    elif isinstance(mc, integrate.convex_polyhedron):
+                        cls = _hpmc.UpdaterClustersImplicitNewConvexPolyhedron;
+                    elif isinstance(mc, integrate.convex_spheropolyhedron):
+                        cls = _hpmc.UpdaterClustersImplicitNewSpheropolyhedron;
+                    elif isinstance(mc, integrate.ellipsoid):
+                        cls = _hpmc.UpdaterClustersImplicitNewEllipsoid;
+                    elif isinstance(mc, integrate.convex_spheropolygon):
+                        cls =_hpmc.UpdaterClustersImplicitNewSpheropolygon;
+                    elif isinstance(mc, integrate.faceted_sphere):
+                        cls =_hpmc.UpdaterClustersImplicitNewFacetedSphere;
+                    elif isinstance(mc, integrate.sphere_union):
+                        cls =_hpmc.UpdaterClustersImplicitNewSphereUnion;
+                    elif isinstance(mc, integrate.convex_polyhedron_union):
+                        cls =_hpmc.UpdaterClustersImplicitNewConvexPolyhedronUnion;
+                    elif isinstance(mc, integrate.polyhedron):
+                        cls =_hpmc.UpdaterClustersImplicitNewPolyhedron;
+                    elif isinstance(mc, integrate.sphinx):
+                        cls =_hpmc.UpdaterClustersImplicitNewSphinx;
+                    else:
+                        raise RuntimeError("Unsupported integrator.\n");
+                else:
+                    if isinstance(mc, integrate.sphere):
+                       cls = _hpmc.UpdaterClustersImplicitSphere;
+                    elif isinstance(mc, integrate.convex_polygon):
+                        cls = _hpmc.UpdaterClustersImplicitConvexPolygon;
+                    elif isinstance(mc, integrate.simple_polygon):
+                        cls = _hpmc.UpdaterClustersImplicitSimplePolygon;
+                    elif isinstance(mc, integrate.convex_polyhedron):
+                        cls = _hpmc.UpdaterClustersImplicitConvexPolyhedron;
+                    elif isinstance(mc, integrate.convex_spheropolyhedron):
+                        cls = _hpmc.UpdaterClustersImplicitSpheropolyhedron;
+                    elif isinstance(mc, integrate.ellipsoid):
+                        cls = _hpmc.UpdaterClustersImplicitEllipsoid;
+                    elif isinstance(mc, integrate.convex_spheropolygon):
+                        cls =_hpmc.UpdaterClustersImplicitSpheropolygon;
+                    elif isinstance(mc, integrate.faceted_sphere):
+                        cls =_hpmc.UpdaterClustersImplicitFacetedSphere;
+                    elif isinstance(mc, integrate.sphere_union):
+                        cls =_hpmc.UpdaterClustersImplicitSphereUnion;
+                    elif isinstance(mc, integrate.convex_polyhedron_union):
+                        cls =_hpmc.UpdaterClustersImplicitConvexPolyhedronUnion;
+                    elif isinstance(mc, integrate.polyhedron):
+                        cls =_hpmc.UpdaterClustersImplicitPolyhedron;
+                    elif isinstance(mc, integrate.sphinx):
+                        cls =_hpmc.UpdaterClustersImplicitSphinx;
+                    else:
+                        raise RuntimeError("Unsupported integrator.\n");
+        else:
+            if mc.implicit:
+                hoomd.context.msg.warning("update.clusters(): Depletants not supported on GPU. Reverting to base class for now....\n");
+
             if isinstance(mc, integrate.sphere):
-               cls = _hpmc.UpdaterClustersSphere;
+               cls = _hpmc.UpdaterClustersGPUSphere;
             elif isinstance(mc, integrate.convex_polygon):
-                cls = _hpmc.UpdaterClustersConvexPolygon;
+                cls = _hpmc.UpdaterClustersGPUConvexPolygon;
             elif isinstance(mc, integrate.simple_polygon):
-                cls = _hpmc.UpdaterClustersSimplePolygon;
+                cls = _hpmc.UpdaterClustersGPUSimplePolygon;
             elif isinstance(mc, integrate.convex_polyhedron):
-                cls = _hpmc.UpdaterClustersConvexPolyhedron;
+                cls = _hpmc.UpdaterClustersGPUConvexPolyhedron;
             elif isinstance(mc, integrate.convex_spheropolyhedron):
-                cls = _hpmc.UpdaterClustersSpheropolyhedron;
+                cls = _hpmc.UpdaterClustersGPUSpheropolyhedron;
             elif isinstance(mc, integrate.ellipsoid):
-                cls = _hpmc.UpdaterClustersEllipsoid;
+                cls = _hpmc.UpdaterClustersGPUEllipsoid;
             elif isinstance(mc, integrate.convex_spheropolygon):
-                cls =_hpmc.UpdaterClustersSpheropolygon;
+                cls =_hpmc.UpdaterClustersGPUSpheropolygon;
             elif isinstance(mc, integrate.faceted_sphere):
-                cls =_hpmc.UpdaterClustersFacetedSphere;
+                cls =_hpmc.UpdaterClustersGPUFacetedSphere;
             elif isinstance(mc, integrate.sphere_union):
-                cls =_hpmc.UpdaterClustersSphereUnion;
+                cls =_hpmc.UpdaterClustersGPUSphereUnion;
             elif isinstance(mc, integrate.convex_polyhedron_union):
-                cls =_hpmc.UpdaterClustersConvexPolyhedronUnion;
+                cls =_hpmc.UpdaterClustersGPUConvexPolyhedronUnion;
             elif isinstance(mc, integrate.polyhedron):
-                cls =_hpmc.UpdaterClustersPolyhedron;
+                cls =_hpmc.UpdaterClustersGPUPolyhedron;
             elif isinstance(mc, integrate.sphinx):
-                cls =_hpmc.UpdaterClustersSphinx;
+                cls =_hpmc.UpdaterClustersGPUSphinx;
             else:
                 raise RuntimeError("Unsupported integrator.\n");
-        else:
-            if mc.depletant_mode == 'overlap_regions':
-                if isinstance(mc, integrate.sphere):
-                   cls = _hpmc.UpdaterClustersImplicitNewSphere;
-                elif isinstance(mc, integrate.convex_polygon):
-                    cls = _hpmc.UpdaterClustersImplicitNewConvexPolygon;
-                elif isinstance(mc, integrate.simple_polygon):
-                    cls = _hpmc.UpdaterClustersImplicitNewSimplePolygon;
-                elif isinstance(mc, integrate.convex_polyhedron):
-                    cls = _hpmc.UpdaterClustersImplicitNewConvexPolyhedron;
-                elif isinstance(mc, integrate.convex_spheropolyhedron):
-                    cls = _hpmc.UpdaterClustersImplicitNewSpheropolyhedron;
-                elif isinstance(mc, integrate.ellipsoid):
-                    cls = _hpmc.UpdaterClustersImplicitNewEllipsoid;
-                elif isinstance(mc, integrate.convex_spheropolygon):
-                    cls =_hpmc.UpdaterClustersImplicitNewSpheropolygon;
-                elif isinstance(mc, integrate.faceted_sphere):
-                    cls =_hpmc.UpdaterClustersImplicitNewFacetedSphere;
-                elif isinstance(mc, integrate.sphere_union):
-                    cls =_hpmc.UpdaterClustersImplicitNewSphereUnion;
-                elif isinstance(mc, integrate.convex_polyhedron_union):
-                    cls =_hpmc.UpdaterClustersImplicitNewConvexPolyhedronUnion;
-                elif isinstance(mc, integrate.polyhedron):
-                    cls =_hpmc.UpdaterClustersImplicitNewPolyhedron;
-                elif isinstance(mc, integrate.sphinx):
-                    cls =_hpmc.UpdaterClustersImplicitNewSphinx;
-                else:
-                    raise RuntimeError("Unsupported integrator.\n");
-            else:
-                if isinstance(mc, integrate.sphere):
-                   cls = _hpmc.UpdaterClustersImplicitSphere;
-                elif isinstance(mc, integrate.convex_polygon):
-                    cls = _hpmc.UpdaterClustersImplicitConvexPolygon;
-                elif isinstance(mc, integrate.simple_polygon):
-                    cls = _hpmc.UpdaterClustersImplicitSimplePolygon;
-                elif isinstance(mc, integrate.convex_polyhedron):
-                    cls = _hpmc.UpdaterClustersImplicitConvexPolyhedron;
-                elif isinstance(mc, integrate.convex_spheropolyhedron):
-                    cls = _hpmc.UpdaterClustersImplicitSpheropolyhedron;
-                elif isinstance(mc, integrate.ellipsoid):
-                    cls = _hpmc.UpdaterClustersImplicitEllipsoid;
-                elif isinstance(mc, integrate.convex_spheropolygon):
-                    cls =_hpmc.UpdaterClustersImplicitSpheropolygon;
-                elif isinstance(mc, integrate.faceted_sphere):
-                    cls =_hpmc.UpdaterClustersImplicitFacetedSphere;
-                elif isinstance(mc, integrate.sphere_union):
-                    cls =_hpmc.UpdaterClustersImplicitSphereUnion;
-                elif isinstance(mc, integrate.convex_polyhedron_union):
-                    cls =_hpmc.UpdaterClustersImplicitConvexPolyhedronUnion;
-                elif isinstance(mc, integrate.polyhedron):
-                    cls =_hpmc.UpdaterClustersImplicitPolyhedron;
-                elif isinstance(mc, integrate.sphinx):
-                    cls =_hpmc.UpdaterClustersImplicitSphinx;
-                else:
-                    raise RuntimeError("Unsupported integrator.\n");
 
         self.cpp_updater = cls(hoomd.context.current.system_definition, mc.cpp_integrator, int(seed))
 

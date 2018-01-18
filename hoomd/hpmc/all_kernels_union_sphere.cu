@@ -2,6 +2,7 @@
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
 #include "ComputeFreeVolumeGPU.cuh"
+#include "UpdaterClustersGPU.cuh"
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
@@ -16,6 +17,8 @@ namespace detail
 
 //! HPMC kernels for ShapeUnion<ShapeSphere>
 template cudaError_t gpu_hpmc_free_volume<ShapeUnion<ShapeSphere> >(const hpmc_free_volume_args_t &args,
+                                                       const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters<ShapeUnion<ShapeSphere> >(const hpmc_clusters_args_t &args,
                                                        const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeUnion<ShapeSphere> >(const hpmc_args_t& args,
                                                   const typename ShapeUnion<ShapeSphere> ::param_type *d_params);

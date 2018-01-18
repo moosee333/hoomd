@@ -30,6 +30,7 @@
 #include "IntegratorHPMCMonoImplicitGPU.h"
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
+#include "UpdaterClustersGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -68,6 +69,7 @@ void export_spheropolygon(py::module& m)
     export_IntegratorHPMCMonoImplicitGPU< ShapeSpheropolygon >(m, "IntegratorHPMCMonoImplicitGPUSpheropolygon");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSpheropolygon >(m, "IntegratorHPMCMonoImplicitNewGPUSpheropolygon");
     export_ComputeFreeVolumeGPU< ShapeSpheropolygon >(m, "ComputeFreeVolumeGPUSpheropolygon");
+    export_UpdaterClustersGPU< ShapeSpheropolygon >(m, "UpdaterClustersGPUSpheropolygon");
     #endif
     }
 

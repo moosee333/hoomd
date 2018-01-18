@@ -30,6 +30,7 @@
 #include "IntegratorHPMCMonoImplicitGPU.h"
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
+#include "UpdaterClustersGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -68,6 +69,7 @@ void export_ellipsoid(py::module& m)
     export_IntegratorHPMCMonoImplicitGPU< ShapeEllipsoid >(m, "IntegratorHPMCMonoImplicitGPUEllipsoid");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeEllipsoid >(m, "IntegratorHPMCMonoImplicitNewGPUEllipsoid");
     export_ComputeFreeVolumeGPU< ShapeEllipsoid >(m, "ComputeFreeVolumeGPUEllipsoid");
+    export_UpdaterClustersGPU< ShapeEllipsoid >(m, "UpdaterClustersGPUEllipsoid");
     #endif
     }
 

@@ -123,6 +123,12 @@ void UpdaterClustersImplicit<Shape,Integrator>::findInteractions(unsigned int ti
     ArrayHandle<unsigned int> h_tag(this->m_pdata->getTags(), access_location::host, access_mode::read);
     ArrayHandle<int3> h_image(this->m_pdata->getImages(), access_location::host, access_mode::read);
 
+    ArrayHandle<Scalar4> h_postype_backup(this->m_postype_backup, access_location::host, access_mode::read);
+    ArrayHandle<Scalar4> h_orientation_backup(this->m_orientation_backup, access_location::host, access_mode::read);
+    ArrayHandle<unsigned int> h_tag_backup(this->m_tag_backup, access_location::host, access_mode::read);
+    ArrayHandle<int3> h_image_backup(this->m_image_backup, access_location::host, access_mode::read);
+
+
     // test old configuration against itself
 
     #ifdef ENABLE_TBB
@@ -131,10 +137,10 @@ void UpdaterClustersImplicit<Shape,Integrator>::findInteractions(unsigned int ti
     for (unsigned int i = 0; i < this->m_n_particles_old; ++i)
     #endif
         {
-        unsigned int typ_i = __scalar_as_int(this->m_postype_backup[i].w);
+        unsigned int typ_i = __scalar_as_int(h_postype_backup.data[i].w);
 
-        vec3<Scalar> pos_i(this->m_postype_backup[i]);
-        quat<Scalar> orientation_i(this->m_orientation_backup[i]);
+        vec3<Scalar> pos_i(h_postype_backup.data[i]);
+        quat<Scalar> orientation_i(h_orientation_backup.data[i]);
 
         Shape shape_i(orientation_i, params[typ_i]);
         Scalar r_excl_i = shape_i.getCircumsphereDiameter()/Scalar(2.0);
@@ -162,12 +168,12 @@ void UpdaterClustersImplicit<Shape,Integrator>::findInteractions(unsigned int ti
                             // read in its position and orientation
                             unsigned int j = this->m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
 
-                            if (this->m_tag_backup[i] == this->m_tag_backup[j] && cur_image == 0) continue;
+                            if (h_tag_backup.data[i] == h_tag_backup.data[j] && cur_image == 0) continue;
 
                             // load the position and orientation of the j particle
-                            vec3<Scalar> pos_j = vec3<Scalar>(this->m_postype_backup[j]);
-                            unsigned int typ_j = __scalar_as_int(this->m_postype_backup[j].w);
-                            Shape shape_j(quat<Scalar>(this->m_orientation_backup[j]), params[typ_j]);
+                            vec3<Scalar> pos_j = vec3<Scalar>(h_postype_backup.data[j]);
+                            unsigned int typ_j = __scalar_as_int(h_postype_backup.data[j].w);
+                            Shape shape_j(quat<Scalar>(h_orientation_backup.data[j]), params[typ_j]);
 
                             // put particles in coordinate system of particle i
                             vec3<Scalar> r_ij = pos_j - pos_i_image;
@@ -183,20 +189,20 @@ void UpdaterClustersImplicit<Shape,Integrator>::findInteractions(unsigned int ti
                                 {
                                 unsigned int new_tag_i;
                                     {
-                                    auto it = map.find(this->m_tag_backup[i]);
+                                    auto it = map.find(h_tag_backup.data[i]);
                                     assert(it != map.end());
                                     new_tag_i = it->second;
                                     }
                                 unsigned int new_tag_j;
                                     {
-                                    auto it = map.find(this->m_tag_backup[j]);
+                                    auto it = map.find(h_tag_backup.data[j]);
                                     assert(it!=map.end());
                                     new_tag_j = it->second;
                                     }
 
                                 this->m_interact_old_old.push_back(std::make_pair(new_tag_i,new_tag_j));
 
-                                int3 delta_img = -image_hkl[cur_image] + this->m_image_backup[i] - this->m_image_backup[j];
+                                int3 delta_img = -image_hkl[cur_image] + h_image_backup.data[i] - h_image_backup.data[j];
                                 if (line && (delta_img.x || delta_img.y || delta_img.z))
                                     {
                                     // if interaction across PBC, reject cluster move
@@ -266,16 +272,16 @@ void UpdaterClustersImplicit<Shape,Integrator>::findInteractions(unsigned int ti
 
                             unsigned int new_tag_j;
                                 {
-                                auto it = map.find(this->m_tag_backup[j]);
+                                auto it = map.find(h_tag_backup.data[j]);
                                 assert(it != map.end());
                                 new_tag_j = it->second;
                                 }
 
                             if (h_tag.data[i] == new_tag_j && cur_image == 0) continue;
 
-                            vec3<Scalar> pos_j(this->m_postype_backup[j]);
-                            unsigned int typ_j = __scalar_as_int(this->m_postype_backup[j].w);
-                            Shape shape_j(quat<Scalar>(this->m_orientation_backup[j]), params[typ_j]);
+                            vec3<Scalar> pos_j(h_postype_backup.data[j]);
+                            unsigned int typ_j = __scalar_as_int(h_postype_backup.data[j].w);
+                            Shape shape_j(quat<Scalar>(h_orientation_backup.data[j]), params[typ_j]);
 
                             // put particles in coordinate system of particle i
                             vec3<Scalar> r_ij = pos_j - pos_i_image;
@@ -291,7 +297,7 @@ void UpdaterClustersImplicit<Shape,Integrator>::findInteractions(unsigned int ti
                                 {
                                 this->m_interact_new_old.push_back(std::make_pair(h_tag.data[i],new_tag_j));
 
-                                int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - this->m_image_backup[j];
+                                int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - h_image_backup.data[j];
                                 if (line && (delta_img.x || delta_img.y || delta_img.z))
                                     {
                                     // if interaction across PBC, reject cluster move

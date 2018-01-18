@@ -30,6 +30,7 @@
 #include "IntegratorHPMCMonoImplicitGPU.h"
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
+#include "UpdaterClustersGPU.h"
 #endif
 
 
@@ -72,6 +73,7 @@ void export_convex_spheropolyhedron(py::module& m)
     export_IntegratorHPMCMonoImplicitGPU< ShapeSpheropolyhedron >(m, "IntegratorHPMCMonoImplicitGPUSpheropolyhedron");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSpheropolyhedron >(m, "IntegratorHPMCMonoImplicitNewGPUSpheropolyhedron");
     export_ComputeFreeVolumeGPU< ShapeSpheropolyhedron >(m, "ComputeFreeVolumeGPUSpheropolyhedron");
+    export_UpdaterClustersGPU< ShapeSpheropolyhedron >(m, "UpdaterClustersGPUSpheropolyhedron");
 
     #endif
     }
