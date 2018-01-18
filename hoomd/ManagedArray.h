@@ -28,12 +28,12 @@ template<class T>
 class ManagedArray
     {
     public:
+        #ifndef NVCC
         //! Default constructor
-        DEVICE ManagedArray()
+        ManagedArray()
             : data(nullptr), N(0), managed(0)
             { }
 
-        #ifndef NVCC
         ManagedArray(unsigned int _N, bool _managed)
             : N(_N), managed(_managed)
             {
