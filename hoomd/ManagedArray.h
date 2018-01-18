@@ -124,6 +124,12 @@ class ManagedArray
             return data;
             }
 
+        //! Return the size of the array
+        HOSTDEVICE inline unsigned int size() const
+            {
+            return N;
+            }
+
         #ifdef ENABLE_CUDA
         //! Attach managed memory to CUDA stream
         void attach_to_stream(cudaStream_t stream) const
