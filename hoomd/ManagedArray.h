@@ -53,40 +53,52 @@ class ManagedArray
                 std::fill(data,data+N,value);
                 }
             }
+        #endif
 
         DEVICE virtual ~ManagedArray()
             {
+            #ifndef NVCC
             deallocate();
+            #endif
             }
 
-        //! Copy constructor (on the device/ in CUDA code we just use the default copy constructor)
+        //! Copy constructor
         DEVICE ManagedArray(const ManagedArray<T>& other)
             : N(other.N), managed(other.managed)
             {
+            #ifndef NVCC
             if (N > 0)
                 {
                 allocate();
                 std::copy(other.data, other.data+N, data);
                 }
+            #else
+            data = other.data;
+            #endif
             }
 
         //! Assignment operator
         DEVICE ManagedArray& operator=(const ManagedArray<T>& other)
             {
+            #ifndef NVCC
             deallocate();
+            #endif
 
             N = other.N;
             managed = other.managed;
 
+            #ifndef NVCC
             if (N > 0)
                 {
                 allocate();
                 std::copy(other.data, other.data+N, data);
                 }
+            #else
+            data = other.data;
+            #endif
 
             return *this;
             }
-        #endif
 
         //! random access operator
         HOSTDEVICE inline T& operator[](unsigned int i)
