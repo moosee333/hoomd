@@ -513,7 +513,13 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
                 for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
                     this->m_ptl_reject.insert(*it_j);
             }
+        else
         #endif
+            {
+            ArrayHandle<unsigned int> h_reject(m_reject, access_location::host, access_mode::read);
+            for (unsigned int i = 0; i < m_reject.size(); ++i)
+                this->m_local_reject.insert(h_reject.data[i]);
+            }
 
         if (line)
             {
