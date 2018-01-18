@@ -29,7 +29,7 @@ class ManagedArray
     {
     public:
         //! Default constructor
-        DEVICE ManagedArray()
+        HOSTDEVICE ManagedArray()
             : data(nullptr), N(0), managed(0)
             { }
 
@@ -55,7 +55,8 @@ class ManagedArray
             }
         #endif
 
-        DEVICE virtual ~ManagedArray()
+        //! Destructor
+        HOSTDEVICE ~ManagedArray()
             {
             #ifndef NVCC
             deallocate();
@@ -63,7 +64,7 @@ class ManagedArray
             }
 
         //! Copy constructor
-        DEVICE ManagedArray(const ManagedArray<T>& other)
+        HOSTDEVICE ManagedArray(const ManagedArray<T>& other)
             : N(other.N), managed(other.managed)
             {
             #ifndef NVCC
@@ -78,7 +79,7 @@ class ManagedArray
             }
 
         //! Assignment operator
-        DEVICE ManagedArray& operator=(const ManagedArray<T>& other)
+        HOSTDEVICE ManagedArray& operator=(const ManagedArray<T>& other)
             {
             #ifndef NVCC
             deallocate();
@@ -122,6 +123,12 @@ class ManagedArray
         HOSTDEVICE inline const T* get() const
             {
             return data;
+            }
+
+        //! Return the size of the array
+        HOSTDEVICE inline unsigned int size() const
+            {
+            return N;
             }
 
         #ifdef ENABLE_CUDA

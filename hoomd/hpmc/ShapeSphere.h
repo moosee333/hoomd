@@ -259,6 +259,29 @@ DEVICE inline unsigned int get_num_requested_threads(const ShapeA& a, const Shap
     return 1;
     }
 
+//! Sphere-Sphere overlap (parallel interface)
+/*! \param r_ab Vector defining the position of shape b relative to shape a (r_b - r_a)
+    \param a first shape
+    \param b second shape
+    \param err in/out variable incremented when error conditions occur in the overlap test
+    \returns true when *a* and *b* overlap, and false when they are disjoint
+
+    The parallel interface exists so that GPU integrators / classes which do not (yet) support
+    parallel overlap checks can use the regular test_overlap() function, and only those which
+    *do* support them use test_overlap_parallel()
+
+    \ingroup shape
+*/
+template< class ShapeA, class ShapeB>
+DEVICE inline bool test_overlap_parallel(const vec3<Scalar>& r_ab,
+                                 const ShapeA& a,
+                                 const ShapeB& b,
+                                 unsigned int& err)
+    {
+    // fall back to default implementation
+    return test_overlap(r_ab, a, b, err);
+    }
+
 }; // end namespace hpmc
 
 #endif //__SHAPE_SPHERE_H__

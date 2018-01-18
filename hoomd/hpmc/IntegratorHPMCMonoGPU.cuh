@@ -972,7 +972,7 @@ __global__ void gpu_hpmc_check_overlaps_kernel(
 
     unsigned int err_count = 0;
 
-    if ((s_check_overlaps[overlap_idx(type_i, type_j)] && test_overlap(r_ij, shape_i, shape_j, err_count)))
+    if ((s_check_overlaps[overlap_idx(type_i, type_j)] && test_overlap_parallel(r_ij, shape_i, shape_j, err_count)))
         {
         // NOTE if we are only checking against the old config, we could provide an early
         // exit code path here
