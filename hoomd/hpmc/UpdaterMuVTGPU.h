@@ -201,8 +201,8 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
         std::vector<unsigned int> remove_tags = this->m_type_map[type];
 
         #ifdef ENABLE_MPI
-        if (m_comm)
-            m_mc->communicate(false);
+        if (this->m_comm)
+            this->m_mc->communicate(false);
         #endif
 
         // combine four seeds
