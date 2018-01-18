@@ -1433,13 +1433,6 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
     // type
     unsigned int type = this->m_pdata->getType(tag);
 
-
-    // if not, no overlaps generated, return happily
-    if (!patch) return true;
-
-    // type
-    unsigned int type = this->m_pdata->getType(tag);
-
     // read in the current position and orientation
     quat<Scalar> orientation(m_pdata->getOrientation(tag));
 
