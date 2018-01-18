@@ -1597,7 +1597,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                 {
                 bool mpi = false;
                 #ifdef ENABLE_MPI
-                mpi = m_comm;
+                mpi = m_comm != 0;
                 if (mpi && m_ptl_reject.find(*it) != m_ptl_reject.end())
                     reject = true;
                 #endif

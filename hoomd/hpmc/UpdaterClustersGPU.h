@@ -464,7 +464,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
     std::vector< std::vector<unsigned int> > all_local_reject;
 
     #ifdef ENABLE_MPI
-    if (m_comm)
+    if (this->m_comm)
         {
         // combine lists from different ranks
 
@@ -474,7 +474,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
             std::copy(h_overlaps.data, h_overlaps.data + m_overlaps.size(), overlaps.begin());
             }
-        gather_v(interact_new_new, all_overlap, 0, m_exec_conf->getMPICommunicator());
+        gather_v(overlaps, all_overlap, 0, this->m_exec_conf->getMPICommunicator());
 
         // boundary interactions new new
         std::vector<uint2> interact_new_new(m_interact_new_new.size());
@@ -482,7 +482,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             ArrayHandle<uint2> h_interact_new_new(m_interact_new_new, access_location::host, access_mode::read);
             std::copy(h_interact_new_new.data, h_interact_new_new.data + m_interact_new_new.size(), interact_new_new.begin());
             }
-        gather_v(interact_new_new, all_interact_new_new, 0, m_exec_conf->getMPICommunicator());
+        gather_v(interact_new_new, all_interact_new_new, 0, this->m_exec_conf->getMPICommunicator());
 
         // rejected particle moves
         std::vector<unsigned int> local_reject(m_reject.size());
@@ -490,7 +490,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             ArrayHandle<unsigned int> h_reject(m_reject, access_location::host, access_mode::read);
             std::copy(h_reject.data, h_reject.data + m_reject.size(), local_reject.begin());
             }
-        gather_v(local_reject, all_local_reject, 0, m_exec_conf->getMPICommunicator());
+        gather_v(local_reject, all_local_reject, 0, this->m_exec_conf->getMPICommunicator());
         }
     #endif
 
@@ -557,7 +557,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             {
             for (auto it_i = all_overlap.begin(); it_i != all_overlap.end(); ++it_i)
                 for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
-                    this->m_G.addEdge(it_j->first,it_j->second);
+                    this->m_G.addEdge(it_j->x,it_j->y);
             }
         else
         #endif
