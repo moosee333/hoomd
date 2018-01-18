@@ -281,12 +281,8 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
     __syncthreads();
 
-    bool active = true;
-
     if (i >= N)
-        {
-        active = false;
-        }
+        return;
 
     unsigned int my_cell;
 
@@ -299,92 +295,86 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
     Shape shape_i(quat<Scalar>(d_orientation_test[i]), s_params[type]);
 
-    if (active)
-        {
-        // find cell the particle is in
-        Scalar3 p = vec_to_scalar3(pos_i);
-        my_cell = clusters_compute_cell_idx(p, box, ghost_width, cell_dim, ci);
-        }
+    // find cell the particle is in
+    Scalar3 p = vec_to_scalar3(pos_i);
+    my_cell = clusters_compute_cell_idx(p, box, ghost_width, cell_dim, ci);
 
-    if (active)
-        {
-        // loop over neighboring cells and check for overlaps
-        unsigned int excell_size = d_excell_size[my_cell];
+    // loop over neighboring cells and check for overlaps
+    unsigned int excell_size = d_excell_size[my_cell];
 
-        for (unsigned int k = 0; k < excell_size; k += group_size)
+    for (unsigned int k = 0; k < excell_size; k += group_size)
+        {
+        unsigned int local_k = k + offset;
+        if (local_k < excell_size)
             {
-            unsigned int local_k = k + offset;
-            if (local_k < excell_size)
+            // read in position, and orientation of neighboring particle
+            #if ( __CUDA_ARCH__ > 300)
+            unsigned int j = __ldg(&d_excell_idx[excli(local_k, my_cell)]);
+            #else
+            unsigned int j = d_excell_idx[excli(local_k, my_cell)];
+            #endif
+
+            unsigned int tag_j = d_tag[j];
+            if (tag == tag_j)
+                continue;
+
+            Scalar4 postype_j = texFetchScalar4(d_postype, clusters_postype_tex, j);
+            Scalar4 orientation_j = make_scalar4(1,0,0,0);
+            unsigned int typ_j = __scalar_as_int(postype_j.w);
+            Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
+            if (shape_j.hasOrientation())
+                shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
+
+            // put particle j into the coordinate system of particle i
+            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i;
+            vec3<Scalar> r_ij_wrap = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
+
+            // check for overlaps
+            OverlapReal rsq = dot(r_ij_wrap,r_ij_wrap);
+            OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+
+            if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
                 {
-                // read in position, and orientation of neighboring particle
-                #if ( __CUDA_ARCH__ > 300)
-                unsigned int j = __ldg(&d_excell_idx[excli(local_k, my_cell)]);
-                #else
-                unsigned int j = d_excell_idx[excli(local_k, my_cell)];
-                #endif
-
-                unsigned int tag_j = d_tag[j];
-                if (tag == tag_j)
-                    continue;
-
-                Scalar4 postype_j = texFetchScalar4(d_postype, clusters_postype_tex, j);
-                Scalar4 orientation_j = make_scalar4(1,0,0,0);
-                unsigned int typ_j = __scalar_as_int(postype_j.w);
-                Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
-                if (shape_j.hasOrientation())
-                    shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
-
-                // put particle j into the coordinate system of particle i
-                vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i;
-                vec3<Scalar> r_ij_wrap = vec3<Scalar>(box.minImage(vec_to_scalar3(r_ij)));
-
-                // check for overlaps
-                OverlapReal rsq = dot(r_ij_wrap,r_ij_wrap);
-                OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-
-                if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                // circumsphere overlap
+                unsigned int err_count;
+                if (s_check_overlaps[overlap_idx(typ_j, type)] && test_overlap(r_ij_wrap, shape_i, shape_j, err_count))
                     {
-                    // circumsphere overlap
-                    unsigned int err_count;
-                    if (s_check_overlaps[overlap_idx(typ_j, type)] && test_overlap(r_ij_wrap, shape_i, shape_j, err_count))
+                    unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
+                    if (n_overlaps >= max_n_overlaps)
+                        atomicMax(&(*d_conditions).x, n_overlaps+1);
+                    else
+                        d_overlaps[n_overlaps] = make_uint2(tag,tag_j);
+
+                    if (d_reject)
                         {
-                        unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
-                        if (n_overlaps >= max_n_overlaps)
-                            atomicMax(&(*d_conditions).x, n_overlaps+1);
-                        else
-                            d_overlaps[n_overlaps] = make_uint2(tag,tag_j);
+                        bool reject = false;
 
-                        if (d_reject)
+                        if (line)
                             {
-                            bool reject = false;
+                            int3 delta_img = -box.getImage(r_ij - r_ij_wrap) + img - d_image[j];
+                            reject = delta_img.x || delta_img.y || delta_img.z;
+                            }
+                        else if (swap)
+                            {
+                            reject = ((type != type_A && type != type_B) || (typ_j != type_A && typ_j != type_B));
+                            }
 
-                            if (line)
+                        if (reject)
+                            {
+                            unsigned int n_reject = atomicAdd(d_n_reject, 1);
+                            if (n_reject >= max_n_reject)
+                                atomicMax(&(*d_conditions).y, n_reject+1);
+                            else
                                 {
-                                int3 delta_img = -box.getImage(r_ij - r_ij_wrap) + img - d_image[j];
-                                reject = delta_img.x || delta_img.y || delta_img.z;
+                                d_reject[n_reject] = tag;
                                 }
-                            else if (swap)
-                                {
-                                reject = ((type != type_A && type != type_B) || (typ_j != type_A && typ_j != type_B));
-                                }
 
-                            if (reject)
+                            n_reject = atomicAdd(d_n_reject, 1);
+                            if (n_reject >= max_n_reject)
+                                atomicMax(&(*d_conditions).y, n_reject+1);
+                            else
                                 {
-                                unsigned int n_reject = atomicAdd(d_n_reject, 1);
-                                if (n_reject >= max_n_reject)
-                                    atomicMax(&(*d_conditions).y, n_reject+1);
-                                else
-                                    {
-                                    d_reject[n_reject] = tag;
-                                    }
-
-                                n_reject = atomicAdd(d_n_reject, 1);
-                                if (n_reject >= max_n_reject)
-                                    atomicMax(&(*d_conditions).y, n_reject+1);
-                                else
-                                    {
-                                    d_reject[n_reject] = tag_j;
-                                    }
+                                d_reject[n_reject] = tag_j;
                                 }
                             }
                         }

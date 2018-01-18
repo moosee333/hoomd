@@ -151,7 +151,7 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     m_last_dim = make_uint3(0xffffffff, 0xffffffff, 0xffffffff);
     m_last_nmax = 0xffffffff;
 
-    m_tuner_excell_block_size.reset(new Autotuner(32,1024,32, 5, 1000000, "hpmc_muvt_excell_block_size", this->m_exec_conf));
+    m_tuner_excell_block_size.reset(new Autotuner(32,1024,32, 5, 1000000, "hpmc_clusters_excell_block_size", this->m_exec_conf));
 
     // create a cuda stream to ensure managed memory coherency
     cudaStreamCreate(&m_stream);
@@ -190,8 +190,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         (box.getPeriodic().y && npd.y <= nominal_width*2) ||
         (this->m_sysdef->getNDimensions() == 3 && box.getPeriodic().z && npd.z <= nominal_width*2))
         {
-        this->m_exec_conf->msg->error() << "Simulation box too small for update.muvt() on GPU - increase it so the minimum image convention works" << endl;
-        throw runtime_error("Error performing HPMC update");
+        this->m_exec_conf->msg->error() << "Simulation box too small for update.clusters() on GPU - increase it so the minimum image convention works" << endl;
+        throw runtime_error("Error performing HPMC clusters");
         }
 
     // compute cell list
@@ -230,10 +230,6 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         CHECK_CUDA_ERROR();
 
     this->m_tuner_excell_block_size->end();
-
-
-    Index2D overlap_idx = this->m_mc->getOverlapIndexer();
-    ArrayHandle<unsigned int> h_overlaps(this->m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
 
     m_new_tag.resize(this->m_n_particles_old);
     assert(m_n_particles_old == map.size());
