@@ -38,6 +38,9 @@ class managed_allocator
             #ifdef ENABLE_CUDA
             if (m_use_device)
                 {
+                // make sure the GPU execution stream has caught up
+                cudaDeviceSynchronize();
+
                 cudaError_t error = cudaMallocManaged(&result, n*sizeof(T), cudaMemAttachGlobal);
                 if (error != cudaSuccess)
                     {
@@ -67,6 +70,9 @@ class managed_allocator
             #ifdef ENABLE_CUDA
             if (use_device)
                 {
+                // make sure the GPU execution stream has caught up
+                cudaDeviceSynchronize();
+
                 cudaError_t error = cudaMallocManaged(&result, (int) (n*sizeof(T)), cudaMemAttachGlobal);
                 if (error != cudaSuccess)
                     {
@@ -113,6 +119,13 @@ class managed_allocator
         //! Static version, also destroys objects
         static void deallocate_destroy(value_type *ptr, std::size_t N, bool use_device)
             {
+            #ifdef ENABLE_CUDA
+            if (use_device)
+                {
+                cudaDeviceSynchronize();
+                }
+            #endif
+
             // we used placement new in the allocation, so call destructors explicitly
             for (std::size_t i = 0; i < N; ++i)
                 {
