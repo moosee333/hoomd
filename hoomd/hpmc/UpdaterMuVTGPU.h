@@ -39,31 +39,16 @@ class UpdaterMuVTGPU : public UpdaterMuVT<Shape>
 
             m_tuner_set_properties->setPeriod(period);
             m_tuner_set_properties->setEnabled(enable);
-
-            m_tuner_excell_block_size->setPeriod(period);
-            m_tuner_excell_block_size->setEnabled(enable);
             }
 
     protected:
         //! Generate a random configuration for a Gibbs sampler
         virtual void generateGibbsSamplerConfiguration(unsigned int timestep);
 
-        void initializeExcellMem();
-
-        CellListGPU m_cl;                     //!< The cell list
-
-        uint3 m_last_dim;                     //!< Dimensions of the cell list on the last call to update
-        unsigned int m_last_nmax;             //!< Last cell list NMax value allocated in excell
-
-        GPUArray<unsigned int> m_excell_idx;  //!< Particle indices in expanded cells
-        GPUArray<unsigned int> m_excell_size; //!< Number of particles in each expanded cell
-        Index2D m_excell_list_indexer;        //!< Indexer to access elements of the excell_idx list
-
         cudaStream_t m_stream;                //!< CUDA stream for kernel execution
 
         std::unique_ptr<Autotuner> m_tuner_insert;     //!< Autotuner for inserting particles
         std::unique_ptr<Autotuner> m_tuner_set_properties; //!< Autotuner for setting particle properties
-        std::unique_ptr<Autotuner> m_tuner_excell_block_size;  //!< Autotuner for excell block_size
 
         GPUVector<unsigned int> m_ptl_overlap;    //!< Overlap flag per inserted particle
         GPUVector<Scalar4> m_postype_insert;  //!< Positions and types of particles inserted
@@ -77,45 +62,14 @@ UpdaterMuVTGPU<Shape>::UpdaterMuVTGPU(std::shared_ptr<SystemDefinition> sysdef,
     std::shared_ptr<IntegratorHPMCMono<Shape> > mc,
     unsigned int seed,
     unsigned int npartition)
-    : UpdaterMuVT<Shape>(sysdef, mc, seed, npartition), m_cl(sysdef)
+    : UpdaterMuVT<Shape>(sysdef, mc, seed, npartition)
     {
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_ptl_overlap);
     GPUVector<Scalar4>(this->m_exec_conf).swap(m_postype_insert);
     GPUVector<Scalar4>(this->m_exec_conf).swap(m_orientation_insert);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_tags);
 
-    this->m_cl.setRadius(1);
-    this->m_cl.setComputeTDB(false);
-    this->m_cl.setFlagType();
-    this->m_cl.setComputeIdx(true);
-
-    // initialize the autotuners
-    // the full block size, stride and group size matrix is searched,
-    // encoded as block_size*1000000 + stride*100 + group_size.
-    std::vector<unsigned int> valid_params;
-    for (unsigned int block_size = 32; block_size <= 1024; block_size += 32)
-        {
-        unsigned int s=1;
-        while (s <= (unsigned int) this->m_exec_conf->dev_prop.warpSize)
-            {
-            if ((block_size % s) == 0)
-                valid_params.push_back(block_size*1000000 + s);
-            s = s * 2;
-            }
-        }
-    m_tuner_insert.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_muvt_insert", this->m_exec_conf));
-
-    GPUArray<unsigned int> excell_size(0, this->m_exec_conf);
-    m_excell_size.swap(excell_size);
-
-    GPUArray<unsigned int> excell_idx(0, this->m_exec_conf);
-    m_excell_idx.swap(excell_idx);
-
-    // set last dim to a bogus value so that it will re-init on the first call
-    m_last_dim = make_uint3(0xffffffff, 0xffffffff, 0xffffffff);
-    m_last_nmax = 0xffffffff;
-
-    m_tuner_excell_block_size.reset(new Autotuner(32,1024,32, 5, 1000000, "hpmc_muvt_excell_block_size", this->m_exec_conf));
+    m_tuner_insert.reset(new Autotuner(32,1024,32, 5, 1000000, "hpmc_muvt_insert", this->m_exec_conf));
     m_tuner_set_properties.reset(new Autotuner(32,1024,32, 5, 1000000, "hpmc_muvt_set_properties", this->m_exec_conf));
 
     // create a cuda stream to ensure managed memory coherency
@@ -137,60 +91,7 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
     if (this->m_prof)
         this->m_prof->push(this->m_exec_conf, "Gibbs sampler");
 
-    // set nominal width
-    Scalar nominal_width = this->m_mc->getMaxCoreDiameter();
-
-    if (this->m_cl.getNominalWidth() != nominal_width)
-        this->m_cl.setNominalWidth(nominal_width);
-
     const BoxDim &box = this->m_pdata->getBox();
-    Scalar3 npd = box.getNearestPlaneDistance();
-
-    if ((box.getPeriodic().x && npd.x <= nominal_width*2) ||
-        (box.getPeriodic().y && npd.y <= nominal_width*2) ||
-        (this->m_sysdef->getNDimensions() == 3 && box.getPeriodic().z && npd.z <= nominal_width*2))
-        {
-        this->m_exec_conf->msg->error() << "Simulation box too small for update.muvt() on GPU - increase it so the minimum image convention works" << endl;
-        throw runtime_error("Error performing HPMC update");
-        }
-
-    // compute cell list
-    this->m_cl.compute(timestep);
-
-    // if the cell list is a different size than last time, reinitialize expanded cell list
-    uint3 cur_dim = this->m_cl.getDim();
-    if (this->m_last_dim.x != cur_dim.x || this->m_last_dim.y != cur_dim.y || this->m_last_dim.z != cur_dim.z ||
-        this->m_last_nmax != this->m_cl.getNmax())
-        {
-        this->initializeExcellMem();
-        m_last_dim = cur_dim;
-        m_last_nmax = this->m_cl.getNmax();
-        }
-
-    // access the cell list data
-    ArrayHandle<unsigned int> d_cell_size(this->m_cl.getCellSizeArray(), access_location::device, access_mode::read);
-    ArrayHandle<unsigned int> d_cell_idx(this->m_cl.getIndexArray(), access_location::device, access_mode::read);
-    ArrayHandle<unsigned int> d_cell_adj(this->m_cl.getCellAdjArray(), access_location::device, access_mode::read);
-    ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::readwrite);
-    ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::readwrite);
-
-    // update the expanded cells
-    this->m_tuner_excell_block_size->begin();
-    detail::gpu_hpmc_excell(d_excell_idx.data,
-                            d_excell_size.data,
-                            this->m_excell_list_indexer,
-                            d_cell_idx.data,
-                            d_cell_size.data,
-                            d_cell_adj.data,
-                            this->m_cl.getCellIndexer(),
-                            this->m_cl.getCellListIndexer(),
-                            this->m_cl.getCellAdjIndexer(),
-                            this->m_tuner_excell_block_size->getParam());
-    if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
-        CHECK_CUDA_ERROR();
-
-    this->m_tuner_excell_block_size->end();
-
 
     // perform parallel insertion/removal
     for (auto it_type = this->m_parallel_types.begin(); it_type != this->m_parallel_types.end(); it_type++)
@@ -198,7 +99,20 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
         unsigned int type = *it_type;
 
         // existing particles to be removed
-        std::vector<unsigned int> remove_tags = this->m_type_map[type];
+        const std::vector<unsigned int>& remove_tags = this->m_type_map[type];
+
+        if (this->m_prof)
+            this->m_prof->push(this->m_exec_conf, "remove particles");
+
+        // remove old particles first, so we save same time on the following AABB tree traversal
+        this->m_exec_conf->msg->notice(7) << "UpdaterMuVTGPU " << timestep << " removing " << remove_tags.size()
+             << " ptls of type " << this->m_pdata->getNameByType(type) << std::endl;
+
+        // remove all particles of the given types
+        this->m_pdata->removeParticlesGlobal(remove_tags);
+
+        if (this->m_prof)
+            this->m_prof->pop(this->m_exec_conf);
 
         #ifdef ENABLE_MPI
         if (this->m_comm)
@@ -217,7 +131,7 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
         std::mt19937 rng_poisson(seed);
 
         // local box volume
-        Scalar V_box = this->m_pdata->getBox().getVolume(this->m_sysdef->getNDimensions()==2);
+        Scalar V_box = box.getVolume(this->m_sysdef->getNDimensions()==2);
 
         // draw a poisson-random number
         Scalar fugacity = this->m_fugacity[type]->getValue(timestep);
@@ -246,6 +160,9 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
         // access the parameters
         auto& params = this->m_mc->getParams();
 
+        auto& image_list = this->m_mc->updateImageList();
+        auto& aabb_tree = this->m_mc->buildAABBTree();
+
             {
             // access the temporary storage for inserted particles and overlap flags
             ArrayHandle<Scalar4> d_postype_insert(m_postype_insert,access_location::device, access_mode::overwrite);
@@ -254,21 +171,14 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
 
             m_tuner_insert->begin();
             unsigned int param= m_tuner_insert->getParam();
-            unsigned int block_size = param / 1000000;
-            unsigned int group_size = param % 100;
+            unsigned int block_size = param;
 
             detail::hpmc_muvt_args_t muvt_args(n_insert,
                                                type,
                                                d_postype.data,
                                                d_orientation.data,
-                                               d_cell_idx.data,
-                                               d_cell_size.data,
-                                               this->m_cl.getCellIndexer(),
-                                               this->m_cl.getCellListIndexer(),
-                                               d_excell_idx.data,
-                                               d_excell_size.data,
-                                               this->m_excell_list_indexer,
-                                               this->m_cl.getDim(),
+                                               aabb_tree,
+                                               image_list,
                                                this->m_pdata->getN(),
                                                this->m_pdata->getNTypes(),
                                                this->m_seed+this->m_exec_conf->getRank(),
@@ -278,9 +188,7 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
                                                box,
                                                block_size,
                                                1, //stride
-                                               group_size,
                                                this->m_pdata->getMaxN(),
-                                               this->m_cl.getGhostWidth(),
                                                d_overlaps.data,
                                                overlap_idx,
                                                d_ptl_overlap.data,
@@ -300,19 +208,6 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
 
             m_tuner_insert->end();
             }
-
-        if (this->m_prof)
-            this->m_prof->push(this->m_exec_conf, "remove particles");
-
-        // remove old particles first *after* checking overlaps (Gibbs sampler)
-        this->m_exec_conf->msg->notice(7) << "UpdaterMuVTGPU " << timestep << " removing " << remove_tags.size()
-             << " ptls of type " << this->m_pdata->getNameByType(type) << std::endl;
-
-        // remove all particles of the given types
-        this->m_pdata->removeParticlesGlobal(remove_tags);
-
-        if (this->m_prof)
-            this->m_prof->pop(this->m_exec_conf);
 
         this->m_exec_conf->msg->notice(7) << "UpdaterMuVTGPU " << timestep << " inserting " << n_ptls_inserted
              << " ptls of type " << this->m_pdata->getNameByType(type) << std::endl;
@@ -373,25 +268,6 @@ void UpdaterMuVTGPU<Shape>::generateGibbsSamplerConfiguration(unsigned int times
     if (this->m_prof)
         this->m_prof->pop();
     }
-
-template< class Shape >
-void UpdaterMuVTGPU< Shape >::initializeExcellMem()
-    {
-    this->m_exec_conf->msg->notice(4) << "hpmc resizing expanded cells" << std::endl;
-
-    // get the current cell dimensions
-    unsigned int num_cells = this->m_cl.getCellIndexer().getNumElements();
-    unsigned int num_adj = this->m_cl.getCellAdjIndexer().getW();
-    unsigned int num_max = this->m_cl.getNmax();
-
-    // make the excell dimensions the same, but with room for Nmax*Nadj in each cell
-    m_excell_list_indexer = Index2D(num_max * num_adj, num_cells);
-
-    // reallocate memory
-    m_excell_idx.resize(m_excell_list_indexer.getNumElements());
-    m_excell_size.resize(num_cells);
-    }
-
 
 //! Export the UpdaterMuVT class to python
 /*! \param name Name of the class in the exported python module

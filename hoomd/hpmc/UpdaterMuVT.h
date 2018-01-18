@@ -1812,6 +1812,13 @@ void UpdaterMuVT<Shape>::generateGibbsSamplerConfiguration(unsigned int timestep
 
         if (m_prof) m_prof->pop();
 
+        // remove old particles first *after* checking overlaps (Gibbs sampler)
+        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << remove_tags.size()
+             << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
+
+        // remove all particles of the given types
+        m_pdata->removeParticlesGlobal(remove_tags);
+
         m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to insert " << n_insert
              << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
 
@@ -1907,13 +1914,6 @@ void UpdaterMuVT<Shape>::generateGibbsSamplerConfiguration(unsigned int timestep
         #endif
 
         if (m_prof) m_prof->pop();
-
-        // remove old particles first *after* checking overlaps (Gibbs sampler)
-        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << remove_tags.size()
-             << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
-
-        // remove all particles of the given types
-        m_pdata->removeParticlesGlobal(remove_tags);
 
         m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " inserting " << positions.size()
              << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
