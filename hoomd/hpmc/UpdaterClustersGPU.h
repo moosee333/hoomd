@@ -55,6 +55,7 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         GPUFlags<uint2> m_conditions;        //!< Flags returned from GPU kernel
 
         GPUArray<unsigned int> m_n_overlaps; //!< Length of list of overlapping pairs
+        GPUVector<uint3> m_collisions;       //!< List of collisions between circumspheres
         GPUVector<uint2> m_overlaps;         //!< List of overlaps between old and new configuration
         GPUArray<unsigned int> m_n_reject;   //!< Length of list of rejected particle moves
         GPUVector<unsigned int> m_reject;    //!< List of rejected particle moves
@@ -99,6 +100,7 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     // allocate memory
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_new_tag);
 
+    GPUVector<uint3>(this->m_exec_conf).swap(m_collisions);
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_overlaps);
     GPUVector<uint2>(this->m_exec_conf).swap(m_overlaps);
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_interact_new_new);
@@ -107,17 +109,15 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_reject);
 
     // initialize the autotuners
+    cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
+
     std::vector<unsigned int> valid_params;
-    for (unsigned int block_size = 32; block_size <= 1024; block_size += 32)
-        {
-        unsigned int s=1;
-        while (s <= (unsigned int) this->m_exec_conf->dev_prop.warpSize)
-            {
-            if ((block_size % s) == 0)
-                valid_params.push_back(block_size*1000000 + s);
-            s = s * 2;
-            }
-        }
+
+    // pack two block sizes into one parameter
+    for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size_overlaps += dev_prop.warpSize)
+        for (unsigned int block_size_collisions = dev_prop.warpSize; block_size_collisions <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size_collisions += dev_prop.warpSize)
+            valid_params.push_back(block_size_overlaps*10000+block_size_collisions);
+
     m_tuner_old_new.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_clusters_old_new", this->m_exec_conf));
     m_tuner_new_new.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_clusters_new_new", this->m_exec_conf));
 
@@ -190,6 +190,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
             ArrayHandle<unsigned int> d_new_tag(m_new_tag, access_location::device, access_mode::read);
 
+            ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::overwrite);
             ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
             ArrayHandle<unsigned int> d_reject(m_reject, access_location::device, access_mode::overwrite);
             ArrayHandle<unsigned int> d_n_overlaps(m_n_overlaps, access_location::device, access_mode::overwrite);
@@ -199,9 +200,10 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
             const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
 
             m_tuner_old_new->begin();
-            unsigned int param= m_tuner_old_new->getParam();
-            unsigned int block_size = param / 1000000;
-            unsigned int group_size = param % 100;
+
+            unsigned int param = m_tuner_old_new->getParam();
+            unsigned int block_size_overlaps = param / 10000;
+            unsigned int block_size_collisions = param % 10000;
 
             detail::hpmc_clusters_args_t clusters_args(this->m_n_particles_old,
                                                d_postype.data,
@@ -212,9 +214,10 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                                timestep,
                                                this->m_sysdef->getNDimensions(),
                                                box,
-                                               block_size,
+                                               block_size_collisions,
+                                               block_size_overlaps,
                                                1, //stride
-                                               group_size,
+                                               0, // group_size
                                                this->m_pdata->getMaxN(),
                                                d_check_overlaps.data,
                                                overlap_idx,
@@ -224,6 +227,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                                d_image_backup.data,
                                                d_new_tag.data,
                                                d_overlaps.data,
+                                               d_collisions.data,
                                                m_overlaps.getNumElements(),
                                                d_n_overlaps.data,
                                                d_reject.data,
@@ -252,7 +256,10 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
         // resize to largest element + 1
         if (flags.x)
+            {
             m_overlaps.resize(flags.x);
+            m_collisions.resize(flags.x);
+            }
 
         if (flags.y)
             m_reject.resize(flags.y);
@@ -284,6 +291,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::read);
                 ArrayHandle<unsigned int> d_tag(this->m_pdata->getTags(), access_location::device, access_mode::read);
 
+                ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::overwrite);
                 ArrayHandle<uint2> d_interact_new_new(m_interact_new_new, access_location::device, access_mode::overwrite);
                 ArrayHandle<unsigned int> d_n_interact_new_new(m_n_interact_new_new, access_location::device, access_mode::overwrite);
 
@@ -291,9 +299,10 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
 
                 m_tuner_new_new->begin();
+
                 unsigned int param = m_tuner_new_new->getParam();
-                unsigned int block_size = param / 1000000;
-                unsigned int group_size = param % 100;
+                unsigned int block_size_overlaps = param / 10000;
+                unsigned int block_size_collisions = param % 10000;
 
                 detail::hpmc_clusters_args_t clusters_args(this->m_pdata->getN(),
                                                    d_postype.data,
@@ -304,9 +313,10 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                                    timestep,
                                                    this->m_sysdef->getNDimensions(),
                                                    box,
-                                                   block_size,
+                                                   block_size_collisions,
+                                                   block_size_overlaps,
                                                    1, //stride
-                                                   group_size,
+                                                   0, // group_size
                                                    this->m_pdata->getMaxN(),
                                                    d_check_overlaps.data,
                                                    overlap_idx,
@@ -316,6 +326,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                                    d_image.data,
                                                    d_tag.data,
                                                    d_interact_new_new.data,
+                                                   d_collisions.data,
                                                    m_interact_new_new.getNumElements(),
                                                    d_n_interact_new_new.data,
                                                    0, // d_reject
@@ -343,7 +354,10 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
             uint2 flags = m_conditions.readFlags();
 
             if (flags.x)
+                {
                 m_interact_new_new.resize(flags.x);
+                m_collisions.resize(flags.x);
+                }
 
             reallocate = flags.x;
             } while(reallocate);

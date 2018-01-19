@@ -42,7 +42,8 @@ struct hpmc_clusters_args_t
                 const unsigned int _timestep,
                 const unsigned int _dim,
                 const BoxDim& _box,
-                const unsigned int _block_size,
+                const unsigned int _block_size_collisions,
+                const unsigned int _block_size_overlaps,
                 const unsigned int _stride,
                 const unsigned int _group_size,
                 const unsigned int _max_n,
@@ -54,6 +55,7 @@ struct hpmc_clusters_args_t
                 const int3 *_d_image_test,
                 const unsigned int *_d_tag_test,
                 uint2 *_d_overlaps,
+                uint3 *_d_collisions,
                 unsigned int _max_n_overlaps,
                 unsigned int *_d_n_overlaps,
                 unsigned int *_d_reject,
@@ -78,7 +80,8 @@ struct hpmc_clusters_args_t
                   timestep(_timestep),
                   dim(_dim),
                   box(_box),
-                  block_size(_block_size),
+                  block_size_collisions(_block_size_collisions),
+                  block_size_overlaps(_block_size_overlaps),
                   stride(_stride),
                   group_size(_group_size),
                   max_n(_max_n),
@@ -90,6 +93,7 @@ struct hpmc_clusters_args_t
                   d_image_test(_d_image_test),
                   d_tag_test(_d_tag_test),
                   d_overlaps(_d_overlaps),
+                  d_collisions(_d_collisions),
                   max_n_overlaps(_max_n_overlaps),
                   d_n_overlaps(_d_n_overlaps),
                   d_reject(_d_reject),
@@ -116,7 +120,8 @@ struct hpmc_clusters_args_t
     const unsigned int timestep;      //!< Current time step
     const unsigned int dim;           //!< Number of dimensions
     const BoxDim& box;                //!< Current simulation box
-    unsigned int block_size;          //!< Block size to execute
+    unsigned int block_size_collisions; //!< Block size to execute for broad phase
+    unsigned int block_size_overlaps;   //!< Block size to execute for overlap checks
     unsigned int stride;              //!< Number of threads per overlap check
     unsigned int group_size;          //!< Size of the group to execute
     const unsigned int max_n;         //!< Maximum size of pdata arrays
@@ -128,6 +133,7 @@ struct hpmc_clusters_args_t
     const int3 *d_image_test;         //!< Images of particles to test
     const unsigned int *d_tag_test;   //!< Tags of particles to test
     uint2 *d_overlaps;                //!< List of overlap pairs generated
+    uint3 *d_collisions;              //!< List of overlap pairs generated (.x and .y, .x: index of peridoc image)
     unsigned int max_n_overlaps;      //!< Capacity of d_overlaps list
     unsigned int *d_n_overlaps;       //!< Number of particles inserted (return value)
     unsigned int *d_reject;           //!< Particle indices flagged for rejection
@@ -167,7 +173,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const unsigned int *d_check_overlaps,
                                      Index2D overlap_idx,
                                      const typename Shape::param_type *d_params,
-                                     uint2 *d_overlaps,
+                                     uint3 *d_collisions,
                                      unsigned int *d_n_overlaps,
                                      unsigned int *d_reject,
                                      unsigned int *d_n_reject,
@@ -221,15 +227,6 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
     __syncthreads();
 
-    // initialize extra shared mem
-    char *s_extra = (char *)&s_check_overlaps[ntyppairs];
-
-    unsigned int available_bytes = max_extra_bytes;
-    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
-        s_params[cur_type].load_shared(s_extra, available_bytes);
-
-    __syncthreads();
-
     if (i >= N)
         return;
 
@@ -253,129 +250,187 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
         detail::AABB aabb = aabb_local;
         aabb.translate(pos_image);
 
-        // a double loop for reducing branch divergence
-        unsigned int cur_node_idx = 0;
-        unsigned int offs = 0;
-        do  {
-            unsigned int j = UINT_MAX;
-            unsigned int tag_j = UINT_MAX;
-            Scalar4 postype_j;
-            Scalar4 orientation_j;
-            bool circumsphere_overlap = false;
-
-            do
+        for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes; ++cur_node_idx)
+            {
+            if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
                 {
-                if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                if (aabb_tree.isNodeLeaf(cur_node_idx))
                     {
-                    if (aabb_tree.isNodeLeaf(cur_node_idx))
+                    for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
                         {
-                        for (unsigned int cur_p = offs; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                        unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                        unsigned int tag_j = d_tag[j];
+                        if (tag_j == tag)
+                            continue;
+
+                        Scalar4 postype_j = texFetchScalar4(d_postype, clusters_postype_tex, j);
+                        Scalar4 orientation_j = make_scalar4(1,0,0,0);
+                        unsigned int typ_j = __scalar_as_int(postype_j.w);
+                        Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
+                        if (shape_j.hasOrientation())
+                            shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
+
+                        vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+
+                        // check for overlaps
+                        OverlapReal rsq = dot(r_ij,r_ij);
+                        OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+
+                        if (rsq*OverlapReal(4.0) <= DaDb * DaDb &&
+                            s_check_overlaps[overlap_idx(typ_j,type)])
                             {
-                            j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                            tag_j = d_tag[j];
-                            if (tag_j == tag)
-                                continue;
-
-                            postype_j = texFetchScalar4(d_postype, clusters_postype_tex, j);
-                            orientation_j = make_scalar4(1,0,0,0);
+                            // write to collision list
                             unsigned int typ_j = __scalar_as_int(postype_j.w);
-                            Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
-                            if (shape_j.hasOrientation())
-                                shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
-
                             vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
 
-                            // check for overlaps
-                            OverlapReal rsq = dot(r_ij,r_ij);
-                            OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-
-                            if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                            unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
+                            if (n_overlaps >= max_n_overlaps)
+                                atomicMax(&(*d_conditions).x, n_overlaps+1);
+                            else
                                 {
-                                circumsphere_overlap = true;
-                                offs = cur_p+1;
-                                if (offs >= aabb_tree.getNodeNumParticles(cur_node_idx))
+                                // write indices, we'll later convert to tags
+                                d_collisions[n_overlaps] = make_uint3(i,j, cur_image);
+                                }
+
+                            // the rejection test shouldn't use many registers, so leave it here
+                            if (d_reject)
+                                {
+                                bool reject = false;
+
+                                if (line)
                                     {
-                                    offs = 0;
-                                    cur_node_idx++;
+                                    int3 delta_img = -image_hkl[cur_image] + img - d_image[j];
+                                    reject = delta_img.x || delta_img.y || delta_img.z;
                                     }
-                                break;
-                                }
-                            } // end loop over particles in node
+                                else if (swap)
+                                    {
+                                    reject = ((type != type_A && type != type_B) || (typ_j != type_A && typ_j != type_B));
+                                    }
 
-                        if (circumsphere_overlap)
-                            break;
+                                if (reject)
+                                    {
+                                    unsigned int n_reject = atomicAdd(d_n_reject, 1);
+                                    if (n_reject >= max_n_reject)
+                                        atomicMax(&(*d_conditions).y, n_reject+1);
+                                    else
+                                        {
+                                        d_reject[n_reject] = tag;
+                                        }
 
-                        offs = 0;
-                        } // end isLeaf
-                    } // end AABB overlap
-                else
-                    {
-                    // skip ahead
-                    cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
-                    }
-
-                cur_node_idx++;
-                } while (cur_node_idx < num_nodes);
-
-            if (circumsphere_overlap)
+                                    n_reject = atomicAdd(d_n_reject, 1);
+                                    if (n_reject >= max_n_reject)
+                                         atomicMax(&(*d_conditions).y, n_reject+1);
+                                    else
+                                        {
+                                        d_reject[n_reject] = tag_j;
+                                        }
+                                    }
+                                } // end if (d_reject)
+                            } // end if circumsphere overlap
+                        } // end loop over particles in node
+                    } // end isLeaf
+                } // end AABB overlap
+            else
                 {
-                // circumsphere overlap
-                unsigned int typ_j = __scalar_as_int(postype_j.w);
-                Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
-                if (shape_j.hasOrientation())
-                    shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
-
-                vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
-
-                unsigned int err_count;
-                if (s_check_overlaps[overlap_idx(typ_j, type)] && test_overlap(r_ij, shape_i, shape_j, err_count))
-                    {
-                    unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
-                    if (n_overlaps >= max_n_overlaps)
-                        atomicMax(&(*d_conditions).x, n_overlaps+1);
-                    else
-                        d_overlaps[n_overlaps] = make_uint2(tag,tag_j);
-
-                    if (d_reject)
-                        {
-                        bool reject = false;
-
-                        if (line)
-                            {
-                            int3 delta_img = -image_hkl[cur_image] + img - d_image[j];
-                            reject = delta_img.x || delta_img.y || delta_img.z;
-                            }
-                        else if (swap)
-                            {
-                            reject = ((type != type_A && type != type_B) || (typ_j != type_A && typ_j != type_B));
-                            }
-
-                        if (reject)
-                            {
-                            unsigned int n_reject = atomicAdd(d_n_reject, 1);
-                            if (n_reject >= max_n_reject)
-                                atomicMax(&(*d_conditions).y, n_reject+1);
-                            else
-                                {
-                                d_reject[n_reject] = tag;
-                                }
-
-                            n_reject = atomicAdd(d_n_reject, 1);
-                            if (n_reject >= max_n_reject)
-                                atomicMax(&(*d_conditions).y, n_reject+1);
-                            else
-                                {
-                                d_reject[n_reject] = tag_j;
-                                }
-                            }
-                        }
-                    } //end if overlap
-                } // end circumsphere overlap
-            } while (cur_node_idx < num_nodes);
+                // skip ahead
+                cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                }
+            } // end loop over nodes
 
         } // end loop over images
     }
+
+//! Overlap checking in separate kernel to save on registers and avoid divergences
+template< class Shape >
+__global__ void gpu_hpmc_clusters_overlaps_kernel(
+                                     const Scalar4 *d_postype,
+                                     const Scalar4 *d_orientation,
+                                     const unsigned int *d_tag,
+                                     const unsigned int num_types,
+                                     const typename Shape::param_type *d_params,
+                                     unsigned int n_collisions,
+                                     const uint3 *d_collisions,
+                                     uint2 *d_overlaps,
+                                     unsigned int *d_n_overlaps,
+                                     const Scalar4 *d_postype_test,
+                                     const Scalar4 *d_orientation_test,
+                                     const unsigned int *d_tag_test,
+                                     const ManagedArray<vec3<Scalar> > image_list,
+                                     unsigned int max_n_overlaps,
+                                     unsigned int max_extra_bytes)
+    {
+    // load the per type pair parameters into shared memory
+    extern __shared__ char s_data[];
+    typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
+
+    // copy over parameters one int per thread for fast loads
+        {
+        unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
+        unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
+        unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
+
+        for (unsigned int cur_offset = 0; cur_offset < param_size; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < param_size)
+                {
+                ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
+                }
+            }
+        }
+
+    __syncthreads();
+
+    // initialize extra shared mem
+    char *s_extra = (char *)&s_params[num_types];
+
+    unsigned int available_bytes = max_extra_bytes;
+    for (unsigned int cur_type = 0; cur_type < num_types; ++cur_type)
+        s_params[cur_type].load_shared(s_extra, available_bytes);
+
+    __syncthreads();
+
+    // determine idx in collision list
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= n_collisions)
+        return;
+
+    // if the previous kernel overflowed memory, abort here
+    if (idx >= max_n_overlaps)
+        return;
+
+    unsigned int i = d_collisions[idx].x;
+    unsigned int j = d_collisions[idx].y;
+    unsigned int cur_image = d_collisions[idx].z;
+
+    // load (test) particle i
+    Scalar4 postype_i = d_postype_test[i];
+    vec3<Scalar> pos_i(postype_i);
+    vec3<Scalar> pos_image = pos_i + image_list[cur_image];
+    unsigned int type_i = __scalar_as_int(postype_i.w);
+    unsigned int tag_i = d_tag_test[i];
+
+    Shape shape_i(quat<Scalar>(d_orientation_test[i]), s_params[type_i]);
+
+    // load particle j
+    Scalar4 postype_j = d_postype[j];
+    vec3<Scalar> pos_j(postype_j);
+    unsigned int type_j = __scalar_as_int(postype_j.w);
+    unsigned int tag_j = d_tag[j];
+
+    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+    Shape shape_j(quat<Scalar>(d_orientation[j]), s_params[type_j]);
+
+    unsigned int err_count = 0;
+    if (test_overlap(r_ij, shape_i, shape_j, err_count))
+        {
+        // write to overlaps list
+        unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
+        d_overlaps[n_overlaps] = make_uint2(tag_i,tag_j);
+        }
+    }
+
 
 //! Kernel driver for gpu_hpmc_clusters_kernel()
 /*! \param args Bundled arguments
@@ -415,26 +470,38 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         return error;
 
     // determine the maximum block size and clamp the input block size down
-    static int max_block_size = -1;
-    static cudaFuncAttributes attr;
-    if (max_block_size == -1)
+    static int max_block_size_collisions = -1;
+    static cudaFuncAttributes attr_collisions;
+    if (max_block_size_collisions == -1)
         {
-        cudaFuncGetAttributes(&attr, gpu_hpmc_clusters_kernel<Shape>);
-        max_block_size = attr.maxThreadsPerBlock;
+        cudaFuncGetAttributes(&attr_collisions, gpu_hpmc_clusters_kernel<Shape>);
+        max_block_size_collisions = attr_collisions.maxThreadsPerBlock;
         }
 
     // setup the grid to run the kernel
-    unsigned int block_size = min(args.block_size, (unsigned int)max_block_size);
+    unsigned int block_size_collisions = min(args.block_size_collisions, (unsigned int)max_block_size_collisions);
 
-    dim3 threads(block_size,1,1);
-    dim3 grid( args.N / block_size + 1, 1, 1);
+    dim3 threads_collisions(block_size_collisions,1,1);
+    dim3 grid_collisions( args.N / block_size_collisions + 1, 1, 1);
 
-    unsigned int shared_bytes = args.num_types * sizeof(typename Shape::param_type) + args.overlap_idx.getNumElements()*sizeof(unsigned int);
+    unsigned int shared_bytes_collisions = args.num_types * sizeof(typename Shape::param_type) + args.overlap_idx.getNumElements()*sizeof(unsigned int);
 
     // required for memory coherency
     cudaDeviceSynchronize();
 
-    unsigned int max_extra_bytes = args.devprop.sharedMemPerBlock - attr.sharedSizeBytes - shared_bytes;
+    // determine the maximum block size for the overlap check kernel and clamp the input block size down
+    static int max_block_size_overlaps = -1;
+    static cudaFuncAttributes attr_overlaps;
+    if (max_block_size_overlaps == -1)
+        {
+        cudaFuncGetAttributes(&attr_overlaps, gpu_hpmc_clusters_overlaps_kernel<Shape>);
+        max_block_size_overlaps = attr_overlaps.maxThreadsPerBlock;
+        }
+
+    unsigned int block_size_overlaps = min(args.block_size_overlaps, (unsigned int)max_block_size_overlaps);
+
+    unsigned int shared_bytes_overlaps = args.num_types * sizeof(typename Shape::param_type);
+    unsigned int max_extra_bytes = max(0,(int) (32768 - attr_overlaps.sharedSizeBytes - shared_bytes_overlaps));
 
     // attach the parameters to the kernel stream so that they are visible
     // when other kernels are called
@@ -454,14 +521,16 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         }
     unsigned int extra_bytes = max_extra_bytes - available_bytes;
 
-    shared_bytes += extra_bytes;
+    shared_bytes_overlaps += extra_bytes;
+
+    // narrow phase: check overlaps
+    cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
 
     if (args.d_n_reject)
         cudaMemsetAsync(args.d_n_reject, 0, sizeof(unsigned int),args.stream);
 
-    cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
-
-    gpu_hpmc_clusters_kernel<Shape><<<grid, threads, shared_bytes, args.stream>>>(
+    // broad phase: detect collisions between circumspheres
+    gpu_hpmc_clusters_kernel<Shape><<<grid_collisions, threads_collisions, shared_bytes_collisions, args.stream>>>(
                                                      args.N,
                                                      args.d_postype,
                                                      args.d_orientation,
@@ -474,7 +543,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.d_check_overlaps,
                                                      args.overlap_idx,
                                                      d_params,
-                                                     args.d_overlaps,
+                                                     args.d_collisions,
                                                      args.d_n_overlaps,
                                                      args.d_reject,
                                                      args.d_n_reject,
@@ -493,6 +562,34 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.max_n_reject,
                                                      args.d_conditions,
                                                      max_extra_bytes);
+
+    // read back number of collisions
+    unsigned int n_collisions = 0;
+    cudaMemcpy(&n_collisions, args.d_n_overlaps, sizeof(unsigned int), cudaMemcpyDeviceToHost);
+
+    dim3 threads_overlaps(block_size_overlaps,1,1);
+    dim3 grid_overlaps( n_collisions / block_size_overlaps + 1, 1, 1);
+
+    // narrow phase: check overlaps
+    cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
+
+    gpu_hpmc_clusters_overlaps_kernel<Shape><<<grid_overlaps, threads_overlaps, shared_bytes_overlaps, args.stream>>>(
+                                                     args.d_postype,
+                                                     args.d_orientation,
+                                                     args.d_tag,
+                                                     args.num_types,
+                                                     d_params,
+                                                     n_collisions,
+                                                     args.d_collisions,
+                                                     args.d_overlaps,
+                                                     args.d_n_overlaps,
+                                                     args.d_postype_test,
+                                                     args.d_orientation_test,
+                                                     args.d_tag_test,
+                                                     args.image_list,
+                                                     args.max_n_overlaps,
+                                                     max_extra_bytes);
+
 
     // return control of managed memory
     cudaDeviceSynchronize();
