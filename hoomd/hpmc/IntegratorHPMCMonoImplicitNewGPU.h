@@ -424,12 +424,14 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         || m_cell_lists_reinitialized)
         {
         this->initializeCellSets();
-        this->initializeExcellMem();
 
+        #if 0
+        this->initializeExcellMem();
         if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
             {
             this->initializeQueueMem();
             }
+        #endif
 
         this->m_last_dim = cur_dim;
         this->m_last_nmax = this->m_cl->getNmax();
@@ -464,6 +466,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         m_active_cell_move_type_translate.swap(active_cell_move_type_translate);
         }
 
+    #if 0
     // if only NMax changed, only need to reallocate excell memory
     if (this->m_last_nmax != this->m_cl->getNmax())
         {
@@ -476,6 +479,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
         this->m_last_nmax = this->m_cl->getNmax();
         }
+    #endif
 
     // test if we are in domain decomposition mode
     bool domain_decomposition = false;
@@ -511,6 +515,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         Scalar3 ghost_width = this->m_cl->getGhostWidth();
         Scalar3 ghost_fraction = this->m_nominal_width / npd;
 
+        #if 0
             {
             // access the global cell list data
             ArrayHandle<unsigned int> d_cell_size(this->m_cl->getCellSizeArray(), access_location::device, access_mode::read);
@@ -534,6 +539,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
             this->m_tuner_excell_block_size->end();
             }
+        #endif
 
         for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
             {
