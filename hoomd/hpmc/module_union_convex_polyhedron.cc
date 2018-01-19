@@ -29,6 +29,7 @@
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
+#include "UpdaterMuVTGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -69,6 +70,7 @@ void export_union_convex_polyhedron(py::module& m)
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "IntegratorHPMCMonoImplicitNewGPUConvexPolyhedronUnion");
     export_ComputeFreeVolumeGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "ComputeFreeVolumeGPUConvexPolyhedronUnion");
     export_UpdaterClustersGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "UpdaterClustersGPUConvexPolyhedronUnion");
+    export_UpdaterMuVTGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "UpdaterMuVTGPUConvexPolyhedronUnion");
 
     #endif
     }

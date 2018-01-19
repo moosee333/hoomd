@@ -31,6 +31,7 @@
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
+#include "UpdaterMuVTGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -70,6 +71,7 @@ void export_polyhedron(py::module& m)
     export_IntegratorHPMCMonoImplicitNewGPU< ShapePolyhedron >(m, "IntegratorHPMCMonoImplicitNewGPUPolyhedron");
     export_ComputeFreeVolumeGPU< ShapePolyhedron >(m, "ComputeFreeVolumeGPUPolyhedron");
     export_UpdaterClustersGPU< ShapePolyhedron >(m, "UpdaterClustersGPUPolyhedron");
+    export_UpdaterMuVTGPU< ShapePolyhedron >(m, "UpdaterMuVTGPUPolyhedron");
     #endif
     }
 

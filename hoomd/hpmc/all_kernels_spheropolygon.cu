@@ -3,6 +3,7 @@
 
 #include "ComputeFreeVolumeGPU.cuh"
 #include "UpdaterClustersGPU.cuh"
+#include "UpdaterMuVTGPU.cuh"
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
@@ -22,6 +23,8 @@ template cudaError_t gpu_hpmc_clusters<ShapeSpheropolygon>(const hpmc_clusters_a
                                                        const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSpheropolygon>(const hpmc_args_t& args,
                                                   const typename ShapeSpheropolygon::param_type *d_params);
+template cudaError_t gpu_hpmc_update_aabb<ShapeSpheropolygon>(const hpmc_args_t& args,
+                                                  const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_moves<ShapeSpheropolygon>(const hpmc_args_t& args,
                                                   const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_check_overlaps<ShapeSpheropolygon>(const hpmc_args_t& args,
@@ -38,7 +41,8 @@ template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeSpheropolygon>(const hpm
                                                   const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeSpheropolygon>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSpheropolygon::param_type *d_params);
-
+template cudaError_t gpu_hpmc_muvt<ShapeSpheropolygon>(const hpmc_muvt_args_t &args,
+                                                       const typename ShapeSpheropolygon::param_type *d_params);
 }; // end namespace detail
 
 } // end namespace hpmc

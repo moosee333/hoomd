@@ -280,8 +280,14 @@ class IntegratorHPMC : public Integrator
             {
             m_extra_ghost_width = extra;
             updateCellWidth();
-
             }
+
+        //! Return the nominal interaction range
+        Scalar getNominalWidth() const
+            {
+            return m_nominal_width;
+            }
+
         //! Method to scale the box
         virtual bool attemptBoxResize(unsigned int timestep, const BoxDim& new_box);
 

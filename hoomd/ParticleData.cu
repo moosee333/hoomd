@@ -10,8 +10,6 @@
     \brief ImplementsGPU kernel code and data structure functions used by ParticleData
 */
 
-#ifdef ENABLE_MPI
-
 #include <iterator>
 
 #include <thrust/iterator/zip_iterator.h>
@@ -383,5 +381,3 @@ void gpu_pdata_add_particles(const unsigned int old_nparticles,
         d_in,
         d_comm_flags);
     }
-
-#endif // ENABLE_MPI

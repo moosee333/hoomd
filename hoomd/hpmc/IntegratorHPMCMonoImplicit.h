@@ -150,6 +150,12 @@ class IntegratorHPMCMonoImplicit : public IntegratorHPMCMono<Shape>
         //! Slot to be called when number of types changes
         void slotNumTypesChange();
 
+        //! Returns true if the exponent of the Boltzmann weight is proportional to overlap volume
+        bool depletantModeOverlapRegions() const
+            {
+            return false; // the exponent is proportional to free volume
+            }
+
     protected:
         Scalar m_n_R;                                            //!< Average depletant number density in free volume
         unsigned int m_type;                                     //!< Type of depletant particle to generate
@@ -443,6 +449,9 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
 
             if (move_type_translate)
                 {
+                // skip if moves are disabled
+                if (h_d.data[typ_i] == Scalar(0.0)) continue;
+
                 move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
 
                 #ifdef ENABLE_MPI
@@ -456,6 +465,9 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
                 }
             else
                 {
+                // skip if moves are disabled
+                if (h_a.data[typ_i] == Scalar(0.0)) continue;
+
                 move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
                 }
 

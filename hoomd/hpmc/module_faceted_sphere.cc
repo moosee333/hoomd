@@ -31,6 +31,7 @@
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
+#include "UpdaterMuVTGPU.h"
 #endif
 
 
@@ -73,6 +74,7 @@ void export_faceted_sphere(py::module& m)
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeFacetedSphere >(m, "IntegratorHPMCMonoImplicitNewGPUFacetedSphere");
     export_ComputeFreeVolumeGPU< ShapeFacetedSphere >(m, "ComputeFreeVolumeGPUFacetedSphere");
     export_UpdaterClustersGPU< ShapeFacetedSphere >(m, "UpdaterClustersGPUFacetedSphere");
+    export_UpdaterMuVTGPU< ShapeFacetedSphere >(m, "UpdaterMuVTGPUFacetedSphere");
     #endif
     }
 

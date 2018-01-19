@@ -14,6 +14,13 @@
 #include <hoomd/extern/pybind/include/pybind11/pybind11.h>
 #endif
 
+#ifdef ENABLE_TBB
+#include <tbb/tbb.h>
+#include <thread>
+#endif
+
+#include <random>
+
 namespace hpmc
 {
 
@@ -73,6 +80,17 @@ class UpdaterMuVT : public Updater
                 }
             m_transfer_ratio = transfer_ratio;
             }
+
+        //! Set ratio of transfer moves to exchange moves (Gibbs ensemble only)
+        void setBulkMoveRatio(Scalar bulk_move_ratio)
+            {
+            if (bulk_move_ratio < Scalar(0.0) || bulk_move_ratio > Scalar(1.0))
+                {
+                throw std::runtime_error("Transfer ratio has to be between 0 and 1.\n");
+                }
+            m_bulk_move_ratio = bulk_move_ratio;
+            }
+
 
         //! List of types that are inserted/removed/transfered
         void setTransferTypes(std::vector<unsigned int>& transfer_types)
@@ -152,6 +170,7 @@ class UpdaterMuVT : public Updater
         Scalar m_max_vol_rescale;                             //!< Maximum volume ratio rescaling factor
         Scalar m_move_ratio;                                  //!< Ratio between exchange/transfer and volume moves
         Scalar m_transfer_ratio;                              //!< Ratio between transfer and exchange moves
+        Scalar m_bulk_move_ratio;                             //!< Ratio between transfer and exchange moves
 
         unsigned int m_gibbs_other;                           //!< The root-rank of the other partition
 
@@ -161,11 +180,7 @@ class UpdaterMuVT : public Updater
 
         std::vector<std::vector<unsigned int> > m_type_map;   //!< Local list of particle tags per type
         std::vector<unsigned int> m_transfer_types;  //!< List of types being insert/removed/transfered between boxes
-
-        GPUVector<Scalar4> m_pos_backup;             //!< Backup of particle positions for volume move
-        GPUVector<Scalar4> m_orientation_backup;     //!< Backup of particle orientations for volume move
-        GPUVector<Scalar> m_charge_backup;           //!< Backup of particle charges for volume move
-        GPUVector<Scalar> m_diameter_backup;         //!< Backup of particle diameters for volume move
+        std::vector<unsigned int> m_parallel_types;  //!< List of non-interacting types
 
         /*! Check for overlaps of a fictituous particle
          * \param timestep Current time step
@@ -173,10 +188,12 @@ class UpdaterMuVT : public Updater
          * \param pos Position of fictitous particle
          * \param orientation Orientation of particle
          * \param lnboltzmann Log of Boltzmann weight of insertion attempt (return value)
+         * \param communicate if true, reduce result over all ranks
+         * \param seed an additional RNG seed
          * \returns True if boltzmann weight is non-zero
          */
         virtual bool tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos, quat<Scalar> orientation,
-            Scalar &lnboltzmann);
+            Scalar &lnboltzmann, bool communicate, unsigned int seed);
 
         /*! Try removing a particle
             \param timestep Current time step
@@ -184,7 +201,27 @@ class UpdaterMuVT : public Updater
             \param lnboltzmann Log of Boltzmann weight of removal attempt (return value)
             \returns True if boltzmann weight is non-zero
          */
-        virtual bool tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann);
+        virtual bool tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
+            bool communicate, unsigned int seed);
+
+        //! Generate a random configuration for a Gibbs sampler
+        virtual void generateGibbsSamplerConfiguration(unsigned int timestep);
+
+        /*! Check for overlaps of an inserted particle, with existing and with Gibbs sampler configuration
+         * \param timestep  time step
+         * \param type Type of particle to test
+         * \param pos Position of fictitous particle
+         * \param orientation Orientation of particle
+         * \param lnboltzmann Log of Boltzmann weight of insertion attempt (return value)
+         * \param if true, reduce final result
+         * \returns True if boltzmann weight is non-zero
+         */
+        virtual bool tryInsertParticleGibbsSampling(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
+            quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed)
+            {
+            // just check against existing particles
+            return UpdaterMuVT<Shape>::tryInsertParticle(timestep, type, pos, orientation, lnboltzmann, communicate, seed);
+            }
 
         /*! Try switching particle type
          * \param timestep Current time step
@@ -222,16 +259,6 @@ class UpdaterMuVT : public Updater
 
         //! Get number of particles of a given type
         unsigned int getNumParticlesType(unsigned int type);
-
-    private:
-        //! Handle MaxParticleNumberChange signal
-        /*! Resize the m_pos_backup array
-        */
-        void slotMaxNChange()
-            {
-            unsigned int MaxN = m_pdata->getMaxN();
-            m_pos_backup.resize(MaxN);
-            }
     };
 
 //! Export the UpdaterMuVT class to python
@@ -246,6 +273,7 @@ template < class Shape > void export_UpdaterMuVT(pybind11::module& m, const std:
           .def("setMaxVolumeRescale", &UpdaterMuVT<Shape>::setMaxVolumeRescale)
           .def("setMoveRatio", &UpdaterMuVT<Shape>::setMoveRatio)
           .def("setTransferRatio", &UpdaterMuVT<Shape>::setTransferRatio)
+          .def("setBulkMoveRatio", &UpdaterMuVT<Shape>::setBulkMoveRatio)
           .def("setTransferTypes", &UpdaterMuVT<Shape>::setTransferTypes)
           ;
     }
@@ -262,7 +290,8 @@ UpdaterMuVT<Shape>::UpdaterMuVT(std::shared_ptr<SystemDefinition> sysdef,
     unsigned int seed,
     unsigned int npartition)
     : Updater(sysdef), m_mc(mc), m_seed(seed), m_npartition(npartition), m_gibbs(false),
-      m_max_vol_rescale(0.1), m_move_ratio(0.5), m_transfer_ratio(1.0), m_gibbs_other(0)
+      m_max_vol_rescale(0.1), m_move_ratio(0.5), m_transfer_ratio(1.0), m_bulk_move_ratio(0.5),
+      m_gibbs_other(0)
     {
     // broadcast the seed from rank 0 to all other ranks.
     #ifdef ENABLE_MPI
@@ -310,16 +339,8 @@ UpdaterMuVT<Shape>::UpdaterMuVT(std::shared_ptr<SystemDefinition> sysdef,
         }
     #endif
 
-    if (m_sysdef->getNDimensions() == 2)
-        {
-        throw std::runtime_error("2D runs not supported with update.muvt().");
-        }
-
     // initialize list of tags per type
     mapTypes();
-
-    // Connect to the MaxParticleNumberChange signal
-    m_pdata->getMaxParticleNumberChangeSignal().template connect<UpdaterMuVT<Shape>, &UpdaterMuVT<Shape>::slotMaxNChange>(this);
     }
 
 //! Destructor
@@ -328,12 +349,15 @@ UpdaterMuVT<Shape>::~UpdaterMuVT()
     {
     m_pdata->getNumTypesChangeSignal().template disconnect<UpdaterMuVT<Shape>, &UpdaterMuVT<Shape>::slotNumTypesChange>(this);
     m_pdata->getParticleSortSignal().template disconnect<UpdaterMuVT<Shape>, &UpdaterMuVT<Shape>::mapTypes>(this);
-    m_pdata->getMaxParticleNumberChangeSignal().template disconnect<UpdaterMuVT<Shape>, &UpdaterMuVT<Shape>::slotMaxNChange>(this);
     }
 
 template<class Shape>
 void UpdaterMuVT<Shape>::mapTypes()
     {
+    m_exec_conf->msg->notice(8) << "UpdaterMuVT updating type map " << m_pdata->getN() << " particles " << std::endl;
+
+    if (m_prof) m_prof->push("Map types");
+
     ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
     ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
 
@@ -353,6 +377,8 @@ void UpdaterMuVT<Shape>::mapTypes()
         assert(m_type_map.size() > typei);
         m_type_map[typei].push_back(tag);
         }
+
+    if (m_prof) m_prof->pop();
     }
 
 template<class Shape>
@@ -570,9 +596,31 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
         }
     #endif
 
+    // determine if the inserted/removed species are non-interacting
+    std::vector<unsigned int> transfer_types;
+    m_parallel_types.clear();
+        {
+        ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
+        const Index2D& overlap_idx = m_mc->getOverlapIndexer();
+
+        auto patch = m_mc->getPatchInteraction();
+
+        for (auto it_i = m_transfer_types.begin(); it_i != m_transfer_types.end(); ++it_i)
+            {
+            if (!patch && !h_overlaps.data[overlap_idx(*it_i,*it_i)])
+                {
+                m_parallel_types.push_back(*it_i);
+                }
+            else
+                {
+                transfer_types.push_back(*it_i);
+                }
+            }
+        } // end ArrayHandle scope
+
     if (active && !volume_move)
         {
-        bool transfer_move = (rng.f() <= m_transfer_ratio);
+        bool transfer_move = !m_gibbs || (rng.f() <= m_transfer_ratio);
 
         if (transfer_move)
             {
@@ -584,81 +632,231 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                 }
             #endif
 
-            // whether we insert or remove a particle
-            bool insert = m_gibbs ? mod : rand_select(rng,1);
+            bool bulk_move = m_parallel_types.size() && (rng.f() <= m_bulk_move_ratio || !transfer_types.size());
 
-            if (insert)
+            if (m_gibbs || !bulk_move)
                 {
-                // Try inserting a particle
-                unsigned int type = 0;
-                std::string type_name;
-                Scalar lnboltzmann(0.0);
+                // whether we insert or remove a particle
+                bool insert = m_gibbs ? mod : rand_select(rng,1);
+                bool accept = true;
 
-                unsigned int nptl_type = 0;
-
-                Scalar V = m_pdata->getGlobalBox().getVolume();
-
-                assert(m_transfer_types.size() > 0);
-
-                if (! m_gibbs)
+                if (insert)
                     {
-                    // choose a random particle type out of those being inserted or removed
-                    type = m_transfer_types[rand_select(rng, m_transfer_types.size()-1)];
-                    }
-                else
-                    {
-                    if (is_root)
+                    if (m_prof) m_prof->push("insert");
+
+                    // Try inserting a particle
+                    unsigned int type = 0;
+                    std::string type_name;
+                    Scalar lnboltzmann(0.0);
+
+                    unsigned int nptl_type = 0;
+
+                    Scalar V = m_pdata->getGlobalBox().getVolume();
+
+                    assert(transfer_types.size() > 0);
+
+                    if (! m_gibbs)
                         {
+                        // choose a random particle type out of those being inserted or removed
+                        type = transfer_types[rand_select(rng, transfer_types.size()-1)];
+                        }
+                    else
+                        {
+                        if (is_root)
+                            {
+                            #ifdef ENABLE_MPI
+                            MPI_Status stat;
+
+                            // receive type of particle
+                            unsigned int n;
+                            MPI_Recv(&n, 1, MPI_UNSIGNED, m_gibbs_other,0, MPI_COMM_WORLD, &stat);
+                            char s[n];
+                            MPI_Recv(s, n, MPI_CHAR, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
+                            type_name = std::string(s);
+
+                            // resolve type name
+                            type = m_pdata->getTypeByName(type_name);
+                            #endif
+                            }
+
                         #ifdef ENABLE_MPI
-                        MPI_Status stat;
-
-                        // receive type of particle
-                        unsigned int n;
-                        MPI_Recv(&n, 1, MPI_UNSIGNED, m_gibbs_other,0, MPI_COMM_WORLD, &stat);
-                        char s[n];
-                        MPI_Recv(s, n, MPI_CHAR, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
-                        type_name = std::string(s);
-
-                        // resolve type name
-                        type = m_pdata->getTypeByName(type_name);
+                        if (m_comm)
+                            {
+                            bcast(type,0,m_exec_conf->getMPICommunicator());
+                            }
                         #endif
                         }
 
-                    #ifdef ENABLE_MPI
-                    if (m_comm)
+                    // number of particles of that type
+                    nptl_type = getNumParticlesType(type);
+
                         {
-                        bcast(type,0,m_exec_conf->getMPICommunicator());
+                        auto params = m_mc->getParams();
+                        const typename Shape::param_type& param = params[type];
+
+                        // Propose a random position uniformly in the box
+                        Scalar3 f;
+                        f.x = rng.template s<Scalar>();
+                        f.y = rng.template s<Scalar>();
+                        if (m_sysdef->getNDimensions() == 3)
+                            f.z = rng.template s<Scalar>();
+                        else
+                            f.z = Scalar(0.5);
+
+                        vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getGlobalBox().makeCoordinates(f));
+
+                        Shape shape_test(quat<Scalar>(), param);
+                        if (shape_test.hasOrientation())
+                            {
+                            // set particle orientation
+                            shape_test.orientation = generateRandomOrientation(rng);
+                            }
+
+                        if (m_gibbs)
+                            {
+                            // acceptance probability
+                            lnboltzmann = log((Scalar)V/(Scalar)(nptl_type+1));
+                            }
+                        else
+                            {
+                            // get fugacity value
+                            Scalar fugacity = m_fugacity[type]->getValue(timestep);
+
+                            // sanity check
+                            if (fugacity <= Scalar(0.0))
+                                {
+                                m_exec_conf->msg->error() << "Fugacity has to be greater than zero." << std::endl;
+                                throw std::runtime_error("Error in UpdaterMuVT");
+                                }
+
+                            // acceptance probability
+                            lnboltzmann = log(fugacity*V/(Scalar)(nptl_type+1));
+                            }
+
+                        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to insert a particle of type "
+                            << m_pdata->getNameByType(type) << std::endl;
+
+                        unsigned int nonzero = 1;
+
+                        Scalar lnb(0.0);
+
+                        #ifdef ENABLE_MPI
+                        nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
+                            lnb, true, m_exec_conf->getPartition());
+                        #else
+                        nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation,
+                            lnb, true, 0);
+                        #endif
+
+                        if (nonzero)
+                            {
+                            lnboltzmann += lnb;
+                            }
+
+                        #ifdef ENABLE_MPI
+                        if (m_gibbs && is_root)
+                            {
+                            // receive Boltzmann factor for removal from other rank
+                            MPI_Status stat;
+                            Scalar remove_lnb;
+                            unsigned int remove_nonzero;
+                            MPI_Recv(&remove_lnb, 1, MPI_HOOMD_SCALAR, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
+                            MPI_Recv(&remove_nonzero, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
+
+                            // avoid divide/multiply by infinity
+                            if (remove_nonzero)
+                                {
+                                lnboltzmann += remove_lnb;
+                                }
+                            else
+                                {
+                                nonzero = 0;
+                                }
+                            }
+
+                        if (m_comm)
+                            {
+                            bcast(lnboltzmann, 0, m_exec_conf->getMPICommunicator());
+                            bcast(nonzero, 0, m_exec_conf->getMPICommunicator());
+                            }
+                        #endif
+
+                        accept = false;
+
+                        // apply acceptance criterium
+                        if (nonzero)
+                            {
+                            accept = (rng.template s<Scalar>() < exp(lnboltzmann));
+                            }
+
+                        #ifdef ENABLE_MPI
+                        if (m_gibbs && is_root)
+                            {
+                            // send result of acceptance test
+                            unsigned result = accept;
+                            MPI_Send(&result, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD);
+                            }
+                        #endif
+
+                        if (accept)
+                            {
+                            // insertion was successful
+
+                            // create a new particle with given type
+                            unsigned int tag;
+
+                            tag = m_pdata->addParticle(type);
+
+                            // set the position of the particle
+
+                            // setPosition() takes into account the grid shift, so subtract that one
+                            Scalar3 p = vec_to_scalar3(pos_test)-m_pdata->getOrigin();
+                            int3 tmp = make_int3(0,0,0);
+                            m_pdata->getGlobalBox().wrap(p,tmp);
+                            m_pdata->setPosition(tag, p);
+                            if (shape_test.hasOrientation())
+                                {
+                                m_pdata->setOrientation(tag, quat_to_scalar4(shape_test.orientation));
+                                }
+
+                            m_count_total.insert_accept_count++;
+                            }
+                        else
+                            {
+                            m_count_total.insert_reject_count++;
+                            }
                         }
-                    #endif
+
+                    if (m_prof) m_prof->pop();
                     }
-
-                // number of particles of that type
-                nptl_type = getNumParticlesType(type);
-
+                else
                     {
-                    const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
-                    const typename Shape::param_type& param = params[type];
+                    if (m_prof) m_prof->push("remove");
 
-                    // Propose a random position uniformly in the box
-                    Scalar3 f;
-                    f.x = rng.template s<Scalar>();
-                    f.y = rng.template s<Scalar>();
-                    f.z = rng.template s<Scalar>();
-                    vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getGlobalBox().makeCoordinates(f));
+                    // try removing a particle
+                    unsigned int tag = UINT_MAX;
 
-                    Shape shape_test(quat<Scalar>(), param);
-                    if (shape_test.hasOrientation())
+                    // in Gibbs ensemble, we should not use correlated random numbers with box 1
+                    hoomd::detail::Saru rng_local(rng.u32());
+
+                    // choose a random particle type out of those being transfered
+                    assert(transfer_types.size() > 0);
+                    unsigned int type = transfer_types[rand_select(rng_local, transfer_types.size()-1)];
+
+                    // choose a random particle of that type
+                    unsigned int nptl_type = getNumParticlesType(type);
+
+                    if (nptl_type)
                         {
-                        // set particle orientation
-                        shape_test.orientation = generateRandomOrientation(rng);
+                        // get random tag of given type
+                        unsigned int type_offset = rand_select(rng_local, nptl_type-1);
+                        tag = getNthTypeTag(type, type_offset);
                         }
 
-                    if (m_gibbs)
-                        {
-                        // acceptance probability
-                        lnboltzmann = log((Scalar)V/(Scalar)(nptl_type+1));
-                        }
-                    else
+                    Scalar V = m_pdata->getGlobalBox().getVolume();
+                    Scalar lnboltzmann(0.0);
+
+                    if (!m_gibbs)
                         {
                         // get fugacity value
                         Scalar fugacity = m_fugacity[type]->getValue(timestep);
@@ -670,33 +868,51 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             throw std::runtime_error("Error in UpdaterMuVT");
                             }
 
-                        // acceptance probability
-                        lnboltzmann = log(fugacity*V/(Scalar)(nptl_type+1));
+                        lnboltzmann -= log(fugacity);
                         }
-
-                    // check if particle can be inserted without overlaps
-                    Scalar lnb(0.0);
-                    unsigned int nonzero = tryInsertParticle(timestep, type, pos_test, shape_test.orientation, lnb);
-
-                    if (nonzero)
+                    else
                         {
-                        lnboltzmann += lnb;
-                        }
-
-                    #ifdef ENABLE_MPI
-                    if (m_gibbs && is_root)
-                        {
-                        // receive Boltzmann factor for removal from other rank
-                        MPI_Status stat;
-                        Scalar remove_lnb;
-                        unsigned int remove_nonzero;
-                        MPI_Recv(&remove_lnb, 1, MPI_HOOMD_SCALAR, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
-                        MPI_Recv(&remove_nonzero, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
-
-                        // avoid divide/multiply by infinity
-                        if (remove_nonzero)
+                        if (is_root)
                             {
-                            lnboltzmann += remove_lnb;
+                            #ifdef ENABLE_MPI
+                            // determine type name
+                            std::string type_name = m_pdata->getNameByType(type);
+
+                            // send particle type to other rank
+                            unsigned int n = type_name.size()+1;
+                            MPI_Send(&n, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD);
+                            char s[n];
+                            memcpy(s,type_name.c_str(),n);
+                            MPI_Send(s, n, MPI_CHAR, m_gibbs_other, 0, MPI_COMM_WORLD);
+                            #endif
+                            }
+                        }
+
+                    // acceptance probability
+                    unsigned int nonzero = 1;
+                    if (nptl_type)
+                        {
+                        lnboltzmann += log((Scalar)nptl_type/V);
+                        }
+                    else
+                        {
+                        nonzero = 0;
+                        }
+
+                    if (tag != UINT_MAX)
+                        {
+                        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to remove a particle of type "
+                            << m_pdata->getNameByType(type) << std::endl;
+
+                        // get weight for removal
+                        Scalar lnb(0.0);
+                        #ifdef ENABLE_MPI
+                        if (tryRemoveParticle(timestep, tag, lnb, true, m_exec_conf->getPartition()))
+                        #else
+                        if (tryRemoveParticle(timestep, tag, lnb, true, 0))
+                        #endif
+                            {
+                            lnboltzmann += lnb;
                             }
                         else
                             {
@@ -704,186 +920,63 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                             }
                         }
 
-                    if (m_comm)
+                    if (m_gibbs)
                         {
-                        bcast(lnboltzmann, 0, m_exec_conf->getMPICommunicator());
-                        bcast(nonzero, 0, m_exec_conf->getMPICommunicator());
-                        }
-                    #endif
+                        if (is_root)
+                            {
+                            #ifdef ENABLE_MPI
+                            // send result of removal attempt
+                            MPI_Send(&lnboltzmann, 1, MPI_HOOMD_SCALAR, m_gibbs_other, 0, MPI_COMM_WORLD);
+                            MPI_Send(&nonzero, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD);
 
-                    // apply acceptance criterium
-                    bool accept = false;
-                    if (nonzero)
+                            // wait for result of insertion on other rank
+                            unsigned int result;
+                            MPI_Status stat;
+                            MPI_Recv(&result, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
+                            accept = result;
+                            #endif
+                            }
+                        }
+                    else
                         {
-                        accept = (rng.template s<Scalar>() < exp(lnboltzmann));
+                        // apply acceptance criterium
+                        if (nonzero)
+                            {
+                            accept  = (rng_local.f() < exp(lnboltzmann));
+                            }
+                        else
+                            {
+                            accept = false;
+                            }
                         }
 
                     #ifdef ENABLE_MPI
-                    if (m_gibbs && is_root)
+                    if (m_gibbs && m_comm)
                         {
-                        // send result of acceptance test
-                        unsigned result = accept;
-                        MPI_Send(&result, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD);
+                        bcast(accept,0,m_exec_conf->getMPICommunicator());
                         }
                     #endif
 
                     if (accept)
                         {
-                        // insertion was successful
+                        // remove particle
+                        m_pdata->removeParticle(tag);
 
-                        // create a new particle with given type
-                        unsigned int tag;
-
-                        tag = m_pdata->addParticle(type);
-
-                        // set the position of the particle
-
-                        // setPosition() takes into account the grid shift, so subtract that one
-                        Scalar3 p = vec_to_scalar3(pos_test)-m_pdata->getOrigin();
-                        int3 tmp = make_int3(0,0,0);
-                        m_pdata->getGlobalBox().wrap(p,tmp);
-                        m_pdata->setPosition(tag, p);
-                        if (shape_test.hasOrientation())
-                            {
-                            m_pdata->setOrientation(tag, quat_to_scalar4(shape_test.orientation));
-                            }
-                        m_count_total.insert_accept_count++;
+                        m_count_total.remove_accept_count++;
                         }
                     else
                         {
-                        m_count_total.insert_reject_count++;
+                        m_count_total.remove_reject_count++;
                         }
-                    }
+
+                    if (m_prof) m_prof->pop();
+                    } // end remove particle
                 }
-            else
+            else // gibbs && ! parallel
                 {
-                // try removing a particle
-                unsigned int tag = UINT_MAX;
-
-                // in Gibbs ensemble, we should not use correlated random numbers with box 1
-                hoomd::detail::Saru rng_local(rng.u32());
-
-                // choose a random particle type out of those being transfered
-                assert(m_transfer_types.size() > 0);
-                unsigned int type = m_transfer_types[rand_select(rng_local, m_transfer_types.size()-1)];
-
-                // choose a random particle of that type
-                unsigned int nptl_type = getNumParticlesType(type);
-
-                if (nptl_type)
-                    {
-                    // get random tag of given type
-                    unsigned int type_offset = rand_select(rng_local, nptl_type-1);
-                    tag = getNthTypeTag(type, type_offset);
-                    }
-
-                Scalar V = m_pdata->getGlobalBox().getVolume();
-                Scalar lnboltzmann(0.0);
-
-                if (!m_gibbs)
-                    {
-                    // get fugacity value
-                    Scalar fugacity = m_fugacity[type]->getValue(timestep);
-
-                    // sanity check
-                    if (fugacity <= Scalar(0.0))
-                        {
-                        m_exec_conf->msg->error() << "Fugacity has to be greater than zero." << std::endl;
-                        throw std::runtime_error("Error in UpdaterMuVT");
-                        }
-
-                    lnboltzmann -= log(fugacity);
-                    }
-                else
-                    {
-                    if (is_root)
-                        {
-                        #ifdef ENABLE_MPI
-                        // determine type name
-                        std::string type_name = m_pdata->getNameByType(type);
-
-                        // send particle type to other rank
-                        unsigned int n = type_name.size()+1;
-                        MPI_Send(&n, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD);
-                        char s[n];
-                        memcpy(s,type_name.c_str(),n);
-                        MPI_Send(s, n, MPI_CHAR, m_gibbs_other, 0, MPI_COMM_WORLD);
-                        #endif
-                        }
-                    }
-
-                // acceptance probability
-                unsigned int nonzero = 1;
-                if (nptl_type)
-                    {
-                    lnboltzmann += log((Scalar)nptl_type/V);
-                    }
-                else
-                    {
-                    nonzero = 0;
-                    }
-
-                bool accept = true;
-
-                // get weight for removal
-                Scalar lnb(0.0);
-                if (tryRemoveParticle(timestep, tag, lnb))
-                    {
-                    lnboltzmann += lnb;
-                    }
-                else
-                    {
-                    nonzero = 0;
-                    }
-
-                if (m_gibbs)
-                    {
-                    if (is_root)
-                        {
-                        #ifdef ENABLE_MPI
-                        // send result of removal attempt
-                        MPI_Send(&lnboltzmann, 1, MPI_HOOMD_SCALAR, m_gibbs_other, 0, MPI_COMM_WORLD);
-                        MPI_Send(&nonzero, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD);
-
-                        // wait for result of insertion on other rank
-                        unsigned int result;
-                        MPI_Status stat;
-                        MPI_Recv(&result, 1, MPI_UNSIGNED, m_gibbs_other, 0, MPI_COMM_WORLD, &stat);
-                        accept = result;
-                        #endif
-                        }
-                    }
-                else
-                    {
-                    // apply acceptance criterium
-                    if (nonzero)
-                        {
-                        accept  = (rng_local.f() < exp(lnboltzmann));
-                        }
-                    else
-                        {
-                        accept = false;
-                        }
-                    }
-
-                #ifdef ENABLE_MPI
-                if (m_gibbs && m_comm)
-                    {
-                    bcast(accept,0,m_exec_conf->getMPICommunicator());
-                    }
-                #endif
-
-                if (accept)
-                    {
-                    // remove particle
-                    m_pdata->removeParticle(tag);
-                    m_count_total.remove_accept_count++;
-                    }
-                else
-                    {
-                    m_count_total.remove_reject_count++;
-                    }
-                } // end remove particle
+                // generate a Gibbs sampler configuration
+                generateGibbsSamplerConfiguration(timestep);
+                } // end else gibbs && !parallel
             } // end transfer move
         else
             {
@@ -905,6 +998,12 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     if (! m_gibbs)
                         {
                         throw std::runtime_error("Particle identity changes only supported in Gibbs ensemble.");
+                        }
+
+                    if (! m_mc->getPatchInteraction())
+                        {
+                        //for now
+                        throw std::runtime_error("Particle identity changes not yet supported with energetic interactions.");
                         }
 
                     // select a particle type at random
@@ -1025,6 +1124,12 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
                     // slave
                     assert(m_gibbs);
 
+                    // fugacity not support for now
+                    if (! m_gibbs)
+                        {
+                        throw std::runtime_error("Particle identity changes only supported in Gibbs ensemble.");
+                        }
+
                     unsigned int type=0, other_type=0;
                     #ifdef ENABLE_MPI
                     if (is_root)
@@ -1134,7 +1239,7 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
         Scalar V = global_box_old.getVolume();
         unsigned int nglobal = m_pdata->getNGlobal();
 
-        Scalar V_new,V_new_other;
+        Scalar V_new(0.0),V_new_other(0.0);
         if (is_root)
             {
             if (mod == 0)
@@ -1295,6 +1400,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
         } // end volume move
     #endif
 
+    assert(m_exec_conf->getNRanks() > 1 || (m_pdata->getN() == m_pdata->getNGlobal()));
+
     #ifdef ENABLE_MPI
     if (m_comm)
         {
@@ -1307,7 +1414,8 @@ void UpdaterMuVT<Shape>::update(unsigned int timestep)
     }
 
 template<class Shape>
-bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann)
+bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int tag, Scalar &lnboltzmann,
+    bool communicate, unsigned int seed)
     {
     lnboltzmann = Scalar(0.0);
 
@@ -1432,7 +1540,7 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
         }
 
     #ifdef ENABLE_MPI
-    if (m_comm)
+    if (communicate && m_comm)
         {
         MPI_Allreduce(MPI_IN_PLACE, &lnboltzmann, 1, MPI_HOOMD_SCALAR, MPI_SUM, m_exec_conf->getMPICommunicator());
         }
@@ -1444,7 +1552,7 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
 
 template<class Shape>
 bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int type, vec3<Scalar> pos,
-    quat<Scalar> orientation, Scalar &lnboltzmann)
+    quat<Scalar> orientation, Scalar &lnboltzmann, bool communicate, unsigned int seed)
     {
     // do we have to compute energetic contribution?
     auto patch = m_mc->getPatchInteraction();
@@ -1455,7 +1563,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
 
     bool is_local = true;
     #ifdef ENABLE_MPI
-    if (this->m_pdata->getDomainDecomposition())
+    if (communicate && this->m_pdata->getDomainDecomposition())
         {
         const BoxDim& global_box = this->m_pdata->getGlobalBox();
         is_local = this->m_exec_conf->getRank() == this->m_pdata->getDomainDecomposition()->placeParticle(global_box, vec_to_scalar3(pos));
@@ -1470,12 +1578,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
         auto& image_list = m_mc->updateImageList();
 
         // check for overlaps
-        ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
-
-        const std::vector<typename Shape::param_type, managed_allocator<typename Shape::param_type> > & params = m_mc->getParams();
+        auto params = m_mc->getParams();
 
         ArrayHandle<unsigned int> h_overlaps(m_mc->getInteractionMatrix(), access_location::host, access_mode::read);
         const Index2D& overlap_idx = m_mc->getOverlapIndexer();
@@ -1488,45 +1591,58 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
 
         unsigned int err_count = 0;
 
-        const unsigned int n_images = image_list.size();
-        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
             {
-            vec3<Scalar> pos_image = pos + image_list[cur_image];
+            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
 
-            if (cur_image != 0)
+            const unsigned int n_images = image_list.size();
+            for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                 {
-                // check for self-overlap with all images except the original
-                vec3<Scalar> r_ij = pos - pos_image;
-                if (h_overlaps.data[overlap_idx(type, type)]
-                    && check_circumsphere_overlap(r_ij, shape, shape)
-                    && test_overlap(r_ij, shape, shape, err_count))
-                    {
-                    overlap = 1;
-                    break;
-                    }
+                vec3<Scalar> pos_image = pos + image_list[cur_image];
 
-                // self-energy
-                if (patch && dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
+                if (cur_image != 0)
                     {
-                    lnboltzmann -= patch->energy(r_ij,
-                        type,
-                        quat<float>(orientation),
-                        1.0, // diameter i
-                        0.0, // charge i
-                        type,
-                        quat<float>(orientation),
-                        1.0, // diameter i
-                        0.0 // charge i
-                        );
+                    // check for self-overlap with all images except the original
+                    vec3<Scalar> r_ij = pos - pos_image;
+                    if (h_overlaps.data[overlap_idx(type, type)]
+                        && check_circumsphere_overlap(r_ij, shape, shape)
+                        && test_overlap(r_ij, shape, shape, err_count))
+                        {
+                        overlap = 1;
+                        break;
+                        }
+
+                    // self-energy
+                    if (patch && dot(r_ij,r_ij) <= r_cut_patch*r_cut_patch)
+                        {
+                        lnboltzmann -= patch->energy(r_ij,
+                            type,
+                            quat<float>(orientation),
+                            1.0, // diameter i
+                            0.0, // charge i
+                            type,
+                            quat<float>(orientation),
+                            1.0, // diameter i
+                            0.0 // charge i
+                            );
+                        }
                     }
                 }
-            }
+            } // end ArrayHandle scope
 
         // we cannot rely on a valid AABB tree when there are 0 particles
         if (! overlap && nptl_local > 0)
             {
             // Check particle against AABB tree for neighbors
             const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
+            const unsigned int n_images = image_list.size();
+
+            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
 
             OverlapReal R_query = std::max(shape.getCircumsphereDiameter()/OverlapReal(2.0), r_cut_patch - m_mc->getMinCoreDiameter()/(OverlapReal)2.0);
             detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
@@ -1534,7 +1650,6 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
             for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                 {
                 vec3<Scalar> pos_image = pos + image_list[cur_image];
-
 
                 detail::AABB aabb = aabb_local;
                 aabb.translate(pos_image);
@@ -1603,7 +1718,7 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
         } // end if local
 
     #ifdef ENABLE_MPI
-    if (m_comm)
+    if (communicate && m_comm)
         {
         MPI_Allreduce(MPI_IN_PLACE, &lnboltzmann, 1, MPI_HOOMD_SCALAR, MPI_SUM, m_exec_conf->getMPICommunicator());
         MPI_Allreduce(MPI_IN_PLACE, &overlap, 1, MPI_UNSIGNED, MPI_MAX, m_exec_conf->getMPICommunicator());
@@ -1611,6 +1726,228 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
     #endif
 
     return !overlap;
+    }
+
+//! Generate a random configuration for a Gibbs sampler
+template<class Shape>
+void UpdaterMuVT<Shape>::generateGibbsSamplerConfiguration(unsigned int timestep)
+    {
+    if (m_prof)
+        m_prof->push("Gibbs sampler");
+
+    // perform parallel insertion/removal
+    for (auto it_type = m_parallel_types.begin(); it_type != m_parallel_types.end(); it_type++)
+        {
+        #ifdef ENABLE_MPI
+        if (m_comm)
+            m_mc->communicate(false);
+        #endif
+
+        unsigned int type = *it_type;
+
+        // combine four seeds
+        std::vector<unsigned int> seed_seq(4);
+        seed_seq[0] = this->m_seed;
+        seed_seq[1] = timestep;
+        seed_seq[2] = this->m_exec_conf->getRank();
+        seed_seq[3] = 0x374df9a2;
+        std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+
+        // RNG for poisson distribution
+        std::mt19937 rng_poisson(seed);
+
+        // local box volume
+        Scalar V_box = m_pdata->getBox().getVolume(m_sysdef->getNDimensions()==2);
+
+        // draw a poisson-random number
+        Scalar fugacity = m_fugacity[type]->getValue(timestep);
+        std::poisson_distribution<unsigned int> poisson(fugacity*V_box);
+
+        // generate particles locally
+        unsigned int n_insert = poisson(rng_poisson);
+        unsigned int n_remove_local = m_type_map[type].size();
+
+        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to remove " << n_remove_local
+             << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
+
+        if (m_prof) m_prof->push("Remove");
+
+        #ifdef ENABLE_TBB
+        // avoid a race condition
+        m_mc->updateImageList();
+        if (m_pdata->getN()+m_pdata->getNGhosts())
+            m_mc->buildAABBTree();
+        #endif
+
+        #ifdef ENABLE_TBB
+        tbb::concurrent_vector<unsigned int> remove_tags;
+        #else
+        std::vector<unsigned int> remove_tags;
+        #endif
+
+        #ifdef ENABLE_TBB
+        tbb::parallel_for((unsigned int)0,n_remove_local, [&](unsigned int i)
+        #else
+        for (unsigned int i = 0; i < n_remove_local; ++i)
+        #endif
+            {
+            // check if particle can be inserted without overlaps
+            Scalar lnb(0.0);
+            unsigned int tag = m_type_map[type][i];
+            if (tryRemoveParticle(timestep, tag, lnb, false, i))
+                {
+                remove_tags.push_back(tag);
+                }
+            }
+        #ifdef ENABLE_TBB
+            );
+        #endif
+
+        if (m_prof) m_prof->pop();
+
+        // remove old particles first *after* checking overlaps (Gibbs sampler)
+        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " removing " << remove_tags.size()
+             << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
+
+        // remove all particles of the given types
+        m_pdata->removeParticlesGlobal(remove_tags);
+
+        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " trying to insert " << n_insert
+             << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
+
+        if (m_prof) m_prof->push("Insert");
+
+        // local particle data
+        #ifdef ENABLE_TBB
+        tbb::concurrent_vector<vec3<Scalar> > positions;
+        tbb::concurrent_vector<quat<Scalar> > orientations;
+        #else
+        std::vector<vec3<Scalar> > positions;
+        std::vector<quat<Scalar> > orientations;
+        #endif
+
+        auto params = m_mc->getParams();
+
+        #ifdef ENABLE_TBB
+        // create one RNG per thread
+        tbb::enumerable_thread_specific< hoomd::detail::Saru > rng_parallel([=]
+            {
+            std::vector<unsigned int> seed_seq(5);
+            seed_seq[0] = this->m_seed;
+            seed_seq[1] = timestep;
+            seed_seq[2] = this->m_exec_conf->getRank();
+            std::hash<std::thread::id> hash;
+            seed_seq[3] = hash(std::this_thread::get_id());
+            seed_seq[4] = 0x73bb387a;
+            std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+            std::vector<unsigned int> s(1);
+            seed.generate(s.begin(),s.end());
+            return s[0]; // initialize with single seed
+            });
+        #else
+        hoomd::detail::Saru rng(timestep, this->m_seed+this->m_exec_conf->getRank(), 0x73bb387a);
+        #endif
+
+        #ifdef ENABLE_TBB
+        // avoid a race condition
+        m_mc->updateImageList();
+        if (m_pdata->getN()+m_pdata->getNGhosts())
+            m_mc->buildAABBTree();
+        #endif
+
+        #ifdef ENABLE_TBB
+        tbb::parallel_for((unsigned int)0,n_insert, [&](unsigned int i)
+        #else
+        for (unsigned int i = 0; i < n_insert; ++i)
+        #endif
+            {
+            // draw a uniformly distributed position in the local box
+            // Propose a random position uniformly in the box
+            Scalar3 f;
+            #ifdef ENABLE_TBB
+            hoomd::detail::Saru& my_rng = rng_parallel.local();
+            #else
+            hoomd::detail::Saru& my_rng = rng;
+            #endif
+
+            f.x = my_rng.template s<Scalar>();
+            f.y = my_rng.template s<Scalar>();
+
+            if (m_sysdef->getNDimensions() == 3)
+                f.z = my_rng.template s<Scalar>();
+            else
+                f.z = Scalar(0.5);
+
+            vec3<Scalar> pos_test = vec3<Scalar>(m_pdata->getBox().makeCoordinates(f));
+
+            Shape shape_test(quat<Scalar>(), params[type]);
+            if (shape_test.hasOrientation())
+                {
+                // set particle orientation
+                shape_test.orientation = generateRandomOrientation(my_rng);
+                }
+
+            // check if particle can be inserted without overlaps
+            Scalar lnb(0.0);
+            if (tryInsertParticleGibbsSampling(timestep, type, pos_test, shape_test.orientation, lnb, false, i))
+                {
+                positions.push_back(pos_test);
+                orientations.push_back(shape_test.orientation);
+                }
+            }
+        #ifdef ENABLE_TBB
+            );
+        #endif
+
+        #if 0
+        m_count_total.remove_accept_count += remove_tags.size();
+        m_count_total.remove_reject_count += m_type_map[type].size()-remove_tags.size();
+        m_count_total.insert_accept_count += positions.size();
+        m_count_total.insert_reject_count += n_insert - positions.size();
+        #endif
+
+        if (m_prof) m_prof->pop();
+
+        m_exec_conf->msg->notice(7) << "UpdaterMuVT " << timestep << " inserting " << positions.size()
+             << " ptls of type " << m_pdata->getNameByType(type) << std::endl;
+
+        // bulk-insert the particles
+        auto inserted_tags = m_pdata->addParticlesGlobal(positions.size());
+
+        assert(inserted_tags.size() == positions.size());
+        assert(inserted_tags.size() == orientations.size());
+
+            {
+            // set the particle properties
+            ArrayHandle<unsigned int> h_rtag(m_pdata->getRTags(), access_location::host, access_mode::read);
+            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
+            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
+
+            unsigned int n = 0;
+            for (auto it_tag = inserted_tags.begin(); it_tag != inserted_tags.end(); ++it_tag)
+                {
+                unsigned int tag = *it_tag;
+                assert(h_rtag.data[tag] < m_pdata->getN());
+
+                unsigned int idx = h_rtag.data[tag];
+                vec3<Scalar> pos = positions[n];
+                h_postype.data[idx] = make_scalar4(pos.x, pos.y, pos.z, __int_as_scalar(type));
+
+                Shape shape_test(quat<Scalar>(), params[type]);
+                if (shape_test.hasOrientation())
+                    {
+                    h_orientation.data[idx] = quat_to_scalar4(orientations[n]);
+                    }
+                n++;
+                }
+            }
+
+        // types have changed
+        m_pdata->notifyParticleSort();
+        } // end loop over types that can be inserted in parallel
+
+    if (m_prof)
+        m_prof->pop();
     }
 
 template<class Shape>
@@ -1626,7 +1963,7 @@ bool UpdaterMuVT<Shape>::trySwitchType(unsigned int timestep, unsigned int tag, 
     const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
 
     // update the image list
-    auto &image_list = m_mc->updateImageList();
+    auto& image_list = m_mc->updateImageList();
 
     quat<Scalar> orientation(m_pdata->getOrientation(tag));
 
@@ -1737,6 +2074,7 @@ bool UpdaterMuVT<Shape>::trySwitchType(unsigned int timestep, unsigned int tag, 
 
     return !overlap;
     }
+
 
 template<class Shape>
 Scalar UpdaterMuVT<Shape>::getLogValue(const std::string& quantity, unsigned int timestep)

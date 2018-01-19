@@ -30,6 +30,7 @@
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
+#include "UpdaterMuVTGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -71,6 +72,7 @@ void export_union_sphere(py::module& m)
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeUnion<ShapeSphere> >(m, "IntegratorHPMCMonoImplicitNewGPUSphereUnion");
     export_ComputeFreeVolumeGPU< ShapeUnion<ShapeSphere> >(m, "ComputeFreeVolumeGPUSphereUnion");
     export_UpdaterClustersGPU< ShapeUnion<ShapeSphere> >(m, "UpdaterClustersGPUSphereUnion");
+    export_UpdaterMuVTGPU< ShapeUnion<ShapeSphere> >(m, "UpdaterMuVTGPUSphereUnion");
 
     #endif
     }

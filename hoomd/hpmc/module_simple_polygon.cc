@@ -31,6 +31,7 @@
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
+#include "UpdaterMuVTGPU.h"
 #endif
 
 
@@ -73,6 +74,7 @@ void export_simple_polygon(py::module& m)
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSimplePolygon >(m, "IntegratorHPMCMonoImplicitNewGPUSimplePolygon");
     export_ComputeFreeVolumeGPU< ShapeSimplePolygon >(m, "ComputeFreeVolumeGPUSimplePolygon");
     export_UpdaterClustersGPU< ShapeSimplePolygon >(m, "UpdaterClustersGPUSimplePolygon");
+    export_UpdaterMuVTGPU< ShapeSimplePolygon >(m, "UpdaterMuVTGPUSimplePolygon");
     #endif
     }
 

@@ -3,6 +3,7 @@
 
 #include "ComputeFreeVolumeGPU.cuh"
 #include "UpdaterClustersGPU.cuh"
+#include "UpdaterMuVTGPU.cuh"
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
@@ -22,6 +23,8 @@ template cudaError_t gpu_hpmc_clusters<ShapeSphinx>(const hpmc_clusters_args_t &
                                                        const typename ShapeSphinx::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSphinx>(const hpmc_args_t& args,
                                                   const typename ShapeSphinx::param_type *d_params);
+template cudaError_t gpu_hpmc_update_aabb<ShapeSphinx>(const hpmc_args_t& args,
+                                                  const typename ShapeSphinx::param_type *d_params);
 template cudaError_t gpu_hpmc_moves<ShapeSphinx>(const hpmc_args_t& args,
                                                   const typename ShapeSphinx::param_type *d_params);
 template cudaError_t gpu_hpmc_check_overlaps<ShapeSphinx>(const hpmc_args_t& args,
@@ -38,6 +41,8 @@ template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeSphinx>(const hpmc_impli
                                                   const typename ShapeSphinx::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeSphinx>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSphinx::param_type *d_params);
+template cudaError_t gpu_hpmc_muvt<ShapeSphinx>(const hpmc_muvt_args_t &args,
+                                                       const typename ShapeSphinx::param_type *d_params);
 #endif
 }; // end namespace detail
 

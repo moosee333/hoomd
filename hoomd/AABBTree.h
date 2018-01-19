@@ -121,7 +121,7 @@ class AABBTree
         //! Test if a given index is a leaf node
         /*! \param node Index of the node (not the particle) to query
         */
-        inline bool isNodeLeaf(unsigned int node) const
+        DEVICE inline bool isNodeLeaf(unsigned int node) const
             {
             return (m_nodes[node].left == INVALID_NODE);
             }
@@ -283,7 +283,11 @@ DEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
     // grow its AABB if needed
     if (!contains(m_nodes[node_idx].aabb, aabb))
         {
+        #if __CUDA_ARCH__
+        atomicMerge(m_nodes[node_idx].aabb, m_nodes[node_idx].aabb, aabb);
+        #else
         m_nodes[node_idx].aabb = merge(m_nodes[node_idx].aabb, aabb);
+        #endif
 
         // update all parent node AABBs
         unsigned int current_node = m_nodes[node_idx].parent;
@@ -292,7 +296,12 @@ DEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
             unsigned int left_idx = m_nodes[current_node].left;
             unsigned int right_idx = m_nodes[current_node].right;
 
+            #if __CUDA_ARCH__
+            atomicMerge(m_nodes[current_node].aabb, m_nodes[left_idx].aabb, m_nodes[right_idx].aabb);
+            #else
             m_nodes[current_node].aabb = merge(m_nodes[left_idx].aabb, m_nodes[right_idx].aabb);
+            #endif
+
             current_node = m_nodes[current_node].parent;
             }
         }

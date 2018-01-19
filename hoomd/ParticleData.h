@@ -797,10 +797,8 @@ class ParticleData
         //! Get the angular momentum array
         const GPUArray< Scalar3 >& getMomentsOfInertiaArray() const { return m_inertia; }
 
-        #ifdef ENABLE_MPI
         //! Get the communication flags array
         const GPUArray< unsigned int >& getCommFlags() const { return m_comm_flags; }
-        #endif
 
         #ifdef ENABLE_MPI
         //! Find the processor that owns a particle
@@ -1000,6 +998,7 @@ class ParticleData
             {
             return m_decomposition;
             }
+#endif // ENABLE_MPI
 
         //! Pack particle data into a buffer
         /*! \param out Buffer into which particle data is packed
@@ -1043,13 +1042,18 @@ class ParticleData
         void addParticlesGPU(const GPUVector<pdata_element>& in);
         #endif // ENABLE_CUDA
 
-#endif // ENABLE_MPI
-
         //! Add a single particle to the simulation
         unsigned int addParticle(unsigned int type);
 
         //! Remove a particle from the simulation
         void removeParticle(unsigned int tag);
+
+        //! Bulk-remove a list of tags
+        template<template<typename ...> class Vector>
+        void removeParticlesGlobal(Vector<unsigned int> tags);
+
+        //! Bulk-insert a number of particles
+        const std::vector<unsigned int> addParticlesGlobal(unsigned int n_insert);
 
         //! Return the nth active global tag
         unsigned int getNthTag(unsigned int n);
@@ -1129,9 +1133,7 @@ class ParticleData
         GPUArray< Scalar4 > m_orientation;          //!< Orientation quaternion for each particle (ignored if not anisotropic)
         GPUArray< Scalar4 > m_angmom;               //!< Angular momementum quaternion for each particle
         GPUArray< Scalar3 > m_inertia;              //!< Principal moments of inertia for each particle
-        #ifdef ENABLE_MPI
         GPUArray<unsigned int> m_comm_flags;        //!< Array of communication flags
-        #endif
 
         std::stack<unsigned int> m_recycled_tags;    //!< Global tags of removed particles
         std::set<unsigned int> m_tag_set;            //!< Lookup table for tags by active index
@@ -1204,6 +1206,98 @@ class ParticleData
         template <class Real>
         bool inBox(const SnapshotParticleData<Real>& snap);
     };
+
+/*! Implementation of template methods */
+
+/*! \param tags Tags of particle to remove
+ *
+ * The tag list may differ from rank to rank, a global communication is performed
+ * Tags *must* by unique, the same tag may not be removed twice.
+ *
+ * \note this function removes ghosts, they need to be re-initialized afterwards
+ */
+template<template<typename ...> class Vector>
+void ParticleData::removeParticlesGlobal(Vector<unsigned int> tags)
+    {
+    if (getNGlobal()==0 && tags.size())
+        {
+        m_exec_conf->msg->error() << "Trying to remove particle when there are zero particles!" << std::endl;
+        throw std::runtime_error("Error removing particle");
+        }
+
+    // we are changing the local number of particles, so remove ghosts
+    removeAllGhostParticles();
+
+        {
+        ArrayHandle<unsigned int> h_comm_flags(getCommFlags(), access_location::host, access_mode::readwrite);
+        ArrayHandle<unsigned int> h_rtag(getRTags(), access_location::host, access_mode::read);
+
+        for (auto it = tags.begin(); it != tags.end(); ++it)
+            {
+            unsigned int tag =  *it;
+            assert(tag <= getMaximumTag());
+
+            // sanity check
+            if (tag >= m_rtag.size())
+                {
+                m_exec_conf->msg->error() << "Trying to remove particle " << tag << " which does not exist!" << std::endl;
+                throw std::runtime_error("Error removing particle");
+                }
+
+            // Local particle index
+            unsigned int idx = h_rtag.data[tag];
+
+            bool is_local = idx < getN();
+            assert(is_local || idx == NOT_LOCAL);
+
+            if (is_local)
+                h_comm_flags.data[idx] = 1; // flag for removal
+            }
+        }
+
+    // collect tags from all ranks
+    std::vector<Vector<unsigned int> > all_tags_proc;
+    #ifdef ENABLE_MPI
+    if (getDomainDecomposition())
+        {
+        all_gather_v(tags, all_tags_proc, m_exec_conf->getMPICommunicator());
+        }
+    else
+    #endif
+        {
+        all_tags_proc.push_back(tags);
+        }
+
+    // find unique tags
+    std::set<unsigned int> tags_unique;
+    for (auto it_i = all_tags_proc.begin(); it_i != all_tags_proc.end(); ++it_i)
+        for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
+            tags_unique.insert(*it_j);
+
+    // remove local particles, emits the particle sort signal
+    std::vector<unsigned int> comm_flags; // not used here
+    std::vector<pdata_element> out; // not used here
+    removeParticles(out,comm_flags);
+
+    // keep track of inserted/remove tags
+    for (auto it = tags_unique.begin(); it != tags_unique.end(); ++it)
+        {
+        unsigned int tag = *it;
+
+        // remove from set of active tags
+        m_tag_set.erase(tag);
+
+        // maintain a stack of deleted group tags for future recycling
+        m_recycled_tags.push(tag);
+        }
+
+    // invalidate active tag cache
+    m_invalid_cached_tags = true;
+
+     // update global particle number
+    setNGlobal(getNGlobal()-tags_unique.size());
+    }
+
 
 #ifndef NVCC
 //! Exports the BoxDim class to python

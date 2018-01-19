@@ -3,6 +3,7 @@
 
 #include "ComputeFreeVolumeGPU.cuh"
 #include "UpdaterClustersGPU.cuh"
+#include "UpdaterMuVTGPU.cuh"
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
@@ -22,6 +23,8 @@ template cudaError_t gpu_hpmc_clusters<ShapeSimplePolygon>(const hpmc_clusters_a
                                                        const typename ShapeSimplePolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSimplePolygon>(const hpmc_args_t& args,
                                                   const typename ShapeSimplePolygon::param_type *d_params);
+template cudaError_t gpu_hpmc_update_aabb<ShapeSimplePolygon>(const hpmc_args_t& args,
+                                                  const typename ShapeSimplePolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_moves<ShapeSimplePolygon>(const hpmc_args_t& args,
                                                   const typename ShapeSimplePolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_check_overlaps<ShapeSimplePolygon>(const hpmc_args_t& args,
@@ -38,7 +41,8 @@ template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeSimplePolygon>(const hpm
                                                   const typename ShapeSimplePolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeSimplePolygon>(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeSimplePolygon::param_type *d_params);
-
+template cudaError_t gpu_hpmc_muvt<ShapeSimplePolygon>(const hpmc_muvt_args_t &args,
+                                                       const typename ShapeSimplePolygon::param_type *d_params);
 }; // end namespace detail
 
 } // end namespace hpmc

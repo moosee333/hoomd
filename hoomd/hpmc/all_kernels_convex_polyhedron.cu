@@ -3,6 +3,7 @@
 
 #include "ComputeFreeVolumeGPU.cuh"
 #include "UpdaterClustersGPU.cuh"
+#include "UpdaterMuVTGPU.cuh"
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
@@ -22,6 +23,8 @@ template cudaError_t gpu_hpmc_clusters<ShapeConvexPolyhedron >(const hpmc_cluste
                                                        const typename ShapeConvexPolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeConvexPolyhedron >(const hpmc_args_t& args,
                                                   const typename ShapeConvexPolyhedron ::param_type *d_params);
+template cudaError_t gpu_hpmc_update_aabb<ShapeConvexPolyhedron >(const hpmc_args_t& args,
+                                                  const typename ShapeConvexPolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_moves<ShapeConvexPolyhedron >(const hpmc_args_t& args,
                                                   const typename ShapeConvexPolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_check_overlaps<ShapeConvexPolyhedron >(const hpmc_args_t& args,
@@ -38,8 +41,8 @@ template cudaError_t gpu_hpmc_insert_depletants_dp<ShapeConvexPolyhedron >(const
                                                   const typename ShapeConvexPolyhedron ::param_type *d_params);
 template cudaError_t gpu_hpmc_implicit_accept_reject_new<ShapeConvexPolyhedron >(const hpmc_implicit_args_new_t& args,
                                                   const typename ShapeConvexPolyhedron ::param_type *d_params);
-
-
+template cudaError_t gpu_hpmc_muvt<ShapeConvexPolyhedron >(const hpmc_muvt_args_t &args,
+                                                       const typename ShapeConvexPolyhedron ::param_type *d_params);
 }; // end namespace detail
 
 } // end namespace hpmc

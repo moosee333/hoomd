@@ -184,6 +184,12 @@ class IntegratorHPMCMono : public IntegratorHPMC
         //! Get the value of a logged quantity
         virtual Scalar getLogValue(const std::string& quantity, unsigned int timestep);
 
+        //! Get the particle parameters (const version)
+        virtual const std::vector<param_type, managed_allocator<param_type> >& getParams() const
+            {
+            return m_params;
+            }
+
         //! Get the particle parameters
         virtual std::vector<param_type, managed_allocator<param_type> >& getParams()
             {
@@ -403,8 +409,8 @@ IntegratorHPMCMono<Shape>::IntegratorHPMCMono(std::shared_ptr<SystemDefinition> 
               m_image_list_is_initialized(false),
               m_image_list_valid(false),
               m_hasOrientation(true),
-              m_extra_image_width(0.0)
-              m_past_first_run(false)
+              m_extra_image_width(0.0),
+              m_past_first_run(false),
               m_aabb_tree(m_exec_conf->isCUDAEnabled())
     {
     // allocate the parameter storage
@@ -610,6 +616,9 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
             if (move_type_translate)
                 {
+                // skip if moves are disabled
+                if (h_d.data[typ_i] == Scalar(0.0)) continue;
+
                 move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
 
                 #ifdef ENABLE_MPI
@@ -623,6 +632,9 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                 }
             else
                 {
+                // skip if moves are disabled
+                if (h_a.data[typ_i] == Scalar(0.0)) continue;
+
                 move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
                 }
 

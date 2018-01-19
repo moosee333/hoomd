@@ -31,6 +31,7 @@
 #include "IntegratorHPMCMonoImplicitNewGPU.h"
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
+#include "UpdaterMuVTGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -72,6 +73,7 @@ void export_sphinx(py::module& m)
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSphinx >(m, "IntegratorHPMCMonoImplicitNewGPUSphinx");
     export_ComputeFreeVolumeGPU< ShapeSphinx >(m, "ComputeFreeVolumeGPUSphinx");
     export_UpdaterClustersGPU< ShapeSphinx >(m, "UpdaterClustersGPUSphinx");
+    export_UpdaterMuVTGPU< ShapeSphinx >(m, "UpdaterMuVTGPUSphinx");
 
     #endif
     #endif

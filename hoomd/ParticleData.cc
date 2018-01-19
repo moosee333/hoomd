@@ -372,13 +372,8 @@ void ParticleData::allocate(unsigned int N)
     GPUArray< Scalar3 > inertia(N, m_exec_conf);
     m_inertia.swap(inertia);
 
-    #ifdef ENABLE_MPI
-    if (m_decomposition)
-        {
-        GPUArray< unsigned int > comm_flags(N, m_exec_conf);
-        m_comm_flags.swap(comm_flags);
-        }
-    #endif
+    GPUArray< unsigned int > comm_flags(N, m_exec_conf);
+    m_comm_flags.swap(comm_flags);
 
     // allocate alternate particle data arrays (for swapping in-out)
     allocateAlternateArrays(N);
@@ -537,9 +532,7 @@ void ParticleData::reallocate(unsigned int max_n)
     m_angmom.resize(max_n);
     m_inertia.resize(max_n);
 
-    #ifdef ENABLE_MPI
-    if (m_decomposition) m_comm_flags.resize(max_n);
-    #endif
+    m_comm_flags.resize(max_n);
 
     if (! m_pos_alt.isNull())
         {
@@ -938,6 +931,7 @@ void ParticleData::initializeFromSnapshot(const SnapshotParticleData<Real>& snap
         ArrayHandle< Scalar3 > h_inertia(m_inertia, access_location::host, access_mode::overwrite);
         ArrayHandle< unsigned int > h_tag(m_tag, access_location::host, access_mode::overwrite);
         ArrayHandle< unsigned int > h_rtag(m_rtag, access_location::host, access_mode::readwrite);
+        ArrayHandle< unsigned int > h_comm_flag(m_comm_flags, access_location::host, access_mode::overwrite);
 
         for (unsigned int snap_idx = 0; snap_idx < snapshot.size; snap_idx++)
             {
@@ -965,6 +959,8 @@ void ParticleData::initializeFromSnapshot(const SnapshotParticleData<Real>& snap
             h_orientation.data[nglobal] = quat_to_scalar4(snapshot.orientation[snap_idx]);
             h_angmom.data[nglobal] = quat_to_scalar4(snapshot.angmom[snap_idx]);
             h_inertia.data[nglobal] = vec_to_scalar3(snapshot.inertia[snap_idx]);
+
+            h_comm_flag.data[nglobal] = 0;
             nglobal++;
             }
 
@@ -2077,9 +2073,7 @@ unsigned int ParticleData::addParticle(unsigned int type)
         ArrayHandle<unsigned int> h_body(getBodies(), access_location::host, access_mode::readwrite);
         ArrayHandle<Scalar4> h_orientation(getOrientationArray(), access_location::host, access_mode::readwrite);
         ArrayHandle<unsigned int> h_tag(getTags(), access_location::host, access_mode::readwrite);
-        #ifdef ENABLE_MPI
         ArrayHandle<unsigned int> h_comm_flag(m_comm_flags, access_location::host, access_mode::readwrite);
-        #endif
 
         unsigned int idx = old_nparticles;
 
@@ -2093,12 +2087,7 @@ unsigned int ParticleData::addParticle(unsigned int type)
         h_body.data[idx] = NO_BODY;
         h_orientation.data[idx] = make_scalar4(1.0,0.0,0.0,0.0);
         h_tag.data[idx] = tag;
-        #ifdef ENABLE_MPI
-        if (m_decomposition)
-            {
-            h_comm_flag.data[idx] = 0;
-            }
-        #endif
+        h_comm_flag.data[idx] = 0;
         }
 
     // update global number of particles
@@ -2185,9 +2174,7 @@ void ParticleData::removeParticle(unsigned int tag)
             ArrayHandle<Scalar4> h_orientation(getOrientationArray(), access_location::host, access_mode::readwrite);
             ArrayHandle<unsigned int> h_tag(getTags(), access_location::host, access_mode::readwrite);
             ArrayHandle<unsigned int> h_rtag(getRTags(), access_location::host, access_mode::readwrite);
-            #ifdef ENABLE_MPI
             ArrayHandle<unsigned int> h_comm_flag(m_comm_flags, access_location::host, access_mode::readwrite);
-            #endif
 
             h_pos.data[idx] = h_pos.data[size-1];
             h_vel.data[idx] = h_vel.data[size-1];
@@ -2198,13 +2185,7 @@ void ParticleData::removeParticle(unsigned int tag)
             h_body.data[idx] = h_body.data[size-1];
             h_orientation.data[idx] = h_orientation.data[size-1];
             h_tag.data[idx] = h_tag.data[size-1];
-
-            #ifdef ENABLE_MPI
-            if (m_decomposition)
-                {
-                h_comm_flag.data[idx] = h_comm_flag.data[size-1];
-                }
-            #endif
+            h_comm_flag.data[idx] = h_comm_flag.data[size-1];
 
             unsigned int last_tag = h_tag.data[size-1];
             h_rtag.data[last_tag] = idx;
@@ -2228,6 +2209,132 @@ void ParticleData::removeParticle(unsigned int tag)
 
     // local particle number may have changed
     notifyParticleSort();
+    }
+
+//! Add new particles to the global simulation box, given local particle data on every rank
+/*! the particle data number may differ from rank to rank, a global synchronization is performed
+
+    \note the ghosts are removed and need to be re-initialized
+
+    \returns tags of locally inserted particles
+ */
+const std::vector<unsigned int> ParticleData::addParticlesGlobal(unsigned int n_insert)
+    {
+    // we are changing the local number of particles, so remove ghosts
+    removeAllGhostParticles();
+
+    // number of inserted particles per processor
+    std::vector<unsigned int> all_n_insert;
+
+    #ifdef ENABLE_MPI
+    if (getDomainDecomposition())
+        {
+        all_gather_v(n_insert, all_n_insert, m_exec_conf->getMPICommunicator());
+        }
+    else
+    #endif
+        {
+        all_n_insert.push_back(n_insert);
+        }
+
+    unsigned int old_n_global = getNGlobal();
+    unsigned int new_nglobal = old_n_global;
+
+    std::vector<unsigned int> local_inserted_tags;
+
+    unsigned int my_rank = 0;
+    #ifdef ENABLE_MPI
+    if (getDomainDecomposition())
+        my_rank = m_exec_conf->getRank();
+    #endif
+
+    std::vector<unsigned int> inserted_tags;
+
+    unsigned int rank = 0;
+    for (auto it = all_n_insert.begin(); it != all_n_insert.end(); ++it)
+        {
+        unsigned int n_insert_proc = *it;
+
+        for (unsigned i = 0; i < n_insert_proc; ++i)
+            {
+            // the global tag of the newly created particle
+            unsigned int tag;
+
+            // first check if we can recycle a deleted tag
+            if (m_recycled_tags.size())
+                {
+                tag = m_recycled_tags.top();
+                m_recycled_tags.pop();
+                }
+            else
+                {
+                // generate a new tag
+                tag = new_nglobal;
+                }
+
+            // add to set of active tags
+            m_tag_set.insert(tag);
+
+            assert(tag <= m_recycled_tags.size() + new_nglobal);
+            assert(tag <= getMaximumTag());
+            new_nglobal++;
+
+            inserted_tags.push_back(tag);
+
+            if (rank == my_rank)
+                local_inserted_tags.push_back(tag);
+            }
+        rank++;
+        }
+
+    // resize array of global reverse lookup tags
+    m_rtag.resize(getMaximumTag()+1);
+
+        {
+        // reset rtags
+        ArrayHandle<unsigned int> h_rtag(getRTags(), access_location::host, access_mode::readwrite);
+        for (auto it = inserted_tags.begin(); it != inserted_tags.end(); ++it)
+            h_rtag.data[*it] = NOT_LOCAL;
+        }
+
+    // invalidate the active tag cache
+    m_invalid_cached_tags = true;
+
+    // generate a list of default particle properties
+    std::vector<pdata_element> elements;
+    for (auto it = local_inserted_tags.begin(); it != local_inserted_tags.end(); ++it)
+        {
+        unsigned int tag = *it;
+        pdata_element el;
+        el.pos = make_scalar4(0,0,0,__int_as_scalar(0));
+        el.vel = make_scalar4(0,0,0,1);
+        el.accel = make_scalar3(0,0,0);
+        el.charge = 0;
+        el.diameter = 0;
+        el.image = make_int3(0,0,0);
+        el.body = NO_BODY;
+        el.orientation = make_scalar4(1,0,0,0);
+        el.angmom = make_scalar4(0,0,0,0);
+        el.inertia = make_scalar3(0,0,0);
+        el.tag = tag;
+        el.net_force = make_scalar4(0,0,0,0);
+        el.net_torque = make_scalar4(0,0,0,0);
+        el.net_virial[0] = 0;
+        el.net_virial[1] = 0;
+        el.net_virial[2] = 0;
+        el.net_virial[3] = 0;
+        el.net_virial[4] = 0;
+        el.net_virial[5] = 0;
+        elements.push_back(el);
+        }
+
+    // update global number of particles
+    setNGlobal(new_nglobal);
+
+    // insert into local particle data
+    addParticles(elements);
+
+    return local_inserted_tags;
     }
 
 //! Return the nth active global tag
@@ -2430,7 +2537,6 @@ bool SnapshotParticleData<Real>::validate() const
     return true;
     }
 
-#ifdef ENABLE_MPI
 //! Select non-zero communication lags
 struct comm_flag_select : std::unary_function<const unsigned int, bool>
     {
@@ -2904,7 +3010,6 @@ void ParticleData::addParticlesGPU(const GPUVector<pdata_element>& in)
     }
 
 #endif // ENABLE_CUDA
-#endif // ENABLE_MPI
 
 unsigned int ParticleData::addType(const std::string& type_name)
     {
