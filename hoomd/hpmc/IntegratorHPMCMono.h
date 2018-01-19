@@ -331,13 +331,6 @@ class IntegratorHPMCMono : public IntegratorHPMC
             return m_image_hkl;
             }
 
-        //! Return list of integer shift vectors for periodic images
-        const std::vector<int3>& getImageHKL()
-            {
-            updateImageList();
-            return m_image_hkl;
-            }
-
         //! Method to be called when number of types changes
         virtual void slotNumTypesChange();
 
@@ -410,7 +403,6 @@ IntegratorHPMCMono<Shape>::IntegratorHPMCMono(std::shared_ptr<SystemDefinition> 
               m_image_list_valid(false),
               m_hasOrientation(true),
               m_extra_image_width(0.0),
-              m_past_first_run(false),
               m_aabb_tree(m_exec_conf->isCUDAEnabled())
     {
     // allocate the parameter storage

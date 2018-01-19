@@ -98,6 +98,16 @@ class AABBTree
             : m_num_nodes(0), m_node_capacity(0), m_root(0), m_managed(false)
             { }
 
+        //! Construct an AABBTree with specified management flag
+        AABBTree(bool managed)
+            : m_num_nodes(0), m_node_capacity(0), m_root(0), m_managed(managed)
+            { }
+
+
+        // Destructor
+        virtual ~AABBTree()
+            {}
+
         #ifndef NVCC
         //! Build a tree smartly from a list of AABBs
         inline void buildTree(AABB *aabbs, unsigned int N);
