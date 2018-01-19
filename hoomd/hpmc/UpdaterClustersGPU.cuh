@@ -253,89 +253,127 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
         detail::AABB aabb = aabb_local;
         aabb.translate(pos_image);
 
-        for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes; ++cur_node_idx)
-            {
-            if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+        // a double loop for reducing branch divergence
+        unsigned int cur_node_idx = 0;
+        unsigned int offs = 0;
+        do  {
+            unsigned int j = UINT_MAX;
+            unsigned int tag_j = UINT_MAX;
+            Scalar4 postype_j;
+            Scalar4 orientation_j;
+            bool circumsphere_overlap = false;
+
+            do
                 {
-                if (aabb_tree.isNodeLeaf(cur_node_idx))
+                if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
                     {
-                    for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                    if (aabb_tree.isNodeLeaf(cur_node_idx))
                         {
-                        unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                        unsigned int tag_j = d_tag[j];
-                        if (tag_j == tag)
-                            continue;
-
-                        Scalar4 postype_j = texFetchScalar4(d_postype, clusters_postype_tex, j);
-                        Scalar4 orientation_j = make_scalar4(1,0,0,0);
-                        unsigned int typ_j = __scalar_as_int(postype_j.w);
-                        Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
-                        if (shape_j.hasOrientation())
-                            shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
-
-                        vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
-
-                        // check for overlaps
-                        OverlapReal rsq = dot(r_ij,r_ij);
-                        OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-
-                        if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                        for (unsigned int cur_p = offs; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
                             {
-                            // circumsphere overlap
-                            unsigned int err_count;
-                            if (s_check_overlaps[overlap_idx(typ_j, type)] && test_overlap(r_ij, shape_i, shape_j, err_count))
+                            j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                            tag_j = d_tag[j];
+                            if (tag_j == tag)
+                                continue;
+
+                            postype_j = texFetchScalar4(d_postype, clusters_postype_tex, j);
+                            orientation_j = make_scalar4(1,0,0,0);
+                            unsigned int typ_j = __scalar_as_int(postype_j.w);
+                            Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
+                            if (shape_j.hasOrientation())
+                                shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
+
+                            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+
+                            // check for overlaps
+                            OverlapReal rsq = dot(r_ij,r_ij);
+                            OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+
+                            if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
                                 {
-                                unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
-                                if (n_overlaps >= max_n_overlaps)
-                                    atomicMax(&(*d_conditions).x, n_overlaps+1);
-                                else
-                                    d_overlaps[n_overlaps] = make_uint2(tag,tag_j);
-
-                                if (d_reject)
+                                circumsphere_overlap = true;
+                                offs = cur_p+1;
+                                if (offs >= aabb_tree.getNodeNumParticles(cur_node_idx))
                                     {
-                                    bool reject = false;
-
-                                    if (line)
-                                        {
-                                        int3 delta_img = -image_hkl[cur_image] + img - d_image[j];
-                                        reject = delta_img.x || delta_img.y || delta_img.z;
-                                        }
-                                    else if (swap)
-                                        {
-                                        reject = ((type != type_A && type != type_B) || (typ_j != type_A && typ_j != type_B));
-                                        }
-
-                                    if (reject)
-                                        {
-                                        unsigned int n_reject = atomicAdd(d_n_reject, 1);
-                                        if (n_reject >= max_n_reject)
-                                            atomicMax(&(*d_conditions).y, n_reject+1);
-                                        else
-                                            {
-                                            d_reject[n_reject] = tag;
-                                            }
-
-                                        n_reject = atomicAdd(d_n_reject, 1);
-                                        if (n_reject >= max_n_reject)
-                                            atomicMax(&(*d_conditions).y, n_reject+1);
-                                        else
-                                            {
-                                            d_reject[n_reject] = tag_j;
-                                            }
-                                        }
+                                    offs = 0;
+                                    cur_node_idx++;
                                     }
-                                } //end if overlap
-                            } // end circumsphere overlap
-                        } // end loop over particles in node
-                    } // end isLeaf
-                } // end AABB overlap
-            else
+                                break;
+                                }
+                            } // end loop over particles in node
+
+                        if (circumsphere_overlap)
+                            break;
+
+                        offs = 0;
+                        } // end isLeaf
+                    } // end AABB overlap
+                else
+                    {
+                    // skip ahead
+                    cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                    }
+
+                cur_node_idx++;
+                } while (cur_node_idx < num_nodes);
+
+            if (circumsphere_overlap)
                 {
-                // skip ahead
-                cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
-                }
-            } // end loop over AABB nodes
+                // circumsphere overlap
+                unsigned int typ_j = __scalar_as_int(postype_j.w);
+                Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
+                if (shape_j.hasOrientation())
+                    shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
+
+                vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+
+                unsigned int err_count;
+                if (s_check_overlaps[overlap_idx(typ_j, type)] && test_overlap(r_ij, shape_i, shape_j, err_count))
+                    {
+                    unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
+                    if (n_overlaps >= max_n_overlaps)
+                        atomicMax(&(*d_conditions).x, n_overlaps+1);
+                    else
+                        d_overlaps[n_overlaps] = make_uint2(tag,tag_j);
+
+                    if (d_reject)
+                        {
+                        bool reject = false;
+
+                        if (line)
+                            {
+                            int3 delta_img = -image_hkl[cur_image] + img - d_image[j];
+                            reject = delta_img.x || delta_img.y || delta_img.z;
+                            }
+                        else if (swap)
+                            {
+                            reject = ((type != type_A && type != type_B) || (typ_j != type_A && typ_j != type_B));
+                            }
+
+                        if (reject)
+                            {
+                            unsigned int n_reject = atomicAdd(d_n_reject, 1);
+                            if (n_reject >= max_n_reject)
+                                atomicMax(&(*d_conditions).y, n_reject+1);
+                            else
+                                {
+                                d_reject[n_reject] = tag;
+                                }
+
+                            n_reject = atomicAdd(d_n_reject, 1);
+                            if (n_reject >= max_n_reject)
+                                atomicMax(&(*d_conditions).y, n_reject+1);
+                            else
+                                {
+                                d_reject[n_reject] = tag_j;
+                                }
+                            }
+                        }
+                    } //end if overlap
+                } // end circumsphere overlap
+            } while (cur_node_idx < num_nodes);
+
         } // end loop over images
     }
 
