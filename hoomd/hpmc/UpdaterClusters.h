@@ -18,6 +18,7 @@
 #include "IntegratorHPMCMono.h"
 
 #include "hoomd/GPUVector.h"
+#include <queue>
 
 #ifdef ENABLE_TBB
 #include <tbb/tbb.h>
@@ -128,16 +129,53 @@ void Graph::connectedComponents(std::vector<std::vector<unsigned int> >& cc)
             }
         }
     #else
+    #if 0
     // Depth first search
     for (unsigned int v=0; v<visited.size(); v++)
         {
-        if (visited[v] == false)
+        if (visited[v] == 0)
             {
             std::vector<unsigned int> cur_cc;
             DFSUtil(v, visited, cur_cc);
             cc.push_back(cur_cc);
             }
         }
+    #else
+    // Breadth first search
+    std::queue<unsigned int> Q;
+
+    for (unsigned int v = 0; v < visited.size(); ++v)
+        {
+        if (! visited[v])
+            {
+            Q.push(v);
+
+            std::vector<unsigned int> component;
+
+            while (! Q.empty())
+                {
+                unsigned w = Q.front();
+                Q.pop();
+
+                component.push_back(w);
+
+                auto begin = adj.equal_range(w).first;
+                auto end = adj.equal_range(w).second;
+                for(auto i = begin; i != end; ++i)
+                    {
+                    unsigned int neighbor = i->second;
+                    if(!visited[neighbor])
+                        {
+                        Q.push(neighbor);
+                        visited[neighbor] = 1;
+                        }
+                    }
+                }
+
+            cc.push_back(component);
+            }
+        }
+    #endif
     #endif
     }
 
