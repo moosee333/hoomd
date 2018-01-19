@@ -274,31 +274,34 @@ __global__ void gpu_hpmc_muvt_kernel(unsigned int n_insert,
             {
             if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
                 {
-                for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                if (aabb_tree.isNodeLeaf(cur_node_idx))
                     {
-                    unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                    Scalar4 postype_j = texFetchScalar4(d_postype, muvt_postype_tex, j);
-                    Scalar4 orientation_j = make_scalar4(1,0,0,0);
-                    unsigned int typ_j = __scalar_as_int(postype_j.w);
-                    Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
-                    if (shape_j.hasOrientation())
-                        shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, muvt_orientation_tex, j));
-
-                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
-
-                    // check for overlaps
-                    OverlapReal rsq = dot(r_ij,r_ij);
-                    OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-
-                    if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                    for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
                         {
-                        // circumsphere overlap
-                        unsigned int err_count;
-                        if (s_check_overlaps[overlap_idx(typ_j, type)] && test_overlap(r_ij, shape_i, shape_j, err_count))
+                        unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                        Scalar4 postype_j = texFetchScalar4(d_postype, muvt_postype_tex, j);
+                        Scalar4 orientation_j = make_scalar4(1,0,0,0);
+                        unsigned int typ_j = __scalar_as_int(postype_j.w);
+                        Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
+                        if (shape_j.hasOrientation())
+                            shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, muvt_orientation_tex, j));
+
+                        vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+
+                        // check for overlaps
+                        OverlapReal rsq = dot(r_ij,r_ij);
+                        OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+
+                        if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
                             {
-                            overlap = true;
-                            break;
+                            // circumsphere overlap
+                            unsigned int err_count;
+                            if (s_check_overlaps[overlap_idx(typ_j, type)] && test_overlap(r_ij, shape_i, shape_j, err_count))
+                                {
+                                overlap = true;
+                                break;
+                                }
                             }
                         }
                     }
