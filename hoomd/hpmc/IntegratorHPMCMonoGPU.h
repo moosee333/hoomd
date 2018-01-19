@@ -289,6 +289,10 @@ void IntegratorHPMCMonoGPU< Shape >::update(unsigned int timestep)
     // on the first iteration, shape parameters are updated
     bool first = true;
 
+    // update locality data structures
+    this->buildAABBTree();
+    this->updateImageList();
+
     // loop over cell sets in a shuffled order
     this->m_cell_set_order.shuffle(timestep);
     for (unsigned int i = 0; i < this->m_nselect * particles_per_cell; i++)
@@ -339,7 +343,9 @@ void IntegratorHPMCMonoGPU< Shape >::update(unsigned int timestep)
                                                                 this->m_pdata->getMaxN(),
                                                                 this->m_exec_conf->dev_prop,
                                                                 first,
-                                                                m_stream),
+                                                                m_stream,
+                                                                this->m_aabb_tree,
+                                                                this->m_image_list),
                                             params.data());
 
             if (this->m_exec_conf->isCUDAErrorCheckingEnabled())

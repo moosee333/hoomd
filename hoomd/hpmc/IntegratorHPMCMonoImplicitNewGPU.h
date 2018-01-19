@@ -88,6 +88,19 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
             m_tuner_cell_set_block_size->setEnabled(enable);
             }
 
+        //! Enable deterministic simulations
+        virtual void setDeterministic(bool deterministic)
+            {
+            this->m_exec_conf->msg->notice(2) << "hpmc: Sorting cell list to enable deterministic simulations." << std::endl;
+            m_cl->setSortCellList(deterministic);
+
+            initializeCellLists();
+            for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
+                {
+                m_cl_type[itype]->setSortCellList(deterministic);
+                }
+            }
+
     protected:
         std::shared_ptr<CellList> m_cl;           //!< Cell list
 
@@ -476,7 +489,11 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     this->m_old_postype.resize(this->m_pdata->getMaxN());
     this->m_old_orientation.resize(this->m_pdata->getMaxN());
 
-    if (this->m_exec_conf->getComputeCapability() < 350)
+    // update locality data structures
+    this->buildAABBTree();
+    this->updateImageList();
+
+    if (1 || this->m_exec_conf->getComputeCapability() < 350)
         {
         // no dynamic parallelism
 
@@ -619,11 +636,15 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                             dev_prop,
                             first,
                             m_stream,
+                            this->m_aabb_tree,
+                            this->m_image_list,
                             have_depletants ? d_active_cell_ptl_idx.data : 0,
                             have_depletants ? d_active_cell_accept.data : 0,
-                            have_depletants ? d_active_cell_move_type_translate.data : 0);
+                            have_depletants ? d_active_cell_move_type_translate.data : 0
+                           );
 
-                    detail::gpu_hpmc_update<Shape>(args, params.data());
+//                    detail::gpu_hpmc_update<Shape>(args, params.data());
+                    detail::gpu_hpmc_update_aabb<Shape>(args, params.data());
 
                     if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                         CHECK_CUDA_ERROR();
@@ -980,6 +1001,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         dev_prop,
                         first,
                         m_stream,
+                        this->m_aabb_tree,
+                        this->m_image_list,
                         have_depletants ? d_active_cell_ptl_idx.data : 0,
                         have_depletants ? d_active_cell_accept.data : 0,
                         have_depletants ? d_active_cell_move_type_translate.data : 0,

@@ -433,6 +433,10 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
         domain_decomposition = true;
 #endif
 
+    // update locality data structures
+    this->buildAABBTree();
+    this->updateImageList();
+
         {
         // access the particle data
         ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
@@ -579,6 +583,8 @@ void IntegratorHPMCMonoImplicitGPU< Shape >::update(unsigned int timestep)
                         this->m_exec_conf->dev_prop,
                         first,
                         m_stream,
+                        this->m_aabb_tree,
+                        this->m_image_list,
                         (lambda_max > 0.0) ? d_active_cell_ptl_idx.data : 0,
                         (lambda_max > 0.0) ? d_active_cell_accept.data : 0,
                         (lambda_max > 0.0) ? d_active_cell_move_type_translate.data : 0),
