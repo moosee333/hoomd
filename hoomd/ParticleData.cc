@@ -630,7 +630,7 @@ bool ParticleData::inBox(const SnapshotParticleData<Real> &snap)
 template <class Real>
 void ParticleData::initializeFromSnapshot(const SnapshotParticleData<Real>& snapshot, bool ignore_bodies)
     {
-    m_exec_conf->msg->notice(4) << "ParticleData: initializing from snapshot" << std::endl;
+    m_exec_conf->msg->notice(6) << "ParticleData: initializing from snapshot" << std::endl;
 
     // remove all ghost particles
     removeAllGhostParticles();
@@ -1008,7 +1008,7 @@ std::map<unsigned int, unsigned int> ParticleData::takeSnapshot(SnapshotParticle
     // a map to containt a particle tag-> snapshot idx lookup
     std::map<unsigned int, unsigned int> index;
 
-    m_exec_conf->msg->notice(4) << "ParticleData: taking snapshot" << std::endl;
+    m_exec_conf->msg->notice(6) << "ParticleData: taking snapshot" << std::endl;
 
     ArrayHandle< Scalar4 > h_pos(m_pos, access_location::host, access_mode::read);
     ArrayHandle< Scalar4 > h_vel(m_vel, access_location::host, access_mode::read);
