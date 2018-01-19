@@ -340,6 +340,7 @@ DEVICE inline AABB merge(const AABB& a, const AABB& b)
     new_aabb.upper_v = _mm_max_ps(a.upper_v, b.upper_v);
 
     #else
+
     new_aabb.lower.x = std::min(a.lower.x, b.lower.x);
     new_aabb.lower.y = std::min(a.lower.y, b.lower.y);
     new_aabb.lower.z = std::min(a.lower.z, b.lower.z);
@@ -351,6 +352,126 @@ DEVICE inline AABB merge(const AABB& a, const AABB& b)
 
     return new_aabb;
     }
+
+#ifdef __CUDA_ARCH__
+template <typename T>
+__device__ inline void AtomicMax(T * const address, const T value)
+    {
+    atomicMax(address, value);
+    }
+
+template <typename T>
+__device__ inline void AtomicMin(T * const address, const T value)
+    {
+    atomicMin(address, value);
+    }
+
+
+//https://github.com/parallel-forall/code-samples/blob/master/posts/cuda-aware-mpi-example/src/Device.cu
+template <>
+__device__ inline void AtomicMax(float * const address, const float value)
+    {
+    if (* address >= value)
+        return;
+
+    int * const address_as_i = (int *)address;
+    int old = * address_as_i, assumed;
+
+    do
+       {
+       assumed = old;
+       if (__int_as_float(assumed) >= value)
+            break;
+
+        old = atomicCAS(address_as_i, assumed, __float_as_int(value));
+        } while (assumed != old);
+    }
+
+template <>
+__device__ inline void AtomicMax(double * const address, const double value)
+    {
+    if (* address >= value)
+        return;
+
+    typedef unsigned long long uint64;
+    uint64 * const address_as_i = (uint64 *)address;
+    uint64 old = * address_as_i, assumed;
+
+    do
+        {
+        assumed = old;
+        if (__longlong_as_double(assumed) >= value)
+            {
+            break;
+            }
+        old = atomicCAS(address_as_i, assumed, __double_as_longlong(value));
+        } while (assumed != old);
+    }
+
+template <>
+__device__ inline void AtomicMin(float * const address, const float value)
+    {
+    if (* address <= value)
+        return;
+
+    int * const address_as_i = (int *)address;
+    int old = * address_as_i, assumed;
+
+    do
+       {
+       assumed = old;
+       if (__int_as_float(assumed) <= value)
+            break;
+
+        old = atomicCAS(address_as_i, assumed, __float_as_int(value));
+        } while (assumed != old);
+    }
+
+template <>
+__device__ inline void AtomicMin(double * const address, const double value)
+    {
+    if (* address <= value)
+        return;
+
+    typedef unsigned long long uint64;
+
+    uint64 * const address_as_i = (uint64 *)address;
+    uint64 old = * address_as_i, assumed;
+
+    do
+        {
+        assumed = old;
+        if (__longlong_as_double(assumed) <= value)
+            {
+            break;
+            }
+        old = atomicCAS(address_as_i, assumed, __double_as_longlong(value));
+        } while (assumed != old);
+    }
+
+//! Merge two AABBs into a third one, atomic version
+/*! \param aabb the AABB to modify
+    \param a First AABB
+    \param b Second AABB
+    \returns A new AABB that encloses *a* and *b*
+*/
+DEVICE inline void atomicMerge(AABB& aabb, const AABB& a, const AABB& b)
+    {
+    AtomicMin(&aabb.lower.x, a.lower.x);
+    AtomicMin(&aabb.lower.x, b.lower.x);
+    AtomicMin(&aabb.lower.y, a.lower.y);
+    AtomicMin(&aabb.lower.y, b.lower.y);
+    AtomicMin(&aabb.lower.z, a.lower.z);
+    AtomicMin(&aabb.lower.z, b.lower.z);
+
+    AtomicMax(&aabb.upper.x, a.upper.x);
+    AtomicMax(&aabb.upper.x, b.upper.x);
+    AtomicMax(&aabb.upper.y, a.upper.y);
+    AtomicMax(&aabb.upper.y, b.upper.y);
+    AtomicMax(&aabb.upper.z, a.upper.z);
+    AtomicMax(&aabb.upper.z, b.upper.z);
+    }
+#endif // __CUDA_ARCH__
 
 // end group overlap
 /*! @}*/

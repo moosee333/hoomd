@@ -221,17 +221,12 @@ cudaError_t gpu_hpmc_shift(Scalar4 *d_postype,
     gpu_hpmc_excell_kernel executes one thread per cell. It gathers the particle indices from all neighboring cells
     into the output expanded cell.
 */
-__global__ void gpu_hpmc_excell_and_cell_set_kernel(unsigned int *d_inverse_cell_set,
-                                       unsigned int *d_excell_idx,
-                                       unsigned int *d_excell_cell_set,
-                                       unsigned int *d_excell_size,
-                                       const Index2D excli,
+__global__ void gpu_hpmc_cell_set_lookup_kernel(unsigned int *d_inverse_cell_set,
+                                       unsigned int *d_cell_set_by_ptl,
                                        const unsigned int *d_cell_idx,
                                        const unsigned int *d_cell_size,
-                                       const unsigned int *d_cell_adj,
                                        const Index3D ci,
-                                       const Index2D cli,
-                                       const Index2D cadji)
+                                       const Index2D cli)
     {
     // compute the output cell
     unsigned int my_cell = blockDim.x * blockIdx.x + threadIdx.x;
@@ -239,51 +234,30 @@ __global__ void gpu_hpmc_excell_and_cell_set_kernel(unsigned int *d_inverse_cell
     if (my_cell >= ci.getNumElements())
         return;
 
-    unsigned int my_cell_size = 0;
+    unsigned int my_cell_size = d_cell_size[my_cell];
 
-    // loop over neighboring cells and build up the expanded cell list
-    for (unsigned int offset = 0; offset < cadji.getW(); offset++)
+    for (unsigned int k = 0; k < my_cell_size; k++)
         {
-        unsigned int neigh_cell = d_cell_adj[cadji(offset, my_cell)];
-        unsigned int neigh_cell_size = d_cell_size[neigh_cell];
-
-        for (unsigned int k = 0; k < neigh_cell_size; k++)
-            {
-            // read in the index of the new particle to add to our cell
-            unsigned int new_idx = tex1Dfetch(cell_idx_tex, cli(k, neigh_cell));
-            unsigned int ex_cell_idx = excli(my_cell_size, my_cell);
-            d_excell_idx[ex_cell_idx] = new_idx;
-            d_excell_cell_set[ex_cell_idx] = d_inverse_cell_set[neigh_cell];
-            my_cell_size++;
-            }
+        // read in the index of the new particle to add to our cell
+        unsigned int i = tex1Dfetch(cell_idx_tex, cli(k, my_cell));
+        d_cell_set_by_ptl[i] = d_inverse_cell_set[my_cell];
         }
-
-    // write out the final size
-    d_excell_size[my_cell] = my_cell_size;
     }
 
-//! Kernel driver for gpu_hpmc_excell_and_update_order_kernel()
-cudaError_t gpu_hpmc_excell_and_cell_set(
+//! Kernel driver for gpu_hpmc_cell_set_lookup_kernel()
+cudaError_t gpu_hpmc_cell_set_lookup(
                             unsigned int *d_inverse_cell_set,
-                            unsigned int *d_excell_idx,
-                            unsigned int *d_excell_cell_set,
-                            unsigned int *d_excell_size,
-                            const Index2D& excli,
+                            unsigned int *d_cell_set_by_ptl,
                             const unsigned int *d_cell_idx,
                             const unsigned int *d_cell_size,
-                            const unsigned int *d_cell_adj,
                             const Index3D& ci,
                             const Index2D& cli,
-                            const Index2D& cadji,
                             const unsigned int block_size)
     {
     assert(d_inverse_cell_set);
-    assert(d_excell_idx);
-    assert(d_excell_cell_set);
-    assert(d_excell_size);
     assert(d_cell_idx);
     assert(d_cell_size);
-    assert(d_cell_adj);
+    assert(d_cell_set_by_ptl);
 
     // determine the maximum block size and clamp the input block size down
     static int max_block_size = -1;
@@ -291,7 +265,7 @@ cudaError_t gpu_hpmc_excell_and_cell_set(
     if (max_block_size == -1)
         {
         cudaFuncAttributes attr;
-        cudaFuncGetAttributes(&attr, gpu_hpmc_excell_and_cell_set_kernel);
+        cudaFuncGetAttributes(&attr, gpu_hpmc_cell_set_lookup_kernel);
         max_block_size = attr.maxThreadsPerBlock;
         sm = attr.binaryVersion;
         }
@@ -314,17 +288,12 @@ cudaError_t gpu_hpmc_excell_and_cell_set(
     if (error != cudaSuccess)
         return error;
 
-    gpu_hpmc_excell_and_cell_set_kernel<<<grid, threads>>>(d_inverse_cell_set,
-                                              d_excell_idx,
-                                              d_excell_cell_set,
-                                              d_excell_size,
-                                              excli,
+    gpu_hpmc_cell_set_lookup_kernel<<<grid, threads>>>(d_inverse_cell_set,
+                                              d_cell_set_by_ptl,
                                               d_cell_idx,
                                               d_cell_size,
-                                              d_cell_adj,
                                               ci,
-                                              cli,
-                                              cadji);
+                                              cli);
 
     return cudaSuccess;
     }

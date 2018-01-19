@@ -20,6 +20,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeSphere>(const hpmc_free_volume_ar
                                                        const typename ShapeSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSphere>(const hpmc_args_t& args,
                                                   const typename ShapeSphere::param_type *d_params);
+template cudaError_t gpu_hpmc_update_aabb<ShapeSphere>(const hpmc_args_t& args,
+                                                  const typename ShapeSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_moves<ShapeSphere>(const hpmc_args_t& args,
                                                   const typename ShapeSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_check_overlaps<ShapeSphere>(const hpmc_args_t& args,

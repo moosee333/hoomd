@@ -84,6 +84,21 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
             m_tuner_excell_block_size->setPeriod(period);
             m_tuner_excell_block_size->setEnabled(enable);
 
+            m_tuner_cell_set_block_size->setPeriod(period);
+            m_tuner_cell_set_block_size->setEnabled(enable);
+            }
+
+        //! Enable deterministic simulations
+        virtual void setDeterministic(bool deterministic)
+            {
+            this->m_exec_conf->msg->notice(2) << "hpmc: Sorting cell list to enable deterministic simulations." << std::endl;
+            m_cl->setSortCellList(deterministic);
+
+            initializeCellLists();
+            for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
+                {
+                m_cl_type[itype]->setSortCellList(deterministic);
+                }
             }
 
     protected:
@@ -102,7 +117,6 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         GPUVector<Scalar4> m_old_orientation;                    //!< List of old particle orientations
 
         GPUArray<unsigned int> m_excell_idx;  //!< Particle indices in expanded cells
-        GPUArray<unsigned int> m_excell_cell_set;  //!< Particle indices in expanded cells
         GPUArray<unsigned int> m_excell_size; //!< Number of particles in each expanded cell
         Index2D m_excell_list_indexer;        //!< Indexer to access elements of the excell_idx list
         GPUArray<unsigned int> m_excell_overlap; //!< Per neighbor flag, == 1 if update in old config, == 2 if update in new config
@@ -111,6 +125,7 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         std::unique_ptr<Autotuner> m_tuner_excell_block_size;  //!< Autotuner for excell block_size
         std::unique_ptr<Autotuner> m_tuner_implicit;           //!< Autotuner for the depletant overlap check
 
+        std::unique_ptr<Autotuner> m_tuner_cell_set_block_size;  //!< Autotuner for inverse cell set lookup
         std::unique_ptr<Autotuner> m_tuner_moves;             //!< Autotuner for proposing moves
         std::unique_ptr<Autotuner> m_tuner_check_overlaps;    //!< Autotuner for checking overlaps
         std::unique_ptr<Autotuner> m_tuner_accept;             //!< Autotuner for the acceptance stage
@@ -129,6 +144,8 @@ class IntegratorHPMCMonoImplicitNewGPU : public IntegratorHPMCMonoImplicitNew<Sh
         GPUVector<Scalar4> m_trial_orientation;               //!< New orientations
         GPUVector<unsigned int > m_trial_updated;             //!< per-particle flag if trial move has been carried out
         GPUVector<unsigned int> m_trial_move_type_translate;  //!< Flags to indicate which type of move
+
+        GPUVector<unsigned int> m_cell_set_by_ptl;            //!< Lookup of cell set by ptl index
 
         cudaStream_t m_stream;                                  //! GPU kernel stream
 
@@ -234,7 +251,6 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     GPUArray<unsigned int> excell_idx(0, this->m_exec_conf);
     m_excell_idx.swap(excell_idx);
 
-    GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_excell_cell_set);
     GPUArray<unsigned int>(0, this->m_exec_conf).swap(m_excell_overlap);
 
     GPUVector<Scalar4> old_postype(this->m_exec_conf);
@@ -247,6 +263,8 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     GPUVector<Scalar4>(this->m_exec_conf).swap(m_trial_orientation);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_trial_updated);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_trial_move_type_translate);
+
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_cell_set_by_ptl);
 
     // initialize the autotuners
     // the full block size, stride and group size matrix is searched,
@@ -301,6 +319,7 @@ IntegratorHPMCMonoImplicitNewGPU< Shape >::IntegratorHPMCMonoImplicitNewGPU(std:
     m_tuner_excell_block_size.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_excell_block_size", this->m_exec_conf));
     m_tuner_implicit.reset(new Autotuner(valid_params_dp, 5, 1000000, "hpmc_insert_depletants", this->m_exec_conf));
 
+    m_tuner_cell_set_block_size.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_cell_set_block_size", this->m_exec_conf));
     m_tuner_moves.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_moves", this->m_exec_conf));
     m_tuner_check_overlaps.reset(new Autotuner(Shape::isParallel() ? valid_params_dp : valid_params_tune_shared,
         5, 1000000, "hpmc_check_overlaps", this->m_exec_conf));
@@ -405,12 +424,14 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         || m_cell_lists_reinitialized)
         {
         this->initializeCellSets();
-        this->initializeExcellMem();
 
+        #if 0
+        this->initializeExcellMem();
         if (Shape::isParallel() && this->m_exec_conf->getComputeCapability() > 300)
             {
             this->initializeQueueMem();
             }
+        #endif
 
         this->m_last_dim = cur_dim;
         this->m_last_nmax = this->m_cl->getNmax();
@@ -445,6 +466,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         m_active_cell_move_type_translate.swap(active_cell_move_type_translate);
         }
 
+    #if 0
     // if only NMax changed, only need to reallocate excell memory
     if (this->m_last_nmax != this->m_cl->getNmax())
         {
@@ -457,6 +479,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
         this->m_last_nmax = this->m_cl->getNmax();
         }
+    #endif
 
     // test if we are in domain decomposition mode
     bool domain_decomposition = false;
@@ -470,7 +493,11 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     this->m_old_postype.resize(this->m_pdata->getMaxN());
     this->m_old_orientation.resize(this->m_pdata->getMaxN());
 
-    if (this->m_exec_conf->getComputeCapability() < 350)
+    // update locality data structures
+    this->buildAABBTree();
+    this->updateImageList();
+
+    if (1 || this->m_exec_conf->getComputeCapability() < 350)
         {
         // no dynamic parallelism
 
@@ -488,6 +515,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         Scalar3 ghost_width = this->m_cl->getGhostWidth();
         Scalar3 ghost_fraction = this->m_nominal_width / npd;
 
+        #if 0
             {
             // access the global cell list data
             ArrayHandle<unsigned int> d_cell_size(this->m_cl->getCellSizeArray(), access_location::device, access_mode::read);
@@ -511,6 +539,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
             this->m_tuner_excell_block_size->end();
             }
+        #endif
 
         for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
             {
@@ -582,7 +611,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                             d_cell_idx.data,
                             d_cell_size.data,
                             d_excell_idx.data,
-                            0, // excell_cell_set
                             0, // excell_overlap
                             d_excell_size.data,
                             this->m_cl_type[itype]->getCellIndexer(),
@@ -614,11 +642,15 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                             dev_prop,
                             first,
                             m_stream,
+                            this->m_aabb_tree,
+                            this->m_image_list,
                             have_depletants ? d_active_cell_ptl_idx.data : 0,
                             have_depletants ? d_active_cell_accept.data : 0,
-                            have_depletants ? d_active_cell_move_type_translate.data : 0);
+                            have_depletants ? d_active_cell_move_type_translate.data : 0
+                           );
 
-                    detail::gpu_hpmc_update<Shape>(args, params.data());
+//                    detail::gpu_hpmc_update<Shape>(args, params.data());
+                    detail::gpu_hpmc_update_aabb<Shape>(args, params.data());
 
                     if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                         CHECK_CUDA_ERROR();
@@ -798,6 +830,36 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         Scalar3 ghost_width = this->m_cl->getGhostWidth();
         Scalar3 ghost_fraction = this->m_nominal_width / npd;
 
+            {
+            // access the global cell list data
+            ArrayHandle<unsigned int> d_cell_size(this->m_cl->getCellSizeArray(), access_location::device, access_mode::read);
+            ArrayHandle<unsigned int> d_cell_idx(this->m_cl->getIndexArray(), access_location::device, access_mode::read);
+            ArrayHandle<unsigned int> d_cell_adj(this->m_cl->getCellAdjArray(), access_location::device, access_mode::read);
+
+            ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::overwrite);
+            ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::overwrite);
+
+            // update the expanded cells
+            this->m_tuner_excell_block_size->begin();
+            detail::gpu_hpmc_excell(d_excell_idx.data,
+                                    d_excell_size.data,
+                                    this->m_excell_list_indexer,
+                                    d_cell_idx.data,
+                                    d_cell_size.data,
+                                    d_cell_adj.data,
+                                    this->m_cl->getCellIndexer(),
+                                    this->m_cl->getCellListIndexer(),
+                                    this->m_cl->getCellAdjIndexer(),
+                                    this->m_tuner_excell_block_size->getParam());
+            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                CHECK_CUDA_ERROR();
+
+            this->m_tuner_excell_block_size->end();
+            }
+
+        // resize cell set lookup
+        m_cell_set_by_ptl.resize(this->m_pdata->getN());
+
         for (unsigned int itype = 0; itype < this->m_pdata->getNTypes(); ++itype)
             {
                 {
@@ -833,35 +895,22 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
 
                 // cell sets for this type
 
-                // for now, we are writing out an expanded cell list for every type separately
-                // this is certainly not efficient, but we need the cell set pointer to be updated
-
-                // NOTE this works only if all cell lists have equal dimensions!
-                assert(m_cl_type[itype]->getDim() == m_cl->getDim());
                 ArrayHandle<unsigned int> d_inverse_cell_set(this->m_inverse_cell_set[itype], access_location::device, access_mode::read);
-
-                ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::overwrite);
-                ArrayHandle< unsigned int > d_excell_cell_set(this->m_excell_cell_set, access_location::device, access_mode::overwrite);
-                ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::readwrite);
+                ArrayHandle<unsigned int> d_cell_set_by_ptl(this->m_cell_set_by_ptl, access_location::device, access_mode::overwrite);
 
                 // update the expanded cells and update cell set lookup
-                this->m_tuner_excell_block_size->begin();
-                detail::gpu_hpmc_excell_and_cell_set(d_inverse_cell_set.data,
-                                        d_excell_idx.data,
-                                        d_excell_cell_set.data,
-                                        d_excell_size.data,
-                                        this->m_excell_list_indexer,
+                this->m_tuner_cell_set_block_size->begin();
+                detail::gpu_hpmc_cell_set_lookup(d_inverse_cell_set.data,
+                                        d_cell_set_by_ptl.data,
                                         d_cell_idx.data,
                                         d_cell_size.data,
-                                        d_cell_adj.data,
                                         this->m_cl->getCellIndexer(),
                                         this->m_cl->getCellListIndexer(),
-                                        this->m_cl->getCellAdjIndexer(),
-                                        this->m_tuner_excell_block_size->getParam());
+                                        this->m_tuner_cell_set_block_size->getParam());
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
 
-                this->m_tuner_excell_block_size->end();
+                this->m_tuner_cell_set_block_size->end();
 
                 if (this->m_prof)
                     this->m_prof->pop(this->m_exec_conf);
@@ -904,8 +953,9 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
             ArrayHandle<Scalar4> d_old_orientation(this->m_old_orientation, access_location::device, access_mode::overwrite);
 
             ArrayHandle< unsigned int > d_excell_idx(this->m_excell_idx, access_location::device, access_mode::read);
-            ArrayHandle< unsigned int > d_excell_cell_set(this->m_excell_cell_set, access_location::device, access_mode::read);
             ArrayHandle< unsigned int > d_excell_size(this->m_excell_size, access_location::device, access_mode::read);
+
+            ArrayHandle<unsigned int> d_cell_set_by_ptl(this->m_cell_set_by_ptl, access_location::device, access_mode::read);
 
             for (unsigned int i = 0; i < this->m_nselect*particles_per_cell; i++)
                 {
@@ -926,7 +976,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         d_cell_idx.data,
                         d_cell_size.data,
                         d_excell_idx.data,
-                        d_excell_cell_set.data,
                         d_excell_overlap.data,
                         d_excell_size.data,
                         this->m_cl_type[itype]->getCellIndexer(),
@@ -958,6 +1007,8 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         dev_prop,
                         first,
                         m_stream,
+                        this->m_aabb_tree,
+                        this->m_image_list,
                         have_depletants ? d_active_cell_ptl_idx.data : 0,
                         have_depletants ? d_active_cell_accept.data : 0,
                         have_depletants ? d_active_cell_move_type_translate.data : 0,
@@ -976,6 +1027,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
                         d_trial_updated.data,
                         d_trial_move_type_translate.data,
                         0, // d_update_order
+                        d_cell_set_by_ptl.data,
                         0, // cur_set
                         this->m_cell_set_indexer[itype]
                         );
@@ -1352,7 +1404,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeExcellMem()
 
     // reallocate memory
     m_excell_idx.resize(m_excell_list_indexer.getNumElements());
-    m_excell_cell_set.resize(m_excell_list_indexer.getNumElements());
     m_excell_overlap.resize(m_excell_list_indexer.getNumElements());
     m_excell_size.resize(num_cells);
     }

@@ -20,6 +20,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeUnion<ShapeSphere> >(const hpmc_f
                                                        const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeUnion<ShapeSphere> >(const hpmc_args_t& args,
                                                   const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
+template cudaError_t gpu_hpmc_update_aabb<ShapeUnion<ShapeSphere> >(const hpmc_args_t& args,
+                                                  const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
 template cudaError_t gpu_hpmc_moves<ShapeUnion<ShapeSphere> >(const hpmc_args_t& args,
                                                   const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
 template cudaError_t gpu_hpmc_check_overlaps<ShapeUnion<ShapeSphere> >(const hpmc_args_t& args,
