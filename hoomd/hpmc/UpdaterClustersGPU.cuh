@@ -157,11 +157,12 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t &args, const typename S
 
 #ifdef NVGRAPH_AVAILABLE
 //! Use nvGRAPH to find strongly connected components
-cudaError_t connected_components(
+cudaError_t gpu_connected_components(
     const uint2 *d_adj,
     unsigned int N,
     unsigned int n_elements,
     unsigned int *d_components,
+    unsigned int &num_components,
     cudaStream_t stream,
     unsigned int max_ites,
     float tol,

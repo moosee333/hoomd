@@ -64,6 +64,10 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         unsigned int m_n_overlaps_old_new;     //!< Number of overlaps between old and new configuration
         unsigned int m_n_overlaps_new_new;     //!< Number of overlaps between new and new configuration
 
+        #ifdef NVGRAPH_AVAILABLE
+        GPUVector<unsigned int> m_components;  //!< The connected component labels per particle
+        #endif
+
         std::unique_ptr<Autotuner> m_tuner_old_new;     //!< Autotuner for checking old against new
         std::unique_ptr<Autotuner> m_tuner_new_new;     //!< Autotuner for checking new against new
 
@@ -107,6 +111,10 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_interact_new_new);
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_reject);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_reject);
+
+    #ifdef NVGRAPH_AVAILABLE
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_components);
+    #endif
 
     m_n_overlaps_old_new = 0;
     m_n_overlaps_new_new = 0;
@@ -386,14 +394,15 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
 #endif
     {
     // collect interactions on rank 0
-    std::vector< std::vector<uint2> > all_overlap;
-    std::vector< std::vector<uint2> > all_interact_new_new;
-    std::vector< std::vector<unsigned int> > all_local_reject;
+    bool master = !this->m_exec_conf->getRank();
 
     #ifdef ENABLE_MPI
     if (this->m_comm)
         {
         // combine lists from different ranks
+        std::vector< std::vector<uint2> > all_overlaps;
+        std::vector< std::vector<uint2> > all_interact_new_new;
+        std::vector< std::vector<unsigned int> > all_local_reject;
 
         // overlap old new
         std::vector<uint2> overlaps(m_n_overlaps_old_new);
@@ -401,7 +410,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
             std::copy(h_overlaps.data, h_overlaps.data + m_n_overlaps_old_new, overlaps.begin());
             }
-        gather_v(overlaps, all_overlap, 0, this->m_exec_conf->getMPICommunicator());
+        gather_v(overlaps, all_overlaps, 0, this->m_exec_conf->getMPICommunicator());
 
         // boundary interactions new new
         std::vector<uint2> interact_new_new(m_n_overlaps_new_new);
@@ -420,13 +429,49 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             std::copy(h_reject.data, h_reject.data + m_reject.size(), local_reject.begin());
             }
         gather_v(local_reject, all_local_reject, 0, this->m_exec_conf->getMPICommunicator());
+
+        if (master)
+            {
+            #ifdef ENABLE_MPI
+            // complete the list of rejected particles
+            for (auto it_i = all_local_reject.begin(); it_i != all_local_reject.end(); ++it_i)
+                for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
+                    this->m_ptl_reject.insert(*it_j);
+
+            // determine new size for overlaps list
+            unsigned int n_overlaps = 0;
+            for (auto it = all_overlaps.begin(); it != all_overlaps.end(); ++it)
+                n_overlaps += it->size();
+            for (auto it = all_interact_new_new.begin(); it != all_interact_new_new.end(); ++it)
+                n_overlaps += it->size();
+
+            // resize local adjacency list
+            m_overlaps.resize(n_overlaps);
+
+                {
+                ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::overwrite);
+
+                // collect adjacency matrix
+                unsigned int offs = 0;
+                for (auto it = all_overlaps.begin(); it != all_overlaps.end(); ++it)
+                    {
+                    std::copy(it->begin(), it->end(), h_overlaps.data + offs);
+                    offs += it->size();
+                    }
+                for (auto it = all_interact_new_new.begin(); it != all_interact_new_new.end(); ++it)
+                    {
+                    std::copy(it->begin(), it->end(), h_overlaps.data + offs);
+                    offs += it->size();
+                    }
+                }
+            }
+        #endif
         }
     #endif
 
     if (this->m_prof)
         this->m_prof->push(this->m_exec_conf, "connected components");
 
-    bool master = !this->m_exec_conf->getRank();
     if (master)
         {
         // fill in the cluster bonds, using bond formation probability defined in Liu and Luijten
@@ -434,19 +479,12 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
         this->m_ptl_reject.clear();
         this->m_local_reject.clear();
 
+        #ifndef NVGRAPH_AVAILABLE
         // resize the number of graph nodes in place
         this->m_G.resize(N);
-
-        #ifdef ENABLE_MPI
-        if (this->m_comm)
-            {
-            // complete the list of rejected particles
-            for (auto it_i = all_local_reject.begin(); it_i != all_local_reject.end(); ++it_i)
-                for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
-                    this->m_ptl_reject.insert(*it_j);
-            }
-        else
         #endif
+
+        if (!this->m_comm)
             {
             ArrayHandle<unsigned int> h_reject(m_reject, access_location::host, access_mode::read);
             for (unsigned int i = 0; i < m_reject.size(); ++i)
@@ -455,54 +493,74 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
 
         if (line)
             {
-            #ifdef ENABLE_MPI
-            if (this->m_comm)
+            ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
+            unsigned int offs = m_n_overlaps_old_new;
+            for (unsigned int i = 0; i < m_n_overlaps_new_new; ++i)
                 {
-                for (auto it_i = all_interact_new_new.begin(); it_i != all_interact_new_new.end(); ++it_i)
-                    for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
-                        {
-                        this->m_G.addEdge(it_j->x, it_j->y);
+                #ifndef NVGRAPH_AVAILABLE
+                this->m_G.addEdge(h_overlaps.data[offs + i].x, h_overlaps.data[offs + i].y);
+                #endif
 
-                        // add to list of rejected particles
-                        this->m_ptl_reject.insert(it_j->x);
-                        this->m_ptl_reject.insert(it_j->y);
-                        }
-                }
-            else
-            #endif
-                {
-                ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
-                unsigned int offs = m_n_overlaps_old_new;
-                for (unsigned int i = 0; i < m_n_overlaps_new_new; ++i)
-                    {
-                    this->m_G.addEdge(h_overlaps.data[offs + i].x, h_overlaps.data[offs + i].y);
-
-                    // add to list of rejected particles
-                    this->m_local_reject.insert(h_overlaps.data[offs + i].x);
-                    this->m_local_reject.insert(h_overlaps.data[offs + i].y);
-                    }
+                // add to list of rejected particles
+                this->m_local_reject.insert(h_overlaps.data[offs + i].x);
+                this->m_local_reject.insert(h_overlaps.data[offs + i].y);
                 }
             }
 
-        #ifdef ENABLE_MPI
-        if (this->m_comm)
-            {
-            for (auto it_i = all_overlap.begin(); it_i != all_overlap.end(); ++it_i)
-                for (auto it_j = it_i->begin(); it_j != it_i->end(); ++it_j)
-                    this->m_G.addEdge(it_j->x,it_j->y);
-            }
-        else
-        #endif
+        #ifndef NVGRAPH_AVAILABLE
             {
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
 
             for (unsigned int i = 0; i < m_n_overlaps_old_new; ++i)
                 this->m_G.addEdge(h_overlaps.data[i].x, h_overlaps.data[i].y);
             }
+        #endif
 
-        // compute connected components
         clusters.clear();
+
+        #ifdef NVGRAPH_AVAILABLE
+        m_components.resize(N);
+
+        // access edges of adajacency matrix
+        ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::read);
+
+        // this will contain the number of strongly connected components
+        unsigned int num_components = 0;
+
+            {
+            // access the output array
+            ArrayHandle<unsigned int> d_components(m_components, access_location::device, access_mode::overwrite);
+
+            unsigned int max_iterations = 50;
+            float tol = 1e-6;
+            float jump_tol = 1e-5; // tolerance with which we detect jumps of the eigenvector components
+
+            detail::gpu_connected_components(
+                d_overlaps.data,
+                N,
+                m_n_overlaps_old_new + m_n_overlaps_new_new,
+                d_components.data,
+                num_components,
+                m_stream,
+                max_iterations,
+                tol,
+                jump_tol,
+                this->m_exec_conf->getCachedAllocator());
+
+            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                CHECK_CUDA_ERROR();
+            }
+
+        // copy to host
+        clusters.resize(num_components);
+        ArrayHandle<unsigned int> h_components(m_components, access_location::host, access_mode::read);
+
+        for (unsigned int i = 0; i < N; ++i)
+            clusters[h_components.data[i]].push_back(i);
+        #else
+        // compute connected components on CPU
         this->m_G.connectedComponents(clusters);
+        #endif
         }
 
     if (this->m_prof)
