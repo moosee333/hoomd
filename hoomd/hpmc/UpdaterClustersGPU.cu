@@ -452,31 +452,7 @@ cudaError_t gpu_connected_components(
         nverts = cur_topology.nvertices;
         nedges = cur_topology.nedges;
 
-            /*
-            {
-            float *d_vdata;
-            int *d_ptls;
-            cudaMalloc(&d_vdata, sizeof(float)*nverts);
-            cudaMalloc(&d_ptls, sizeof(int)*nverts);
-            check_nvgraph(nvgraphGetVertexData(
-                nvgraphH,
-                cur_graph,
-                d_vdata,
-                ptls_index));
-            thrust::device_ptr<float> vdata(d_vdata);
-            thrust::device_ptr<int> ptls(d_ptls);
-            thrust::transform(vdata, vdata+nverts, ptls, my_float_as_int());
-            int h_ptls[nverts];
-            cudaMemcpy(h_ptls, d_ptls, sizeof(int)*nverts, cudaMemcpyDeviceToHost);
-            for (int i = 0; i < nverts; ++i)
-                printf("vd[%d] = %d\n", i, h_ptls[i]);
-            cudaFree(d_vdata);
-            cudaFree(d_ptls);
-            }
-            */
-
         bool done = false;
-        printf("> %d %d\n", nverts, nedges);
 
         if (nedges == 0)
             {
@@ -791,13 +767,6 @@ cudaError_t gpu_connected_components(
                     // get the eigenvectors, sorted by increasing eigenvalue
                     auto evec = es.eigenvectors();
 
-//                    for (int i = 0; i < ite+1; ++i)
-//                        printf("lambda(%d) = %f\n", i, eval(i));
-
-//                    for (int i = 0; i < ite+1; ++i)
-//                        for (int j = 0; j < ite+1; ++j)
-//                            printf("v(%d,%d) = %f\n", i,j,evec(i,j));
-
                     // copy eigenvector corresponding to smallest eigenvalue to device
                     float max_evec[ite];
                     for (unsigned int j = 0; j < ite + 1; ++j)
@@ -824,7 +793,6 @@ cudaError_t gpu_connected_components(
                 /*
                  * check if convergence
                  */
-                printf("%d lambda = %f lambda_next = %f\n", ite, lambda, lambda_next);
                 if ( (ite > 0) && fabs(lambda - lambda_next) < tol)
                     break;
 
@@ -865,19 +833,6 @@ cudaError_t gpu_connected_components(
                 thrust::minus<float>()
                 );
 
-                /*
-                {
-                printf("dx: \n");
-                float hx[nverts-1];
-                float hz[nverts];
-                cudaMemcpy(hx, d_delta_x, sizeof(float)*(nverts-1),cudaMemcpyDeviceToHost);
-                cudaMemcpy(hz, d_z, sizeof(float)*(nverts),cudaMemcpyDeviceToHost);
-                for (unsigned int i = 0; i < nverts-1; ++i)
-                    printf("%f %f\n", hz[i], hx[i]);
-                printf("\n");
-                }
-                */
-
             // pick up the jump at i
             auto jump_it = thrust::find_if(
                 thrust::cuda::par(alloc),
@@ -892,7 +847,6 @@ cudaError_t gpu_connected_components(
             if (split_idx == nverts)
                 {
                 // we found a candidate for a connected component, check if it cannot be split further
-                printf("%d %d\n", nverts, cur_topology.nedges);
                 nvgraphTraversalParameter_t traversal_param;
                 nvgraphTraversalParameterInit(&traversal_param);
                 nvgraphTraversalSetDistancesIndex(&traversal_param, distances_index);
@@ -985,15 +939,6 @@ cudaError_t gpu_connected_components(
                     vertices + split_idx
                     );
 
-                {
-                printf("indices left: \n");
-                int idx[split_idx];
-                check_cuda(cudaMemcpy(idx, d_vertices, sizeof(int)*(split_idx),cudaMemcpyDeviceToHost));
-                for (unsigned int i = 0; i < split_idx; ++i)
-                    printf("%d\n", idx[i]);
-                printf("\n");
-                }
-
                 // create subgraph objects to the left
                 nvgraphGraphDescr_t sub_graph_left_F;
                 check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &sub_graph_left_F));
@@ -1028,15 +973,6 @@ cudaError_t gpu_connected_components(
                     d_vertices+split_idx,
                     nverts - split_idx));
 
-                {
-                printf("indices right: \n");
-                int idx[nverts-split_idx];
-                cudaMemcpy(idx, d_vertices+split_idx, sizeof(int)*(nverts-split_idx),cudaMemcpyDeviceToHost);
-                for (unsigned int i = 0; i < nverts-split_idx; ++i)
-                    printf("%d\n", idx[i]);
-                printf("\n");
-                }
-
                 // push the right subgraph in the queue
                 Q.push(sub_graph_right_F);
                 }
@@ -1051,8 +987,6 @@ cudaError_t gpu_connected_components(
                 (void *) d_component,
                 ptls_index));
 
-            printf("%p %d\n", d_components, nverts);
-
             // label the particle indices in the output array by the index of this connected component
 
             // scatter the component indices as obtained from the vertex data
@@ -1064,21 +998,6 @@ cudaError_t gpu_connected_components(
                 components,  // the output vector
                 component_idx    // the indices vector
                 );
-
-                {
-                int *d_indices;
-                check_cuda(cudaMalloc(&d_indices, sizeof(int)*nverts));
-                thrust::device_ptr<int> indices(d_indices);
-                thrust::copy(component, component+ nverts, indices);
-                int h_indices[nverts];
-                check_cuda(cudaMemcpy(h_indices, d_indices, nverts*sizeof(int),cudaMemcpyDeviceToHost));
-                for (unsigned int i = 0; i < nverts; ++i)
-                    {
-                    int j = h_indices[i];
-                    printf("%d\n", j);
-                    }
-                cudaFree(d_indices);
-                }
 
             thrust::fill(
                 thrust::cuda::par(alloc),
