@@ -10,7 +10,11 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/copy.h>
 
+#include <thrust/random.h>
+
 #include <queue>
+
+#include "hoomd/extern/Eigen/Eigen/Eigenvalues"
 
 #include <cublas_v2.h>
 #include <nvgraph.h>
@@ -54,6 +58,15 @@ namespace detail
         }\
     }
 
+#define check_eigen(a) \
+    {\
+    Eigen::ComputationInfo info = (a);\
+    if (info != Eigen::Success)\
+        {\
+        printf("Eigen ERROR %d in file %s in line %d\n", info, __FILE__, __LINE__); \
+        throw std::runtime_error("Error during clusters update");\
+        }\
+    }
 
 struct get_source : public thrust::unary_function<uint2, unsigned int>
     {
@@ -73,6 +86,25 @@ struct get_destination : public thrust::unary_function<uint2, unsigned int>
         }
     };
 
+struct my_float_as_int : public thrust::unary_function<float, int>
+     {
+    __device__
+    int operator()(const float& f) const
+        {
+        return __float_as_int(f);
+        }
+    };
+
+struct my_int_as_float : public thrust::unary_function<int, float>
+     {
+    __device__
+    float operator()(const int& i) const
+        {
+        return __int_as_float(i);
+        }
+    };
+
+
 struct greater_equal_x : public thrust::unary_function<float, bool>
     {
     __host__ __device__
@@ -89,30 +121,30 @@ struct greater_equal_x : public thrust::unary_function<float, bool>
     float x;
     };
 
-struct my_int_as_float : public thrust::unary_function<int, float>
-    {
-    __device__
-    float operator()(const int& i) const
-        {
-        return __int_as_float(i);
-        }
-    };
-
-struct my_float_as_int : public thrust::unary_function<float, int>
-    {
-    __device__
-    int operator()(const float& f) const
-        {
-        return __float_as_int(f);
-        }
-    };
-
 struct is_reachable : public thrust::unary_function<int, bool>
     {
     __host__ __device__
     bool operator()(const int& i) const
         {
         return i != 2147483647; // 2^31-1
+        }
+    };
+
+struct generate_uniform
+    {
+    generate_uniform(int _seed)
+        : seed(_seed)
+        { }
+
+    int seed;
+
+    __device__
+    float operator () (int idx)
+        {
+        thrust::minstd_rand randEng(seed);
+        thrust::uniform_real_distribution<float> uniDist;
+        randEng.discard(idx);
+        return uniDist(randEng);
         }
     };
 
@@ -136,9 +168,6 @@ cudaError_t gpu_connected_components(
     COO_input->nedges = 2*n_elements;  // for undirected graph
     COO_input->tag = NVGRAPH_UNSORTED;
 
-    float *d_edge_data_coo;
-    float *d_edge_data_csr;
-
     // allocate COO matrix topology
     check_cuda(cudaMalloc((void **)&(COO_input->source_indices), COO_input->nedges*sizeof(int)));
     check_cuda(cudaMalloc((void **)&(COO_input->destination_indices), COO_input->nedges*sizeof(int)));
@@ -157,80 +186,139 @@ cudaError_t gpu_connected_components(
     thrust::copy(source, source+n_elements, coo_destination+n_elements);
     thrust::copy(destination, destination+n_elements, coo_source+n_elements);
 
-    nvgraphCSRTopology32I_t CSR_output;
-    CSR_output = (nvgraphCSRTopology32I_t) malloc(sizeof(struct nvgraphCSRTopology32I_st));
+    // a current limitation of nvgraph is to only support graphs with a single edge/vertex data type
+    // we need both float (for spectral analysis) and int (for traversal), so create two parallel graphs
+    nvgraphCSRTopology32I_t CSR_output_F;
+    nvgraphCSRTopology32I_t CSR_output_I;
+    CSR_output_F = (nvgraphCSRTopology32I_t) malloc(sizeof(struct nvgraphCSRTopology32I_st));
+    CSR_output_I = (nvgraphCSRTopology32I_t) malloc(sizeof(struct nvgraphCSRTopology32I_st));
 
     // allocate CSR matrix topology
-    check_cuda(cudaMalloc((void **)&(CSR_output->source_offsets), (COO_input->nvertices+1)*sizeof(int)));
-    check_cuda(cudaMalloc((void **)&(CSR_output->destination_indices), COO_input->nedges*sizeof(int)));
+    check_cuda(cudaMalloc((void **)&(CSR_output_F->source_offsets), (COO_input->nvertices+1)*sizeof(int)));
+    check_cuda(cudaMalloc((void **)&(CSR_output_F->destination_indices), COO_input->nedges*sizeof(int)));
+
+    check_cuda(cudaMalloc((void **)&(CSR_output_I->source_offsets), (COO_input->nvertices+1)*sizeof(int)));
+    check_cuda(cudaMalloc((void **)&(CSR_output_I->destination_indices), COO_input->nedges*sizeof(int)));
 
     // allocate edge data
-    check_cuda(cudaMalloc((void **)&d_edge_data_coo, COO_input->nedges*sizeof(float)));
-    check_cuda(cudaMalloc((void **)&d_edge_data_csr, COO_input->nedges*sizeof(float)));
+    float *d_edge_data_coo_F;
+    float *d_edge_data_csr_F;
+
+    check_cuda(cudaMalloc((void **)&d_edge_data_coo_F, COO_input->nedges*sizeof(float)));
+    check_cuda(cudaMalloc((void **)&d_edge_data_csr_F, COO_input->nedges*sizeof(float)));
 
     // put ones on the elements of the adjacency matrix in COO format
-    thrust::device_ptr<float> edge_data_coo(d_edge_data_coo);
-    thrust::fill(thrust::cuda::par(alloc), edge_data_coo, edge_data_coo + COO_input->nedges, 1.0);
+    thrust::device_ptr<float> edge_data_coo_F(d_edge_data_coo_F);
+
+    thrust::fill(thrust::cuda::par(alloc), edge_data_coo_F, edge_data_coo_F + COO_input->nedges, 1.0);
 
     // create nvgraph handle
     nvgraphHandle_t nvgraphH;
     check_nvgraph(nvgraphCreate(&nvgraphH));
 
-    // create parent graph object
-    nvgraphGraphDescr_t graph;
-    check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &graph));
+    // create parent graph objects
+    nvgraphGraphDescr_t graph_F;
+    nvgraphGraphDescr_t graph_I;
+    check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &graph_F));
+    check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &graph_I));
 
     // convert COO->CSR
-    cudaDataType_t edge_dimT = CUDA_R_32F;
+    cudaDataType_t edge_dimT_F = CUDA_R_32F;
+    cudaDataType_t edge_dimT_I = CUDA_R_32I;
     check_nvgraph(nvgraphConvertTopology(
         nvgraphH,
         NVGRAPH_COO_32,
         COO_input,
-        d_edge_data_coo,
-        &edge_dimT,
+        d_edge_data_coo_F,
+        &edge_dimT_F,
         NVGRAPH_CSR_32,
-        CSR_output,
-        d_edge_data_csr));
+        CSR_output_F,
+        d_edge_data_csr_F));
+
+    /*
+    check_nvgraph(nvgraphConvertTopology(
+        nvgraphH,
+        NVGRAPH_COO_32,
+        COO_input,
+        d_edge_data_coo_I,
+        &edge_dimT_I,
+        NVGRAPH_CSR_32,
+        CSR_output_I,
+        d_edge_data_csr_I));
+    */
+    // copy over topology
+    CSR_output_I->nvertices = CSR_output_F->nvertices;
+    CSR_output_I->nedges = CSR_output_F->nedges;
+    cudaMemcpy(CSR_output_I->source_offsets,CSR_output_F->source_offsets,(COO_input->nvertices+1)*sizeof(int),cudaMemcpyDeviceToDevice);
+    cudaMemcpy(CSR_output_I->destination_indices,CSR_output_F->destination_indices,(COO_input->nedges)*sizeof(int),cudaMemcpyDeviceToDevice);
 
     // these variables will track the dimensions of the current subgraph
-    unsigned int nverts = CSR_output->nvertices;
+    unsigned int nverts = CSR_output_F->nvertices;
+    unsigned int nedges = CSR_output_F->nedges;
 
     // set graph connectivity and properties
-    unsigned int edge_num_sets = 1;
+    unsigned int edge_num_sets_F = 1;
+    unsigned int edge_num_sets_I = 0;
 
     check_nvgraph(nvgraphSetGraphStructure(
         nvgraphH,
-        graph,
-        (void *) CSR_output,
+        graph_F,
+        (void *) CSR_output_F,
         NVGRAPH_CSR_32));
     check_nvgraph(nvgraphAllocateEdgeData(
         nvgraphH,
-        graph,
-        edge_num_sets,
-        &edge_dimT));
+        graph_F,
+        edge_num_sets_F,
+        &edge_dimT_F));
     check_nvgraph(nvgraphSetEdgeData(
         nvgraphH,
-        graph,
-        d_edge_data_csr,
+        graph_F,
+        d_edge_data_csr_F,
         0 // edge data set 0
         ));
 
+    check_nvgraph(nvgraphSetGraphStructure(
+        nvgraphH,
+        graph_I,
+        (void *) CSR_output_I,
+        NVGRAPH_CSR_32));
+    check_nvgraph(nvgraphAllocateEdgeData(
+        nvgraphH,
+        graph_I,
+        edge_num_sets_I,
+        &edge_dimT_I));
+
+
     /* Vertex data
-     * set 0: vector to multiply by
-     * set 1: vector to add, and output
-     * set 2: origin particle index for connected component
-     * set 3: distances from BFS traversal
+     * F:
+     * set 0: vector to multiply by (float)
+     * set 1: vector to add, and output (float)
+     * set 2: origin particle index for connected component (int as float)
+     *
+     * I:
+     * set 0: distances from BFS traversal (int)
      */
-    int vertex_num_sets = 4;
-    cudaDataType_t vertex_dimT[vertex_num_sets];
-    for (int i = 0; i < vertex_num_sets; ++i)
-        vertex_dimT[i] = CUDA_R_32F;
+    int vertex_num_sets_F = 3;
+    cudaDataType_t vertex_dimT_F[vertex_num_sets_F];
+    vertex_dimT_F[0] = CUDA_R_32F;
+    vertex_dimT_F[1] = CUDA_R_32F;
+    vertex_dimT_F[2] = CUDA_R_32F;
+
+    int vertex_num_sets_I = 1;
+    cudaDataType_t vertex_dimT_I[vertex_num_sets_I];
+    vertex_dimT_I[0] = CUDA_R_32I;
 
     check_nvgraph(nvgraphAllocateVertexData(
         nvgraphH,
-        graph,
-        vertex_num_sets,
-        vertex_dimT));
+        graph_F,
+        vertex_num_sets_F,
+        vertex_dimT_F));
+
+    check_nvgraph(nvgraphAllocateVertexData(
+        nvgraphH,
+        graph_I,
+        vertex_num_sets_I,
+        vertex_dimT_I));
 
     // set up cublas handle
     cublasHandle_t cublasH = NULL;
@@ -253,6 +341,10 @@ cudaError_t gpu_connected_components(
     check_cuda(cudaMalloc((void **) &d_x, nverts*sizeof(float)));
     size_t x_index = 0; // vertex data 0
 
+    // vector from last iteration
+    float *d_last_x;
+    check_cuda(cudaMalloc((void **) &d_last_x, nverts*sizeof(float)));
+
     // sorted vertex indices for subgraph
     int *d_vertices;
     check_cuda(cudaMalloc((void **)&d_vertices, nverts*sizeof(int)));
@@ -262,45 +354,64 @@ cudaError_t gpu_connected_components(
     float *d_y;
     check_cuda(cudaMalloc((void **)&d_y, nverts*sizeof(float)));
 
+    // the eigenvector with smallest eigenvalue
+    float *d_z;
+    check_cuda(cudaMalloc((void **)&d_z, nverts*sizeof(float)));
+
     thrust::device_ptr<float> y(d_y);
+    thrust::device_ptr<float> z(d_z);
     thrust::device_ptr<float> diag(d_diag);
     thrust::device_ptr<float> x(d_x);
 
     // y is vertex data 1
     size_t y_index = 1;
 
-    // attach the ascending particle index as vertex data 2
+    // dense matrix of Lanzcos vectors, in column major
+    float *d_V;
+    check_cuda(cudaMalloc((void **)&d_V, nverts*max_ites*sizeof(float)));
+
+    // RHS for eigenvector computation
+    float *d_v;
+    check_cuda(cudaMalloc((void **)&d_v, max_ites*sizeof(float)));
+
+    // attach the ascending particle index as vertex data 2 (float)
     float *d_ptl_idx;
     check_cuda(cudaMalloc((void **)&d_ptl_idx, nverts*sizeof(float)));
     thrust::device_ptr<float> ptl_idx(d_ptl_idx);
-    auto ptl_idx_as_float = thrust::make_transform_iterator(
-        thrust::counting_iterator<int>(0),
-        my_int_as_float());
-    thrust::copy(
+    thrust::transform(
         thrust::cuda::par(alloc),
-        ptl_idx_as_float,
-        ptl_idx_as_float + N,
-        ptl_idx);
+        thrust::counting_iterator<int>(0),
+        thrust::counting_iterator<int>(0) + N,
+        ptl_idx,
+        my_int_as_float());
 
-    size_t ptls_index = 2; // vertex set 2
+    size_t ptls_index = 2; // vertex set 2 on F
     check_nvgraph(nvgraphSetVertexData(
         nvgraphH,
-        graph,
-        d_ptl_idx,
+        graph_F,
+        (void *)d_ptl_idx,
         ptls_index
         ));
 
-    // difference between x shifted by one and x tself
+    int *d_source_idx;
+    check_cuda(cudaMalloc((void **)&d_source_idx, sizeof(int)));
+    thrust::device_ptr<int> source_idx(d_source_idx);
+
+    // difference between x shifted by one and x itself
     float *d_delta_x;
     check_cuda(cudaMalloc((void **) &d_delta_x, sizeof(float)*nverts));
     thrust::device_ptr<float> delta_x(d_delta_x);
 
-    // traversal distances as graph vertex data 3
+    // traversal distances as graph vertex data 0
     int *d_distances;
     check_cuda(cudaMalloc((void **) &d_distances, sizeof(int)*nverts));
-
     thrust::device_ptr<int> distances(d_distances);
-    size_t distances_index = 3;
+    size_t distances_index = 0;
+
+    // for a component only
+    int *d_component_distances;
+    check_cuda(cudaMalloc((void **) &d_component_distances, sizeof(int)*nverts));
+    thrust::device_ptr<int> component_distances(d_component_distances);
 
     // one component
     float *d_component;
@@ -311,18 +422,20 @@ cudaError_t gpu_connected_components(
     thrust::device_ptr<unsigned int> components(d_components);
 
     // a queue for subgraphs (BFS over components)
-    std::queue<nvgraphGraphDescr_t> Q;
+    std::queue<nvgraphGraphDescr_t>  Q;
 
-    // push the parent graph
-    Q.push(graph);
+    // push the parent graphs
+    Q.push(graph_F);
 
     num_components = 0;
+
+    int seed = 0;
 
     // iteratively partition the graph until all connected components are found
     while (!Q.empty())
         {
         // pop the graph handle from the top of the queue
-        auto cur_graph = Q.front();
+        auto cur_graph_F = Q.front();
         Q.pop();
 
         // get current number of vertices and edges
@@ -332,25 +445,48 @@ cudaError_t gpu_connected_components(
 
         check_nvgraph(nvgraphGetGraphStructure(
             nvgraphH,
-            cur_graph,
+            cur_graph_F,
             &cur_topology,
             NULL));
 
         nverts = cur_topology.nvertices;
+        nedges = cur_topology.nedges;
+
+            /*
+            {
+            float *d_vdata;
+            int *d_ptls;
+            cudaMalloc(&d_vdata, sizeof(float)*nverts);
+            cudaMalloc(&d_ptls, sizeof(int)*nverts);
+            check_nvgraph(nvgraphGetVertexData(
+                nvgraphH,
+                cur_graph,
+                d_vdata,
+                ptls_index));
+            thrust::device_ptr<float> vdata(d_vdata);
+            thrust::device_ptr<int> ptls(d_ptls);
+            thrust::transform(vdata, vdata+nverts, ptls, my_float_as_int());
+            int h_ptls[nverts];
+            cudaMemcpy(h_ptls, d_ptls, sizeof(int)*nverts, cudaMemcpyDeviceToHost);
+            for (int i = 0; i < nverts; ++i)
+                printf("vd[%d] = %d\n", i, h_ptls[i]);
+            cudaFree(d_vdata);
+            cudaFree(d_ptls);
+            }
+            */
 
         bool done = false;
+        printf("> %d %d\n", nverts, nedges);
 
-        if (nverts == 1)
+        if (nedges == 0)
             {
-            // we found a single disconnected vertex, skip spectral analysis
+            // we found N disconnected vertices, finalize
             done = true;
             }
         else
             {
             // use eigenvalue decomposition and estimate partitions from discontinuous steps in the eigenvector associated
             // with the smallest eigenvalue of the Laplacian
-
-            printf("> %d %d\n", nverts, cur_topology.nedges);
 
             /*
              * compute Laplacian L = diag(A.e) - A
@@ -363,16 +499,16 @@ cudaError_t gpu_connected_components(
             // set vertex data for x = e
             check_nvgraph(nvgraphSetVertexData(
                 nvgraphH,
-                cur_graph,
+                cur_graph_F,
                 d_ones_float,
                 x_index
                 ));
 
             check_nvgraph(nvgraphSrSpmv(
                 nvgraphH,
-                cur_graph,
+                cur_graph_F,
                 0, // edge set
-                &h_minusone,
+                &h_one,
                 x_index, // vertex set for multiplication
                 &zero, // multiplying value
                 y_index, // vertex set for output
@@ -381,51 +517,178 @@ cudaError_t gpu_connected_components(
             // extract result from matrix vector multiplication into d_diag
             check_nvgraph(nvgraphGetVertexData(
                 nvgraphH,
-                cur_graph,
+                cur_graph_F,
                 (void *) d_diag,
                 y_index));
 
-            // -L = A - diag(A.e)
-            // since sparse matrix addition (subtraction) is cumbersome we will carry A and -diag(A.e) separately
+            // Laplacian L = diag(A.e) - A
+            // since sparse matrix addition (subtraction) is cumbersome we will carry -A and diag(A.e) separately
 
             /* find the largest eigenvalue of the negative semidefinite matrix -L (== the singular value of L corresponding
-               to a connected component) using the power method
-
-                http://docs.nvidia.com/cuda/cusparse/index.html#csrmv_examples
+               to a connected component) using the Lanczos algorithm
              */
 
             float lambda = 0.0;
             float lambda_next = 0.0;
 
-            // initial guess x0 = ones
+            float alpha[max_ites];
+            float beta[max_ites];
+
+            /*
+             * set up the first iteration
+             */
+
+            // initial vector x0 = ones
             check_cuda(cudaMemcpy(d_x, d_ones_float, sizeof(float) * nverts, cudaMemcpyDeviceToDevice));
 
-            for (unsigned int ite = 0; ite < max_ites; ite++)
+            // save first Lanczos vector
+            cudaMemcpy(&d_V[0], d_x, sizeof(float)*nverts, cudaMemcpyDeviceToDevice);
+
+            /* normalize vector
+             * x= x/|x|
+             */
+            float one_over_nrm2_x = 1.0 / sqrtf(nverts);
+            check_cublas(cublasSscal_v2(cublasH,
+                nverts,
+                &one_over_nrm2_x,
+                d_x,
+                1 // incx
+                ));
+
+            /*
+             * y = L*x = diag(A.e)*x - A*x
+             */
+
+            // y = diag(A.e)*x (component wise multiplication)
+            thrust::transform(
+                x,
+                x + nverts,
+                diag,
+                y,
+                thrust::multiplies<float>()
+                );
+
+            // update vertex data for x
+            check_nvgraph(nvgraphSetVertexData(
+                nvgraphH,
+                cur_graph_F,
+                d_x,
+                x_index
+                ));
+
+            // update vertex data for y
+            check_nvgraph(nvgraphSetVertexData(
+                nvgraphH,
+                cur_graph_F,
+                d_y,
+                y_index
+                ));
+
+            // y'=A*x + y
+            check_nvgraph(nvgraphSrSpmv(
+                nvgraphH,
+                cur_graph_F,
+                0, // edge set
+                &h_minusone,
+                x_index, // vertex set for multiplication
+                &h_one,
+                y_index, // vertex set for addition
+                NVGRAPH_PLUS_TIMES_SR));
+
+            // extract vertex data from graph
+            check_nvgraph(nvgraphGetVertexData(
+                nvgraphH,
+                cur_graph_F,
+                (void *) d_y,
+                y_index));
+
+            // alpha = y'.x
+            alpha[0] = 0.0;
+            check_cublas(cublasSdot_v2(
+                cublasH,
+                nverts,
+                d_x,
+                1, // incx,
+                d_y,
+                1, // incy
+                &alpha[0]
+                ));
+
+            // y = y' - alpha*x
+            float minus_alpha = -alpha[0];
+            check_cublas(cublasSaxpy_v2(
+                cublasH,
+                nverts,
+                &minus_alpha,
+                d_x,
+                1, // incx
+                d_y,
+                1  // incy
+                ));
+
+            // store result in x
+            check_cuda(cudaMemcpy(d_x, d_y, nverts*sizeof(float), cudaMemcpyDeviceToDevice));
+
+            for (unsigned int ite = 1; ite < max_ites; ite++)
                 {
-                /* normalize vector
-                 * x= x/|x|
+                /*
+                 * beta = |x|
                  */
-                float nrm2_x;
+                beta[ite] = 0.0;
                 check_cublas(cublasSnrm2_v2(cublasH,
                     nverts,
                     d_x,
                     1, // incx
-                    &nrm2_x
+                    &beta[ite]
                     ));
 
-                float one_over_nrm2_x = 1.0 / nrm2_x;
-                check_cublas(cublasSscal_v2(cublasH,
-                    nverts,
-                    &one_over_nrm2_x,
-                    d_x,
-                    1 // incx
-                    ));
-
+                if (beta[ite] != 0.0)
                     {
-                    printf("==== ITERATION %d\n", ite);
-                    printf("norm %f\n", nrm2_x);
+                    // x_i = (x_i-1)/beta
+                    float one_over_beta = 1.0 / beta[ite];
+                    check_cublas(cublasSscal_v2(cublasH,
+                        nverts,
+                        &one_over_beta,
+                        d_x,
+                        1 // incx
+                        ));
+                    }
+                else
+                    {
+                    // draw a random starting vector to decrease the chance it is orthogonal to an eigenvector
+                    auto count = thrust::make_counting_iterator<int>(0);
+                    thrust::transform(
+                        thrust::cuda::par(alloc),
+                        count,
+                        count + nverts,
+                        x,
+                        generate_uniform(seed++));
+
+                    /* normalize vector
+                     * x= x/|x|
+                     */
+                    float nrm2_x = 0.0;
+                    check_cublas(cublasSnrm2_v2(
+                        cublasH,
+                        nverts,
+                        d_x,
+                        1, // incx
+                        &nrm2_x
+                        ));
+
+                    float one_over_norm = 1.0 / nrm2_x;
+                    check_cublas(cublasSscal_v2(cublasH,
+                        nverts,
+                        &one_over_norm,
+                        d_x,
+                        1 // incx
+                        ));
                     }
 
+                // save the Lanczos vector
+                check_cuda(cudaMemcpy(&d_V[ite*nverts], d_x, sizeof(float)*nverts, cudaMemcpyDeviceToDevice));
+
+                // y' =  w'
                 /*
                  * y = -L*x = A*x - diag(A.e)*x
                  */
@@ -442,7 +705,7 @@ cudaError_t gpu_connected_components(
                 // update vertex data for x
                 check_nvgraph(nvgraphSetVertexData(
                     nvgraphH,
-                    cur_graph,
+                    cur_graph_F,
                     d_x,
                     x_index
                     ));
@@ -450,17 +713,17 @@ cudaError_t gpu_connected_components(
                 // update vertex data for y
                 check_nvgraph(nvgraphSetVertexData(
                     nvgraphH,
-                    cur_graph,
+                    cur_graph_F,
                     d_y,
                     y_index
                     ));
 
-                // y=A*x + y
+                // y'=A*x + y
                 check_nvgraph(nvgraphSrSpmv(
                     nvgraphH,
-                    cur_graph,
+                    cur_graph_F,
                     0, // edge set
-                    &h_one,
+                    &h_minusone,
                     x_index, // vertex set for multiplication
                     &h_one,
                     y_index, // vertex set for addition
@@ -469,13 +732,12 @@ cudaError_t gpu_connected_components(
                 // extract vertex data from graph
                 check_nvgraph(nvgraphGetVertexData(
                     nvgraphH,
-                    cur_graph,
+                    cur_graph_F,
                     (void *) d_y,
                     y_index));
 
-                /*
-                 * lambda = y**T*x
-                 */
+                // alpha = y'.x
+                alpha[ite] = 0.0;
                 check_cublas(cublasSdot_v2(
                     cublasH,
                     nverts,
@@ -483,12 +745,86 @@ cudaError_t gpu_connected_components(
                     1, // incx,
                     d_y,
                     1, // incy
-                    &lambda_next
+                    &alpha[ite]
                     ));
+
+                // y = y' - alpha*x
+                minus_alpha = -alpha[ite];
+                check_cublas(cublasSaxpy_v2(
+                    cublasH,
+                    nverts,
+                    &minus_alpha,
+                    d_x,
+                    1, // incx
+                    d_y,
+                    1 // incy
+                    ));
+
+                // y = y - beta*x_(i-1)
+                float minus_beta = -beta[ite];
+                check_cublas(cublasSaxpy_v2(
+                    cublasH,
+                    nverts,
+                    &minus_beta,
+                    &d_V[(ite-1)*nverts],
+                    1, // incx
+                    d_y,
+                    1  // incy
+                    ));
+
+                /*
+                 *solve the eigenvalue problem for the tridiagonal matrix T on the CPU
+                 */
+                    {
+                    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> es;
+                    Eigen::Map<Eigen::VectorXf> diag(alpha,ite+1);
+                    Eigen::Map<Eigen::VectorXf> subdiag(beta+1,ite);
+                    es.computeFromTridiagonal(diag, subdiag);
+                    check_eigen(es.info());
+
+                    // get the eigenvalues
+                    auto eval = es.eigenvalues();
+
+                    // eigenvalue of largest magnitude
+                    lambda_next = eval(ite);
+
+                    // get the eigenvectors, sorted by increasing eigenvalue
+                    auto evec = es.eigenvectors();
+
+//                    for (int i = 0; i < ite+1; ++i)
+//                        printf("lambda(%d) = %f\n", i, eval(i));
+
+//                    for (int i = 0; i < ite+1; ++i)
+//                        for (int j = 0; j < ite+1; ++j)
+//                            printf("v(%d,%d) = %f\n", i,j,evec(i,j));
+
+                    // copy eigenvector corresponding to smallest eigenvalue to device
+                    float max_evec[ite];
+                    for (unsigned int j = 0; j < ite + 1; ++j)
+                        max_evec[j] = evec(0,j);
+                    check_cuda(cudaMemcpy(d_v, &max_evec[0], sizeof(float)*(ite+1), cudaMemcpyHostToDevice));
+
+                    // back out the corresponding eigenvector of L
+                    check_cublas(cublasSgemv_v2(
+                        cublasH,
+                        CUBLAS_OP_N,
+                        nverts,
+                        ite+1,
+                        &h_one,
+                        d_V,
+                        nverts,
+                        d_v,
+                        1, // incx
+                        &zero,
+                        d_z,
+                        1 // incy
+                        ));
+                    }
 
                 /*
                  * check if convergence
                  */
+                printf("%d lambda = %f lambda_next = %f\n", ite, lambda, lambda_next);
                 if ( (ite > 0) && fabs(lambda - lambda_next) < tol)
                     break;
 
@@ -501,19 +837,11 @@ cudaError_t gpu_connected_components(
                 } // end of an iteration of the power method
 
             /*
-             * x contains eigenvector corresponding to the largest eigenvalue lambda of -L
+             * z contains eigenvector corresponding to the largest eigenvalue lambda of -L
              */
 
-            // recover the eigenvalues of the positive semidefinite matrix L by transforming in place x-> -x
-            thrust::transform(
-                thrust::cuda::par(alloc),
-                x,
-                x + nverts,
-                x,
-                thrust::negate<float>());
-
             // fill vertices with ascending sequence
-            auto count = thrust::counting_iterator<int>(0);
+            auto count = thrust::make_counting_iterator<int>(0);
             thrust::copy(
                 thrust::cuda::par(alloc),
                 count,
@@ -523,19 +851,32 @@ cudaError_t gpu_connected_components(
             // sort vertex indices by key (ith component of eigenvector)
             thrust::sort_by_key(
                 thrust::cuda::par(alloc),
-                x,
-                x + nverts,
+                z,
+                z + nverts,
                 vertices);
 
             // determine a jump in x by taking the adjacent difference
             thrust::transform(
                 thrust::cuda::par(alloc),
-                x + 1,
-                x + nverts,
-                x,
+                z + 1,
+                z + nverts,
+                z,
                 delta_x,
                 thrust::minus<float>()
                 );
+
+                /*
+                {
+                printf("dx: \n");
+                float hx[nverts-1];
+                float hz[nverts];
+                cudaMemcpy(hx, d_delta_x, sizeof(float)*(nverts-1),cudaMemcpyDeviceToHost);
+                cudaMemcpy(hz, d_z, sizeof(float)*(nverts),cudaMemcpyDeviceToHost);
+                for (unsigned int i = 0; i < nverts-1; ++i)
+                    printf("%f %f\n", hz[i], hx[i]);
+                printf("\n");
+                }
+                */
 
             // pick up the jump at i
             auto jump_it = thrust::find_if(
@@ -558,10 +899,30 @@ cudaError_t gpu_connected_components(
                 nvgraphTraversalSetUndirectedFlag(&traversal_param, true);
 
                 // do a BFS traversal starting from first index of this putative s.c. component
+
+                // download the component
+                check_nvgraph(nvgraphGetVertexData(
+                    nvgraphH,
+                    cur_graph_F,
+                    (void *) d_component,
+                    ptls_index));
+
+                // take its first index
+                thrust::transform(
+                    thrust::cuda::par(alloc),
+                    component,
+                    component + 1,
+                    source_idx,
+                    my_float_as_int());
+
+                // transfer to host
                 int source_vert = 0;
+                check_cuda(cudaMemcpy(&source_vert, d_source_idx, sizeof(int), cudaMemcpyDeviceToHost));
+
+                // do the traversal
                 check_nvgraph(nvgraphTraversal(
                     nvgraphH,
-                    cur_graph,
+                    graph_I,
                     NVGRAPH_TRAVERSAL_BFS,
                     &source_vert,
                     traversal_param));
@@ -569,37 +930,43 @@ cudaError_t gpu_connected_components(
                 // extract the distances
                 check_nvgraph(nvgraphGetVertexData(
                     nvgraphH,
-                    cur_graph,
+                    graph_I,
                     (void *)d_distances,
                     distances_index
                     ));
 
                 /*
-                 * if any index is unreachable (distance == 2^31 - 1), this component can still be split
+                 * if any index in the component is unreachable (distance == 2^31 - 1), it can still be split
                  */
+                auto component_idx = thrust::make_transform_iterator(
+                    component,
+                    my_float_as_int());
 
-                // reset vertices to ascending sequence
+                auto distance_transform = thrust::make_permutation_iterator(
+                        distances,
+                        component_idx);
+
                 thrust::copy(
                     thrust::cuda::par(alloc),
-                    count,
-                    count + nverts,
-                    vertices);
+                    distance_transform,
+                    distance_transform + nverts,
+                    component_distances);
 
                 // sort vertex indices by distance from source vertex
                 thrust::sort_by_key(
                     thrust::cuda::par(alloc),
-                    distances,
-                    distances + nverts,
+                    component_distances,
+                    component_distances + nverts,
                     vertices);
 
                 // find first unreachable vertex
                 auto unreachable_it = thrust::partition_point(
                     thrust::cuda::par(alloc),
-                    distances,
-                    distances + nverts,
+                    component_distances,
+                    component_distances + nverts,
                     is_reachable()
                     );
-                split_idx = unreachable_it - distances;
+                split_idx = unreachable_it - component_distances;
 
                 if (split_idx == nverts)
                     {
@@ -607,6 +974,7 @@ cudaError_t gpu_connected_components(
                     done = true;
                     }
                 } // end if we found a s.c. component candidate
+
 
             if (! done)
                 {
@@ -617,20 +985,29 @@ cudaError_t gpu_connected_components(
                     vertices + split_idx
                     );
 
-                // create subgraph object to the left
-                nvgraphGraphDescr_t sub_graph_left;
-                check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &sub_graph_left));
+                {
+                printf("indices left: \n");
+                int idx[split_idx];
+                check_cuda(cudaMemcpy(idx, d_vertices, sizeof(int)*(split_idx),cudaMemcpyDeviceToHost));
+                for (unsigned int i = 0; i < split_idx; ++i)
+                    printf("%d\n", idx[i]);
+                printf("\n");
+                }
 
-                // extract the subgraph
+                // create subgraph objects to the left
+                nvgraphGraphDescr_t sub_graph_left_F;
+                check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &sub_graph_left_F));
+
+                // extract the float subgraph
                 check_nvgraph(nvgraphExtractSubgraphByVertex(
                     nvgraphH,
-                    cur_graph,
-                    sub_graph_left,
+                    cur_graph_F,
+                    sub_graph_left_F,
                     d_vertices,
                     split_idx));
 
                 // push the left subgraph in the queue
-                Q.push(sub_graph_left);
+                Q.push(sub_graph_left_F);
 
                 // sort the indices to the right of split_idx
                 thrust::sort(
@@ -640,19 +1017,28 @@ cudaError_t gpu_connected_components(
                     );
 
                 // create subgraph object to the right
-                nvgraphGraphDescr_t sub_graph_right;
-                check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &sub_graph_right));
+                nvgraphGraphDescr_t sub_graph_right_F;
+                check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &sub_graph_right_F));
 
-                // extract the subgraph
+                // extract the float subgraph
                 check_nvgraph(nvgraphExtractSubgraphByVertex(
                     nvgraphH,
-                    cur_graph,
-                    sub_graph_right,
+                    cur_graph_F,
+                    sub_graph_right_F,
                     d_vertices+split_idx,
                     nverts - split_idx));
 
+                {
+                printf("indices right: \n");
+                int idx[nverts-split_idx];
+                cudaMemcpy(idx, d_vertices+split_idx, sizeof(int)*(nverts-split_idx),cudaMemcpyDeviceToHost);
+                for (unsigned int i = 0; i < nverts-split_idx; ++i)
+                    printf("%d\n", idx[i]);
+                printf("\n");
+                }
+
                 // push the right subgraph in the queue
-                Q.push(sub_graph_right);
+                Q.push(sub_graph_right_F);
                 }
             } // end if finite connected component
 
@@ -661,7 +1047,7 @@ cudaError_t gpu_connected_components(
             // extract the particle indices of the connected component
             check_nvgraph(nvgraphGetVertexData(
                 nvgraphH,
-                cur_graph,
+                cur_graph_F,
                 (void *) d_component,
                 ptls_index));
 
@@ -683,7 +1069,7 @@ cudaError_t gpu_connected_components(
                 int *d_indices;
                 check_cuda(cudaMalloc(&d_indices, sizeof(int)*nverts));
                 thrust::device_ptr<int> indices(d_indices);
-                thrust::copy(component_idx, component_idx+ nverts, indices);
+                thrust::copy(component, component+ nverts, indices);
                 int h_indices[nverts];
                 check_cuda(cudaMemcpy(h_indices, d_indices, nverts*sizeof(int),cudaMemcpyDeviceToHost));
                 for (unsigned int i = 0; i < nverts; ++i)
@@ -703,33 +1089,44 @@ cudaError_t gpu_connected_components(
 
 
         // release this graph descriptor
-        check_nvgraph(nvgraphDestroyGraphDescr(nvgraphH, cur_graph));
+        check_nvgraph(nvgraphDestroyGraphDescr(nvgraphH, cur_graph_F));
         };
 
     // free device data
     check_cuda(cudaFree(d_component));
     check_cuda(cudaFree(d_distances));
+    check_cuda(cudaFree(d_component_distances));
     check_cuda(cudaFree(d_ptl_idx));
+    check_cuda(cudaFree(d_source_idx));
     check_cuda(cudaFree(d_vertices));
     check_cuda(cudaFree(d_delta_x));
+    check_cuda(cudaFree(d_z));
     check_cuda(cudaFree(d_y));
     check_cuda(cudaFree(d_x));
+    check_cuda(cudaFree(d_last_x));
     check_cuda(cudaFree(d_diag));
     check_cuda(cudaFree(d_ones_float));
+    check_cuda(cudaFree(d_V));
+    check_cuda(cudaFree(d_v));
 
     check_cuda(cudaFree(COO_input->source_indices));
     check_cuda(cudaFree(COO_input->destination_indices));
-    check_cuda(cudaFree(CSR_output->source_offsets));
-    check_cuda(cudaFree(CSR_output->destination_indices));
-    check_cuda(cudaFree(d_edge_data_csr));
-    check_cuda(cudaFree(d_edge_data_coo));
+    check_cuda(cudaFree(CSR_output_F->source_offsets));
+    check_cuda(cudaFree(CSR_output_F->destination_indices));
+    check_cuda(cudaFree(CSR_output_I->source_offsets));
+    check_cuda(cudaFree(CSR_output_I->destination_indices));
+    check_cuda(cudaFree(d_edge_data_csr_F));
+    check_cuda(cudaFree(d_edge_data_coo_F));
+
+    check_nvgraph(nvgraphDestroyGraphDescr(nvgraphH, graph_I));
 
     // release nvgraph handle
     if (nvgraphH)
         check_nvgraph(nvgraphDestroy(nvgraphH));
 
     free(COO_input);
-    free(CSR_output);
+    free(CSR_output_F);
+    free(CSR_output_I);
 
     // clean cublas
     if (cublasH)
@@ -740,4 +1137,5 @@ cudaError_t gpu_connected_components(
 
 } // end namespace detail
 } // end namespace hpmc
+
 #endif // NVGRAPH_AVAILABLE
