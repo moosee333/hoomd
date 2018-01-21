@@ -484,7 +484,12 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
         this->m_G.resize(N);
         #endif
 
-        if (!this->m_comm)
+        bool mpi = false;
+        #ifdef ENABLE_MPI
+        mpi = (bool) this->m_comm;
+        #endif
+
+        if (!mpi)
             {
             ArrayHandle<unsigned int> h_reject(m_reject, access_location::host, access_mode::read);
             for (unsigned int i = 0; i < m_reject.size(); ++i)
