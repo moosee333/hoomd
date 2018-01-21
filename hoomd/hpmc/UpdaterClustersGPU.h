@@ -61,7 +61,8 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         GPUVector<unsigned int> m_reject;    //!< List of rejected particle moves
 
         GPUArray<unsigned int> m_n_interact_new_new; //!< Length of list of particles interacting new-new
-        GPUVector<uint2> m_interact_new_new; //!< Interactions between particles in the new configuration (only with line reflections)
+        unsigned int m_n_overlaps_old_new;     //!< Number of overlaps between old and new configuration
+        unsigned int m_n_overlaps_new_new;     //!< Number of overlaps between new and new configuration
 
         std::unique_ptr<Autotuner> m_tuner_old_new;     //!< Autotuner for checking old against new
         std::unique_ptr<Autotuner> m_tuner_new_new;     //!< Autotuner for checking new against new
@@ -104,9 +105,11 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_overlaps);
     GPUVector<uint2>(this->m_exec_conf).swap(m_overlaps);
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_interact_new_new);
-    GPUVector<uint2>(this->m_exec_conf).swap(m_interact_new_new);
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_reject);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_reject);
+
+    m_n_overlaps_old_new = 0;
+    m_n_overlaps_new_new = 0;
 
     // initialize the autotuners
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
@@ -268,10 +271,11 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         } while(reallocate);
 
         {
-        // refit arrays to actual size
+        // extract number of entries in the adjacency matrix
         ArrayHandle<unsigned int> h_n_overlaps(m_n_overlaps, access_location::host, access_mode::read);
-        m_overlaps.resize(*h_n_overlaps.data);
+        m_n_overlaps_old_new = *h_n_overlaps.data;
 
+        // resize array to reflect actual size of data
         ArrayHandle<unsigned int> h_n_reject(m_n_reject, access_location::host, access_mode::read);
         m_reject.resize(*h_n_reject.data);
         }
@@ -279,6 +283,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
     if (line)
         {
         // with line transformations, check new configuration against itself to detect interactions across PBC
+        // append to existing list of overlapping pairs
         do
             {
             // reset flags
@@ -292,7 +297,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 ArrayHandle<unsigned int> d_tag(this->m_pdata->getTags(), access_location::device, access_mode::read);
 
                 ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::overwrite);
-                ArrayHandle<uint2> d_interact_new_new(m_interact_new_new, access_location::device, access_mode::overwrite);
+                ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
                 ArrayHandle<unsigned int> d_n_interact_new_new(m_n_interact_new_new, access_location::device, access_mode::overwrite);
 
                 ArrayHandle<unsigned int> d_check_overlaps(this->m_mc->getInteractionMatrix(), access_location::device, access_mode::read);
@@ -325,9 +330,9 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                                    d_orientation.data,
                                                    d_image.data,
                                                    d_tag.data,
-                                                   d_interact_new_new.data,
+                                                   d_overlaps.data + m_n_overlaps_old_new,
                                                    d_collisions.data,
-                                                   m_interact_new_new.getNumElements(),
+                                                   m_overlaps.getNumElements()-m_n_overlaps_old_new,
                                                    d_n_interact_new_new.data,
                                                    0, // d_reject
                                                    0, // max_n_reject
@@ -355,7 +360,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
             if (flags.x)
                 {
-                m_interact_new_new.resize(flags.x);
+                m_overlaps.resize(m_n_overlaps_old_new+flags.x);
                 m_collisions.resize(flags.x);
                 }
 
@@ -363,9 +368,9 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
             } while(reallocate);
 
             {
-            // refit array to actual size
+            // extract number of overlaps
             ArrayHandle<unsigned int> h_n_interact_new_new(m_n_interact_new_new, access_location::host, access_mode::read);
-            m_interact_new_new.resize(*h_n_interact_new_new.data);
+            m_n_overlaps_new_new = *h_n_interact_new_new.data;
             }
         } // end if line transformation
 
@@ -391,18 +396,20 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
         // combine lists from different ranks
 
         // overlap old new
-        std::vector<uint2> overlaps(m_overlaps.size());
+        std::vector<uint2> overlaps(m_n_overlaps_old_new);
             {
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
-            std::copy(h_overlaps.data, h_overlaps.data + m_overlaps.size(), overlaps.begin());
+            std::copy(h_overlaps.data, h_overlaps.data + m_n_overlaps_old_new, overlaps.begin());
             }
         gather_v(overlaps, all_overlap, 0, this->m_exec_conf->getMPICommunicator());
 
         // boundary interactions new new
-        std::vector<uint2> interact_new_new(m_interact_new_new.size());
+        std::vector<uint2> interact_new_new(m_n_overlaps_new_new);
             {
-            ArrayHandle<uint2> h_interact_new_new(m_interact_new_new, access_location::host, access_mode::read);
-            std::copy(h_interact_new_new.data, h_interact_new_new.data + m_interact_new_new.size(), interact_new_new.begin());
+            ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
+            std::copy(h_overlaps.data+m_n_overlaps_old_new,
+                h_overlaps.data + m_n_overlaps_old_new + m_n_overlaps_new_new,
+                interact_new_new.begin());
             }
         gather_v(interact_new_new, all_interact_new_new, 0, this->m_exec_conf->getMPICommunicator());
 
@@ -464,15 +471,15 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             else
             #endif
                 {
-                ArrayHandle<uint2> h_interact_new_new(m_interact_new_new, access_location::host, access_mode::read);
-
-                for (unsigned int i = 0; i < m_interact_new_new.size(); ++i)
+                ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
+                unsigned int offs = m_n_overlaps_old_new;
+                for (unsigned int i = 0; i < m_n_overlaps_new_new; ++i)
                     {
-                    this->m_G.addEdge(h_interact_new_new.data[i].x, h_interact_new_new.data[i].y);
+                    this->m_G.addEdge(h_overlaps.data[offs + i].x, h_overlaps.data[offs + i].y);
 
                     // add to list of rejected particles
-                    this->m_local_reject.insert(h_interact_new_new.data[i].x);
-                    this->m_local_reject.insert(h_interact_new_new.data[i].y);
+                    this->m_local_reject.insert(h_overlaps.data[offs + i].x);
+                    this->m_local_reject.insert(h_overlaps.data[offs + i].y);
                     }
                 }
             }
@@ -489,7 +496,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             {
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
 
-            for (unsigned int i = 0; i < m_overlaps.size(); ++i)
+            for (unsigned int i = 0; i < m_n_overlaps_old_new; ++i)
                 this->m_G.addEdge(h_overlaps.data[i].x, h_overlaps.data[i].y);
             }
 

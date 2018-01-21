@@ -6,8 +6,10 @@
 
 #include "HPMCPrecisionSetup.h"
 
+#include "hoomd/BoxDim.h"
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/Index1D.h"
+#include "hoomd/CachedAllocator.h"
 
 #ifdef NVCC
 #include "hoomd/TextureTools.h"
@@ -152,6 +154,20 @@ struct hpmc_clusters_args_t
 
 template< class Shape >
 cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t &args, const typename Shape::param_type *d_params);
+
+#ifdef NVGRAPH_AVAILABLE
+//! Use nvGRAPH to find strongly connected components
+cudaError_t connected_components(
+    const uint2 *d_adj,
+    unsigned int N,
+    unsigned int n_elements,
+    unsigned int *d_components,
+    cudaStream_t stream,
+    unsigned int max_ites,
+    float tol,
+    float jump_tol,
+    const CachedAllocator& alloc);
+#endif
 
 #ifdef NVCC
 //! Texture for reading postype

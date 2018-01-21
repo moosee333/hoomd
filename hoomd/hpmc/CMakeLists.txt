@@ -76,6 +76,7 @@ set(_hpmc_headers
 set(_hpmc_cu_sources IntegratorHPMCMonoGPU.cu
                      IntegratorHPMCMonoImplicitGPU.cu
                      UpdaterMuVTGPU.cu
+                     UpdaterClustersGPU.cu
                      all_kernels_sphere.cu
                      all_kernels_convex_polygon.cu
                      all_kernels_simple_polygon.cu
@@ -115,7 +116,13 @@ add_library (_hpmc SHARED ${_hpmc_sources} ${_CUDA_SEPARABLE_OBJECT}
     ${_CUDA_GENERATED_FILES} )
 
 # link the library to its dependencies
-target_link_libraries(_hpmc _hoomd ${HOOMD_COMMON_LIBS})
+
+# link the library to its dependencies
+if (NVGRAPH_AVAILABLE)
+    target_link_libraries(_hpmc _hoomd ${HOOMD_COMMON_LIBS} ${CUDA_nvgraph_LIBRARY} ${CUDA_cublas_LIBRARY})
+else()
+    target_link_libraries(_hpmc _hoomd ${HOOMD_COMMON_LIBS})
+endif()
 
 if(ENABLE_CUDA)
    #needed with separable compilation
