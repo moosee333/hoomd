@@ -651,7 +651,7 @@ class muvt(_updater):
                     raise RuntimeError("Error initializing update.muvt");
         else:
             if self.mc.implicit:
-                hoomd.context.msg.warning("update.muvt: MuVT with depletants not supported on GPU! Using base class for now ...")
+                hoomd.context.msg.warning("update.muvt: MuVT with depletants not supported on GPU! Using base class for now ...\n")
             if isinstance(mc, integrate.sphere):
                 cls = _hpmc.UpdaterMuVTGPUSphere;
             elif isinstance(mc, integrate.convex_polygon):
