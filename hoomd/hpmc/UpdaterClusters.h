@@ -86,7 +86,7 @@ class Graph
                         unsigned int neighbor = it->second;
                         if (!visited[neighbor])
                             {
-                            g.run( [&]{BFSTask(neighbor,visited,cc,adj);});
+                            g.run( [=]{BFSTask(neighbor,visited,cc,adj);});
                             }
                         }
 
