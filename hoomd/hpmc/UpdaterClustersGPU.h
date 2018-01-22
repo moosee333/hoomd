@@ -537,8 +537,8 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             ArrayHandle<unsigned int> d_components(m_components, access_location::device, access_mode::overwrite);
 
             unsigned int max_iterations = 50;
-            float tol = 1e-6;
-            float jump_tol = 1e-5; // tolerance with which we detect jumps of the eigenvector components
+            float tol = 1e-10;
+            float jump_tol = 1; // tolerance with which we detect jumps of the eigenvector components
 
             detail::gpu_connected_components(
                 d_overlaps.data,

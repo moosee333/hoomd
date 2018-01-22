@@ -121,6 +121,15 @@ struct greater_equal_x : public thrust::unary_function<float, bool>
     float x;
     };
 
+struct jumps : public thrust::binary_function<float, float, float>
+    {
+    __device__
+    float operator()(const float& a, const float &b) const
+        {
+        return sqrt((a-b)*(a-b)/fabs(a)/fabs(b));
+        }
+    };
+
 struct is_reachable : public thrust::unary_function<int, bool>
     {
     __host__ __device__
@@ -459,6 +468,8 @@ cudaError_t gpu_connected_components(
             // we found N disconnected vertices, finalize
             done = true;
             }
+
+        #if 0
         else
             {
             // use eigenvalue decomposition and estimate partitions from discontinuous steps in the eigenvector associated
@@ -467,7 +478,7 @@ cudaError_t gpu_connected_components(
             /*
              * compute Laplacian L = diag(A.e) - A
              */
-            // LHS y = -diag(A.e)
+            // LHS y = diag(A.e)
             float h_one = 1.0;
             float h_minusone = -1.0;
             float zero = 0.0;
@@ -517,9 +528,6 @@ cudaError_t gpu_connected_components(
             // initial vector x0 = ones
             check_cuda(cudaMemcpy(d_x, d_ones_float, sizeof(float) * nverts, cudaMemcpyDeviceToDevice));
 
-            // save first Lanczos vector
-            cudaMemcpy(&d_V[0], d_x, sizeof(float)*nverts, cudaMemcpyDeviceToDevice);
-
             /* normalize vector
              * x= x/|x|
              */
@@ -530,6 +538,9 @@ cudaError_t gpu_connected_components(
                 d_x,
                 1 // incx
                 ));
+
+            // save first Lanczos vector
+            cudaMemcpy(&d_V[0], d_x, sizeof(float)*nverts, cudaMemcpyDeviceToDevice);
 
             /*
              * y = L*x = diag(A.e)*x - A*x
@@ -830,7 +841,7 @@ cudaError_t gpu_connected_components(
                 z + nverts,
                 z,
                 delta_x,
-                thrust::minus<float>()
+                jumps()
                 );
 
             // pick up the jump at i
@@ -845,6 +856,10 @@ cudaError_t gpu_connected_components(
             unsigned int split_idx = (jump_it - delta_x) + 1;
 
             if (split_idx == nverts)
+        #else
+        unsigned int split_idx = UINT_MAX;
+        if (!done)
+        #endif
                 {
                 // we found a candidate for a connected component, check if it cannot be split further
                 nvgraphTraversalParameter_t traversal_param;
@@ -905,6 +920,14 @@ cudaError_t gpu_connected_components(
                     distance_transform,
                     distance_transform + nverts,
                     component_distances);
+
+                // fill vertices with ascending sequence
+                auto count = thrust::make_counting_iterator<int>(0);
+                thrust::copy(
+                    thrust::cuda::par(alloc),
+                    count,
+                    count + nverts,
+                    vertices);
 
                 // sort vertex indices by distance from source vertex
                 thrust::sort_by_key(
@@ -976,8 +999,9 @@ cudaError_t gpu_connected_components(
                 // push the right subgraph in the queue
                 Q.push(sub_graph_right_F);
                 }
+        #if 0
             } // end if finite connected component
-
+        #endif
         if (done)
             {
             // extract the particle indices of the connected component
