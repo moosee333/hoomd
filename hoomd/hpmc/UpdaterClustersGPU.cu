@@ -8,6 +8,7 @@
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/zip_iterator.h>
 #include <thrust/copy.h>
 
 #include <thrust/random.h>
@@ -130,12 +131,12 @@ struct jumps : public thrust::binary_function<float, float, float>
         }
     };
 
-struct is_reachable : public thrust::unary_function<int, bool>
+struct is_reachable : public thrust::unary_function<thrust::tuple<int, int>, bool>
     {
     __host__ __device__
-    bool operator()(const int& i) const
+    bool operator()(const thrust::tuple<int,int>& t) const
         {
-        return i != 2147483647; // 2^31-1
+        return t.get<0>() != 2147483647; // 2^31-1
         }
     };
 
@@ -929,21 +930,17 @@ cudaError_t gpu_connected_components(
                     count + nverts,
                     vertices);
 
-                // sort vertex indices by distance from source vertex
-                thrust::sort_by_key(
-                    thrust::cuda::par(alloc),
-                    component_distances,
-                    component_distances + nverts,
-                    vertices);
-
                 // find first unreachable vertex
-                auto unreachable_it = thrust::partition_point(
+                auto zipit = thrust::make_zip_iterator(thrust::make_tuple(
+                    component_distances, vertices));
+
+                auto unreachable_it = thrust::stable_partition(
                     thrust::cuda::par(alloc),
-                    component_distances,
-                    component_distances + nverts,
+                    zipit,
+                    zipit + nverts,
                     is_reachable()
                     );
-                split_idx = unreachable_it - component_distances;
+                split_idx = unreachable_it - zipit;
 
                 if (split_idx == nverts)
                     {
@@ -955,13 +952,6 @@ cudaError_t gpu_connected_components(
 
             if (! done)
                 {
-                // sort the indices to the left of split_idx as required by nvgraph
-                thrust::sort(
-                    thrust::cuda::par(alloc),
-                    vertices,
-                    vertices + split_idx
-                    );
-
                 // create subgraph objects to the left
                 nvgraphGraphDescr_t sub_graph_left_F;
                 check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &sub_graph_left_F));
@@ -976,13 +966,6 @@ cudaError_t gpu_connected_components(
 
                 // push the left subgraph in the queue
                 Q.push(sub_graph_left_F);
-
-                // sort the indices to the right of split_idx
-                thrust::sort(
-                    thrust::cuda::par(alloc),
-                    vertices + split_idx,
-                    vertices + nverts
-                    );
 
                 // create subgraph object to the right
                 nvgraphGraphDescr_t sub_graph_right_F;
