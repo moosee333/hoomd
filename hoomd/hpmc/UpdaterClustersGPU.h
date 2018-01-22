@@ -6,6 +6,9 @@
     \brief Declaration of UpdaterBoxClusters
 */
 
+// nvgraph not stable yet
+#undef NVGRAPH_AVAILABLE
+
 #ifdef ENABLE_CUDA
 
 #include "UpdaterClusters.h"
