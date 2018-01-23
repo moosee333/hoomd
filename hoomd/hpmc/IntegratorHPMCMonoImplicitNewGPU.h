@@ -1328,7 +1328,7 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializePoissonDistribution()
 template< class Shape >
 void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeCellSets()
     {
-    this->m_exec_conf->msg->notice(4) << "hpmc recomputing active cells" << std::endl;
+    this->m_exec_conf->msg->notice(6) << "hpmc recomputing active cells" << std::endl;
     // "ghost cells" might contain active particles. So they must be included in the active cell sets
     // we should not run into a multiple issue since the base multiple is 2 and the ghost cells added are 2 in each
     // direction. Check just to be on the safe side
