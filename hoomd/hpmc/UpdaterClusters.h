@@ -466,9 +466,9 @@ class UpdaterClusters : public Updater
 
         //! Determine connected components of the interaction graph
         #ifdef ENABLE_TBB
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<tbb::concurrent_vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters);
         #else
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<std::vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters);
         #endif
 
         //! Helper function to get interaction range
@@ -655,7 +655,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                                     m_energy_old_old[p] = U;
 
                                     int3 delta_img = -image_hkl[cur_image] + h_image_backup.data[i] - h_image_backup.data[j];
-                                    if (line && (delta_img.x || delta_img.y || delta_img.z))
+                                    if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
                                         {
                                         // if interaction across PBC, reject cluster move
                                         m_local_reject.insert(new_tag_i);
@@ -752,7 +752,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                                     && test_overlap(r_ij, shape_i, shape_j, err))
                                     {
                                     int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - h_image_backup.data[j];
-                                    bool reject = line && (delta_img.x || delta_img.y || delta_img.z);
+                                    bool reject = (line &&!swap) && (delta_img.x || delta_img.y || delta_img.z);
 
                                     if (swap && ((typ_i != m_ab_types[0] && typ_i != m_ab_types[1])
                                         || (typ_j != m_ab_types[0] && typ_j != m_ab_types[1])))
@@ -851,7 +851,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                                     m_energy_new_old[p] = U;
 
                                     int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - h_image_backup.data[j];
-                                    if (line && (delta_img.x || delta_img.y || delta_img.z))
+                                    if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
                                         {
                                         // if interaction across PBC, reject cluster move
                                         m_local_reject.insert(h_tag.data[i]);
@@ -876,7 +876,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
         );
     #endif
 
-    if (line)
+    if (line && !swap)
         {
         // locality data in new configuration
         const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
@@ -979,9 +979,9 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
 
 template<class Shape>
 #ifdef ENABLE_TBB
-void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
+void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
 #else
-void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<std::vector<unsigned int> >& clusters)
+void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters)
 #endif
     {
     // collect interactions on rank 0
@@ -1054,7 +1054,7 @@ void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsi
             }
         #endif
 
-        if (line)
+        if (line && !swap)
             {
             #ifdef ENABLE_MPI
             if (m_comm)
@@ -1628,7 +1628,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
         m_prof->push(m_exec_conf,"Move");
 
     // fill graph and determine its connected components
-    findConnectedComponents(timestep, snap.size, line, m_clusters);
+    findConnectedComponents(timestep, snap.size, line, swap, m_clusters);
 
     if (master)
         {
