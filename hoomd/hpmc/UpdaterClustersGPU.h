@@ -13,6 +13,7 @@
 
 #include "UpdaterClusters.h"
 #include "UpdaterClustersGPU.cuh"
+#include "hoomd/AABBTree.h"
 
 #include <cuda_runtime.h>
 
@@ -128,8 +129,9 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     std::vector<unsigned int> valid_params;
 
     // pack two block sizes into one parameter
+    unsigned int max_block_size_collisions = std::max(detail::NODE_CAPACITY, (unsigned int)dev_prop.warpSize);
     for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size_overlaps += dev_prop.warpSize)
-        for (unsigned int block_size_collisions = dev_prop.warpSize; block_size_collisions <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size_collisions += dev_prop.warpSize)
+        for (unsigned int block_size_collisions = dev_prop.warpSize; block_size_collisions <= max_block_size_collisions; block_size_collisions += dev_prop.warpSize)
             valid_params.push_back(block_size_overlaps*10000+block_size_collisions);
 
     m_tuner_old_new.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_clusters_old_new", this->m_exec_conf));

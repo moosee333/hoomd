@@ -210,8 +210,8 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      uint2 *d_conditions,
                                      unsigned int max_extra_bytes)
     {
-    // determine sample idx
-    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // determine particle idx, y index == 0 for now
+    unsigned int i = blockIdx.y * blockDim.y + threadIdx.y;
 
     // load the per type pair parameters into shared memory
     extern __shared__ char s_data[];
@@ -273,7 +273,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                 {
                 if (aabb_tree.isNodeLeaf(cur_node_idx))
                     {
-                    for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                    for (unsigned int cur_p = threadIdx.x; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p+=blockDim.x)
                         {
                         unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
 
@@ -499,7 +499,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     unsigned int block_size_collisions = min(args.block_size_collisions, (unsigned int)max_block_size_collisions);
 
     dim3 threads_collisions(block_size_collisions,1,1);
-    dim3 grid_collisions( args.N / block_size_collisions + 1, 1, 1);
+    dim3 grid_collisions(1, args.N, 1);
 
     unsigned int shared_bytes_collisions = args.num_types * sizeof(typename Shape::param_type) + args.overlap_idx.getNumElements()*sizeof(unsigned int);
 
