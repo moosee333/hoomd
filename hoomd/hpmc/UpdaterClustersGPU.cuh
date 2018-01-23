@@ -501,15 +501,16 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     unsigned int group_size = args.group_size;
     while (block_size_collisions % group_size)
         group_size--;
-    unsigned int n_groups = args.N/group_size + 1;
+    unsigned int n_groups = block_size_collisions/group_size;
+    unsigned int n_blocks = args.N/n_groups+1;
 
-    dim3 threads_collisions(group_size,block_size_collisions/group_size,1);
+    dim3 threads_collisions(group_size,n_groups,1);
     dim3 grid_collisions;
 
-    if (n_groups > (unsigned int) args.devprop.maxGridSize[1])
-        grid_collisions = dim3(1, args.devprop.maxGridSize[1], n_groups/args.devprop.maxGridSize[1] + 1);
+    if (n_blocks > (unsigned int) args.devprop.maxGridSize[1])
+        grid_collisions = dim3(1, args.devprop.maxGridSize[1], n_blocks/args.devprop.maxGridSize[1] + 1);
     else
-        grid_collisions = dim3(1, n_groups, 1);
+        grid_collisions = dim3(1, n_blocks, 1);
 
     unsigned int shared_bytes_collisions = args.num_types * sizeof(typename Shape::param_type) + args.overlap_idx.getNumElements()*sizeof(unsigned int);
 
