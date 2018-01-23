@@ -134,11 +134,23 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     // initialize the autotuners
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
 
-    m_tuner_old_new_collisions.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_old_new_collisions", this->m_exec_conf));
-    m_tuner_old_new_overlaps.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_old_new_overlaps", this->m_exec_conf));
+    // parameters for broad phase kernel
+    std::vector<unsigned int> valid_params;
 
-    m_tuner_new_new_collisions.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_new_new_collisions", this->m_exec_conf));
-    m_tuner_new_new_overlaps.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_new_new_overlaps", this->m_exec_conf));
+    for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
+        {
+        for (unsigned int group_size=1; group_size <= detail::NODE_CAPACITY; group_size++)
+            {
+            if ((block_size % group_size) == 0)
+                valid_params.push_back(block_size*1000000 +  group_size);
+            }
+        }
+
+    m_tuner_old_new_collisions.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_clusters_old_broad_phase", this->m_exec_conf));
+    m_tuner_old_new_overlaps.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_old_narrow_phase", this->m_exec_conf));
+
+    m_tuner_new_new_collisions.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_clusters_new_broad_phase", this->m_exec_conf));
+    m_tuner_new_new_overlaps.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_new_narrow_phase", this->m_exec_conf));
 
     // create a cuda stream to ensure managed memory coherency
     cudaStreamCreate(&m_stream);
@@ -220,7 +232,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            box,
                                            0, //block_size
                                            1, //stride
-                                           detail::NODE_CAPACITY, // group_size
+                                           0, // group_size
                                            this->m_pdata->getMaxN(),
                                            d_check_overlaps.data,
                                            overlap_idx,
@@ -260,7 +272,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 m_tuner_old_new_collisions->begin();
 
                 unsigned int param = m_tuner_old_new_collisions->getParam();
-                clusters_args.block_size = param;
+                clusters_args.block_size = param / 1000000;
+                clusters_args.group_size = param % 1000000;
 
                 clusters_args.d_collisions = d_collisions.data;
                 clusters_args.max_n_overlaps = m_overlaps.getNumElements();
@@ -359,7 +372,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            box,
                                            0, // block_size
                                            1, //stride
-                                           detail::NODE_CAPACITY, // group_size
+                                           0, // group_size
                                            this->m_pdata->getMaxN(),
                                            d_check_overlaps.data,
                                            overlap_idx,
@@ -404,7 +417,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 m_tuner_new_new_collisions->begin();
 
                 unsigned int param = m_tuner_new_new_collisions->getParam();
-                clusters_args.block_size = param;
+                clusters_args.block_size = param / 1000000;
+                clusters_args.group_size = param % 1000000;
 
                 // invoke kernel for checking circumsphere overlaps (broad phase)
                 detail::gpu_hpmc_clusters<Shape>(clusters_args, params.data());
