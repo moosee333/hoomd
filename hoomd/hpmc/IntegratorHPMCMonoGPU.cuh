@@ -2028,12 +2028,8 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
     // flags to tell what type of thread we are
     bool active = true;
 
-    __shared__ unsigned int s_translate_accept_count;
-    __shared__ unsigned int s_translate_reject_count;
-    __shared__ unsigned int s_rotate_accept_count;
-    __shared__ unsigned int s_rotate_reject_count;
-    __shared__ unsigned int s_overlap_checks;
-    __shared__ unsigned int s_overlap_err_count;
+    unsigned int overlap_checks = 0;
+    unsigned int overlap_err_count = 0;
 
     // load the per type pair parameters into shared memory
     extern __shared__ char s_data[];
@@ -2088,19 +2084,8 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
 
     __syncthreads();
 
-    // initialize the shared memory array for communicating overlaps
-    if (threadIdx.x == 0)
-        {
-        s_translate_accept_count = 0;
-        s_translate_reject_count = 0;
-        s_rotate_accept_count = 0;
-        s_rotate_reject_count = 0;
-        s_overlap_checks = 0;
-        s_overlap_err_count = 0;
-        }
-
-    // identify the active cell that this thread handles
-    unsigned int active_cell_idx = blockIdx.x*blockDim.x + threadIdx.x;
+    // identify the active cell that this thread handles (use y/z component, x is reserved for parallel overlap checks)
+    unsigned int active_cell_idx = blockIdx.y*blockDim.y + threadIdx.z;
 
     // this thread is inactive if it indexes past the end of the active cell list
     if (active_cell_idx >= n_active_cells)
@@ -2119,27 +2104,37 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
     if (my_cell_size == 0)
         active = false;
 
+    bool master = threadIdx.y == 0;
+    __shared__ bool s_overlap;
+
+    if (master)
+        s_overlap = false;
+
     __syncthreads();
 
-    unsigned int overlap_checks = 0;
-    unsigned int err_count = 0;
+    unsigned int ignore_stats;
+    unsigned int i;
+    unsigned int typ_i;
+    Scalar4 orientation_i;
+    vec3<Scalar> pos_i;
+    bool move_active;
+    bool move_type_translate;
 
-
-    // initial implementation just moves one particle per cell (nselect=1).
     if (active)
         {
+        // initial implementation just moves one particle per cell (nselect=1).
         // one RNG per cell
         hoomd::detail::Saru rng(my_cell, seed+select, timestep);
 
         // select one of the particles randomly from the cell
         unsigned int my_cell_offset = rand_select(rng, my_cell_size-1);
-        unsigned int i = tex1Dfetch(cell_idx_tex, cli(my_cell_offset, my_cell));
+        i = tex1Dfetch(cell_idx_tex, cli(my_cell_offset, my_cell));
 
         // read in the position and orientation of our particle.
         Scalar4 postype_i = texFetchScalar4(d_postype, postype_tex, i);
         Scalar4 orientation_i = make_scalar4(1,0,0,0);
 
-        unsigned int typ_i = __scalar_as_int(postype_i.w);
+        typ_i = __scalar_as_int(postype_i.w);
         Shape shape_i(quat<Scalar>(orientation_i), s_params[typ_i]);
 
         if (shape_i.hasOrientation())
@@ -2149,22 +2144,21 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
 
         // if this looks funny, that is because it is. Using ignore_stats as a bool setting ignore_stats = ...
         // causes a compiler bug.
-        unsigned int ignore_stats = 0;
+        ignore_stats = 0;
         if (shape_i.ignoreStatistics())
             ignore_stats = 1;
 
-        vec3<Scalar> pos_i = vec3<Scalar>(postype_i);
+        pos_i = vec3<Scalar>(postype_i);
 
         // for domain decomposition simulations, we need to leave all particles in the inactive region alone
         // in order to avoid even more divergence, this is done by setting the move_active flag
         // overlap checks are still processed, but the final move acceptance will be skipped
-        bool move_active = true;
         if (domain_decomposition && !isActive(make_scalar3(postype_i.x, postype_i.y, postype_i.z), box, ghost_fraction))
             move_active = false;
 
         // make the move
         unsigned int move_type_select = rng.u32() & 0xffff;
-        bool move_type_translate = !shape_i.hasOrientation() || (move_type_select < move_ratio);
+        move_type_translate = !shape_i.hasOrientation() || (move_type_select < move_ratio);
 
         if (move_type_translate)
             {
@@ -2179,7 +2173,9 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
             move_rotate(shape_i.orientation, rng, s_a[typ_i], dim);
             }
 
-        bool overlap = false;
+        // store orientation
+        orientation_i = quat_to_scalar4(shape_i.orientation);
+
         detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
 
         unsigned int n_images = image_list.size();
@@ -2193,7 +2189,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
             aabb.translate(pos_i_image);
 
             unsigned int cur_node_idx = 0;
-            unsigned int offs = 0;
+            unsigned int offs = threadIdx.y;
 
             // stackless search in a double loop to reduce branch divergence
             do {
@@ -2207,7 +2203,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
                         {
                         if (aabb_tree.isNodeLeaf(cur_node_idx))
                             {
-                            for (unsigned int cur_p = offs; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                            for (unsigned int cur_p = offs; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p+=blockDim.y)
                                 {
                                 // read in its position and orientation
                                 unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
@@ -2245,10 +2241,10 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
                                 if (s_check_overlaps[overlap_idx(typ_i, typ_j)] && circumsphere)
                                     {
                                     circumsphere_overlap = true;
-                                    offs = cur_p+1;
+                                    offs = cur_p+blockDim.y;
                                     if (offs >= aabb_tree.getNodeNumParticles(cur_node_idx))
                                         {
-                                        offs = 0;
+                                        offs = threadIdx.y;
                                         cur_node_idx++;
                                         }
                                     break;
@@ -2258,7 +2254,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
                         if (circumsphere_overlap)
                             break;
 
-                        offs = 0;
+                        offs = threadIdx.y;
                         } // end isLeaf
                     else
                         {
@@ -2272,24 +2268,31 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
                     {
                     // test for overlap
                     Shape shape_j(orientation_j, s_params[typ_j]);
-                    if (test_overlap(r_ij, shape_i, shape_j, err_count))
+
+                    if ((Shape::isParallel() && test_overlap_parallel(r_ij, shape_i, shape_j, overlap_err_count)) ||
+                        (!Shape::isParallel() && test_overlap(r_ij, shape_i, shape_j, overlap_err_count)))
                         {
-                        overlap = true;
+                        s_overlap = true;
                         break;
                         }
                     } // end circumsphere overlap
                 } while (cur_node_idx < num_nodes);
-            if (overlap)
+            if (s_overlap)
                 break;
             } // end loop over images
+        }
 
+    __syncthreads();
+
+    if (active)
+        {
         if (move_active)
             {
             // first need to check if the particle remains in its cell
             Scalar3 xnew_i = vec_to_scalar3(pos_i);
             unsigned int new_cell = computeParticleCell(xnew_i, box, ghost_width, cell_dim, ci);
             bool accepted=true;
-            if (overlap)
+            if (s_overlap)
                 accepted=false;
             if (new_cell != my_cell)
                 accepted=false;
@@ -2298,10 +2301,12 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
                 {
                 // write out the updated position and orientation
                 d_postype[i] = make_scalar4(xnew_i.x, xnew_i.y, xnew_i.z, __int_as_scalar(typ_i));
-                d_orientation[i] = quat_to_scalar4(shape_i.orientation);
+                d_orientation[i] = orientation_i;
 
-                AABB aabb = aabb_i_local;
-                aabb.translate(pos_i);
+                Shape shape_i(quat<Scalar>(orientation_i), s_params[typ_i]);
+                AABB aabb = shape_i.getAABB(pos_i);
+
+                // update AABB tree
                 aabb_tree.update(i, aabb);
                 }
 
@@ -2330,13 +2335,13 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
                 }
 
             if (!ignore_stats && accepted && move_type_translate)
-                atomicAdd(&s_translate_accept_count, 1);
+                atomicAdd(&d_counters->translate_accept_count, 1);
             if (!ignore_stats && accepted && !move_type_translate)
-                atomicAdd(&s_rotate_accept_count, 1);
+                atomicAdd(&d_counters->translate_reject_count, 1);
             if (!ignore_stats && !accepted && move_type_translate)
-                atomicAdd(&s_translate_reject_count, 1);
+                atomicAdd(&d_counters->rotate_accept_count, 1);
             if (!ignore_stats && !accepted && !move_type_translate)
-                atomicAdd(&s_rotate_reject_count, 1);
+                atomicAdd(&d_counters->rotate_reject_count, 1);
             }
         else // move_active
             {
@@ -2346,25 +2351,10 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
                 d_active_cell_ptl_idx[active_cell_idx] = UINT_MAX;
                 }
             }
-        } // if active
 
-    // count the overlap checks
-    atomicAdd(&s_overlap_checks, overlap_checks);
-
-    if (err_count > 0)
-        atomicAdd(&s_overlap_err_count, err_count);
-
-    __syncthreads();
-
-    // final tally into global mem
-    if (threadIdx.x == 0)
-        {
-        atomicAdd(&d_counters->translate_accept_count, s_translate_accept_count);
-        atomicAdd(&d_counters->translate_reject_count, s_translate_reject_count);
-        atomicAdd(&d_counters->rotate_accept_count, s_rotate_accept_count);
-        atomicAdd(&d_counters->rotate_reject_count, s_rotate_reject_count);
-        atomicAdd(&d_counters->overlap_checks, s_overlap_checks);
-        atomicAdd(&d_counters->overlap_err_count, s_overlap_err_count);
+        // tally into counters
+        atomicAdd(&d_counters->overlap_checks, overlap_checks);
+        atomicAdd(&d_counters->overlap_err_count, overlap_err_count);
         }
     }
 
@@ -2385,13 +2375,11 @@ cudaError_t gpu_hpmc_update_aabb(const hpmc_args_t& args, const typename Shape::
 
     // determine the maximum block size and clamp the input block size down
     static int max_block_size = -1;
-    static int sm = -1;
     static cudaFuncAttributes attr;
     if (max_block_size == -1)
         {
         cudaFuncGetAttributes(&attr, gpu_hpmc_mpmc_aabb_kernel<Shape>);
         max_block_size = attr.maxThreadsPerBlock;
-        sm = attr.binaryVersion;
         }
 
     // choose a block size based on the max block size by regs (max_block_size) and include dynamic shared memory usage
@@ -2427,14 +2415,18 @@ cudaError_t gpu_hpmc_update_aabb(const hpmc_args_t& args, const typename Shape::
     shared_bytes += extra_bytes;
 
     // setup the grid to run the kernel
-    dim3 threads(block_size, 1, 1);
-    dim3 grid( args.n_active_cells / block_size + 1, 1, 1);
+    dim3 threads;
+    dim3 grid;
 
-    // hack to enable grids of more than 65k blocks
-    if (sm < 30 && grid.x > 65535)
+    if (Shape::isParallel())
         {
-        grid.y = grid.x / 65535 + 1;
-        grid.x = 65535;
+        threads = dim3(block_size, 1, 1);
+        grid = dim3(1,args.n_active_cells, 1);
+        }
+    else
+        {
+        threads = dim3(1, block_size, 1);
+        grid = dim3(1,args.n_active_cells, 1);
         }
 
     // bind the textures
