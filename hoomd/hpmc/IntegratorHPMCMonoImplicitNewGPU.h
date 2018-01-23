@@ -389,7 +389,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         this->m_implicit_count_step_start = h_implicit_counters.data[0];
         }
 
-    // check if we are below a minimum image convention box size
     BoxDim box = this->m_pdata->getBox();
     Scalar3 npd = box.getNearestPlaneDistance();
 
@@ -1243,11 +1242,16 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
         {
         // shift particles
         Scalar3 shift = make_scalar3(0,0,0);
-        shift.x = rng.s(-this->m_nominal_width/Scalar(2.0),this->m_nominal_width/Scalar(2.0));
-        shift.y = rng.s(-this->m_nominal_width/Scalar(2.0),this->m_nominal_width/Scalar(2.0));
+
+        // nominal width may be larger than nearest plane distance, correct
+        Scalar max_shift = std::min(npd.x, std::min(npd.y,npd.z));
+        max_shift = std::min(max_shift, this->m_nominal_width);
+
+        shift.x = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
+        shift.y = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
         if (this->m_sysdef->getNDimensions() == 3)
             {
-            shift.z = rng.s(-this->m_nominal_width/Scalar(2.0),this->m_nominal_width/Scalar(2.0));
+            shift.z = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
             }
 
         ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::readwrite);
