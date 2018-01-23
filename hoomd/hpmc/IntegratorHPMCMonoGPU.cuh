@@ -2105,10 +2105,10 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
         active = false;
 
     bool master = threadIdx.y == 0;
-    __shared__ bool s_overlap;
+    __shared__ unsigned int s_overlap;
 
     if (master)
-        s_overlap = false;
+        s_overlap = 0;
 
     __syncthreads();
 
@@ -2132,7 +2132,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
 
         // read in the position and orientation of our particle.
         Scalar4 postype_i = texFetchScalar4(d_postype, postype_tex, i);
-        Scalar4 orientation_i = make_scalar4(1,0,0,0);
+        orientation_i = make_scalar4(1,0,0,0);
 
         typ_i = __scalar_as_int(postype_i.w);
         Shape shape_i(quat<Scalar>(orientation_i), s_params[typ_i]);
@@ -2153,6 +2153,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
         // for domain decomposition simulations, we need to leave all particles in the inactive region alone
         // in order to avoid even more divergence, this is done by setting the move_active flag
         // overlap checks are still processed, but the final move acceptance will be skipped
+        move_active = true;
         if (domain_decomposition && !isActive(make_scalar3(postype_i.x, postype_i.y, postype_i.z), box, ghost_fraction))
             move_active = false;
 
@@ -2188,99 +2189,72 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
             detail::AABB aabb = aabb_i_local;
             aabb.translate(pos_i_image);
 
-            unsigned int cur_node_idx = 0;
-            unsigned int offs = threadIdx.y;
-
-            // stackless search in a double loop to reduce branch divergence
-            do {
-                unsigned int typ_j = UINT_MAX;
-                vec3<Scalar> r_ij;
-                quat<Scalar> orientation_j;
-                bool circumsphere_overlap = false;
-
-                do {
-                    if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+            // stackless search
+            for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes; ++cur_node_idx)
+                {
+                if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                    {
+                    if (aabb_tree.isNodeLeaf(cur_node_idx))
                         {
-                        if (aabb_tree.isNodeLeaf(cur_node_idx))
+                        unsigned int num_p = aabb_tree.getNodeNumParticles(cur_node_idx);
+                        for (unsigned int cur_p = threadIdx.y; cur_p < num_p; cur_p+=blockDim.y)
                             {
-                            for (unsigned int cur_p = offs; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p+=blockDim.y)
-                                {
-                                // read in its position and orientation
-                                unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+                            // read in its position and orientation
+                            unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
 
-                                Scalar4 postype_j;
-                                if (j != i)
-                                    {
-                                    postype_j = d_postype[j];
-                                    orientation_j = quat<Scalar>(d_orientation[j]);
-                                    }
+                            Scalar4 postype_j;
+                            quat<Scalar> orientation_j;
+                            if (j != i)
+                                {
+                                postype_j = d_postype[j];
+                                orientation_j = quat<Scalar>(d_orientation[j]);
+                                }
+                            else
+                                {
+                                if (cur_image == 0)
+                                    continue;
                                 else
                                     {
-                                    if (cur_image == 0)
-                                        continue;
-                                    else
-                                        {
-                                        postype_j = make_scalar4(pos_i.x, pos_i.y, pos_i.z, __int_as_scalar(typ_i));
-                                        orientation_j = shape_i.orientation;
-                                        }
+                                    postype_j = make_scalar4(pos_i.x, pos_i.y, pos_i.z, __int_as_scalar(typ_i));
+                                    orientation_j = shape_i.orientation;
                                     }
+                                }
 
-                                // place i in j's image
-                                r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+                            // place i in j's image
+                            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
 
-                                typ_j = __scalar_as_int(postype_j.w);
-                                Shape shape_j(orientation_j, s_params[typ_j]);
+                            unsigned int typ_j = __scalar_as_int(postype_j.w);
+                            Shape shape_j(orientation_j, s_params[typ_j]);
 
-                                overlap_checks++;
+                            overlap_checks++;
 
-                                // test circumsphere overlap
-                                OverlapReal rsq = dot(r_ij,r_ij);
-                                OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-                                bool circumsphere = rsq*OverlapReal(4.0) <= DaDb * DaDb;
+                            // test circumsphere overlap
+                            OverlapReal rsq = dot(r_ij,r_ij);
+                            OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+                            bool circumsphere = rsq*OverlapReal(4.0) <= DaDb * DaDb;
 
-                                if (s_check_overlaps[overlap_idx(typ_i, typ_j)] && circumsphere)
+                            if (s_check_overlaps[overlap_idx(typ_i, typ_j)] && circumsphere)
+                                {
+                                if ((Shape::isParallel() && test_overlap_parallel(r_ij, shape_i, shape_j, overlap_err_count)) ||
+                                    (!Shape::isParallel() && test_overlap(r_ij, shape_i, shape_j, overlap_err_count)))
                                     {
-                                    circumsphere_overlap = true;
-                                    offs = cur_p+blockDim.y;
-                                    if (offs >= aabb_tree.getNodeNumParticles(cur_node_idx))
-                                        {
-                                        offs = threadIdx.y;
-                                        cur_node_idx++;
-                                        }
+                                    s_overlap = 1;
                                     break;
                                     }
-                                } // end loop over leaf node
-                            }
-                        if (circumsphere_overlap)
-                            break;
-
-                        offs = threadIdx.y;
+                                }
+                            } // end loop over leaf node
                         } // end isLeaf
-                    else
-                        {
-                        // skip ahead
-                        cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
-                        }
-                    cur_node_idx++;
-                    } while (cur_node_idx < num_nodes);
-
-                if (circumsphere_overlap)
+                    } // end if overlaps
+                else
                     {
-                    // test for overlap
-                    Shape shape_j(orientation_j, s_params[typ_j]);
-
-                    if ((Shape::isParallel() && test_overlap_parallel(r_ij, shape_i, shape_j, overlap_err_count)) ||
-                        (!Shape::isParallel() && test_overlap(r_ij, shape_i, shape_j, overlap_err_count)))
-                        {
-                        s_overlap = true;
-                        break;
-                        }
-                    } // end circumsphere overlap
-                } while (cur_node_idx < num_nodes);
-            if (s_overlap)
-                break;
+                    // skip ahead
+                    cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                    }
+                if (s_overlap)
+                    break;
+                } // end loop over nodes
             } // end loop over images
-        }
+        } // end if (active)
 
     __syncthreads();
 
