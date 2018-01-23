@@ -21,6 +21,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeSpheropolygon>(const hpmc_free_vo
                                                        const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_clusters<ShapeSpheropolygon>(const hpmc_clusters_args_t &args,
                                                        const typename ShapeSpheropolygon::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters_overlaps<ShapeSpheropolygon>(const hpmc_clusters_args_t &args,
+                                                       const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeSpheropolygon>(const hpmc_args_t& args,
                                                   const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_update_aabb<ShapeSpheropolygon>(const hpmc_args_t& args,

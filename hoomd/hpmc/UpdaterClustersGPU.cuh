@@ -36,6 +36,7 @@ struct hpmc_clusters_args_t
     //! Construct a pair_args_t
     hpmc_clusters_args_t(
                 unsigned int _N,
+                unsigned int _ncollisions,
                 const Scalar4 *_d_postype,
                 const Scalar4 *_d_orientation,
                 const int3 *_d_image,
@@ -44,8 +45,7 @@ struct hpmc_clusters_args_t
                 const unsigned int _timestep,
                 const unsigned int _dim,
                 const BoxDim& _box,
-                const unsigned int _block_size_collisions,
-                const unsigned int _block_size_overlaps,
+                const unsigned int _block_size,
                 const unsigned int _stride,
                 const unsigned int _group_size,
                 const unsigned int _max_n,
@@ -74,6 +74,7 @@ struct hpmc_clusters_args_t
                 const cudaDeviceProp& _devprop
                 )
                 : N(_N),
+                  ncollisions(_N),
                   d_postype(_d_postype),
                   d_orientation(_d_orientation),
                   d_image(_d_image),
@@ -82,8 +83,7 @@ struct hpmc_clusters_args_t
                   timestep(_timestep),
                   dim(_dim),
                   box(_box),
-                  block_size_collisions(_block_size_collisions),
-                  block_size_overlaps(_block_size_overlaps),
+                  block_size(_block_size),
                   stride(_stride),
                   group_size(_group_size),
                   max_n(_max_n),
@@ -114,6 +114,7 @@ struct hpmc_clusters_args_t
         };
 
     unsigned int N;                   //!< Number of particles to test
+    unsigned int ncollisions;         //!< Number of collisions from broad phase
     const Scalar4 *d_postype;         //!< postype array of configuration to test against
     const Scalar4 *d_orientation;     //!< orientation array
     const int3 *d_image;              //!< Particle images
@@ -122,8 +123,7 @@ struct hpmc_clusters_args_t
     const unsigned int timestep;      //!< Current time step
     const unsigned int dim;           //!< Number of dimensions
     const BoxDim& box;                //!< Current simulation box
-    unsigned int block_size_collisions; //!< Block size to execute for broad phase
-    unsigned int block_size_overlaps;   //!< Block size to execute for overlap checks
+    unsigned int block_size;          //!< Block size to execute for overlap checks
     unsigned int stride;              //!< Number of threads per overlap check
     unsigned int group_size;          //!< Size of the group to execute
     const unsigned int max_n;         //!< Maximum size of pdata arrays
@@ -154,6 +154,9 @@ struct hpmc_clusters_args_t
 
 template< class Shape >
 cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t &args, const typename Shape::param_type *d_params);
+
+template< class Shape >
+cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t &args, const typename Shape::param_type *d_params);
 
 #ifdef NVGRAPH_AVAILABLE
 //! Use nvGRAPH to find strongly connected components
@@ -207,8 +210,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const ManagedArray<int3> image_hkl,
                                      unsigned int max_n_overlaps,
                                      unsigned int max_n_reject,
-                                     uint2 *d_conditions,
-                                     unsigned int max_extra_bytes)
+                                     uint2 *d_conditions)
     {
     // determine particle idx
     unsigned int i = (blockIdx.z * gridDim.y + blockIdx.y)*blockDim.y + threadIdx.y;
@@ -496,7 +498,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         }
 
     // setup the grid to run the kernel
-    unsigned int block_size_collisions = min(args.block_size_collisions, (unsigned int)max_block_size_collisions);
+    unsigned int block_size_collisions = min(args.block_size, (unsigned int)max_block_size_collisions);
 
     unsigned int group_size = args.group_size;
     while (block_size_collisions % group_size)
@@ -513,43 +515,6 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         grid_collisions = dim3(1, n_blocks, 1);
 
     unsigned int shared_bytes_collisions = args.num_types * sizeof(typename Shape::param_type) + args.overlap_idx.getNumElements()*sizeof(unsigned int);
-
-    // required for memory coherency
-    cudaDeviceSynchronize();
-
-    // determine the maximum block size for the overlap check kernel and clamp the input block size down
-    static int max_block_size_overlaps = -1;
-    static cudaFuncAttributes attr_overlaps;
-    if (max_block_size_overlaps == -1)
-        {
-        cudaFuncGetAttributes(&attr_overlaps, gpu_hpmc_clusters_overlaps_kernel<Shape>);
-        max_block_size_overlaps = attr_overlaps.maxThreadsPerBlock;
-        }
-
-    unsigned int block_size_overlaps = min(args.block_size_overlaps, (unsigned int)max_block_size_overlaps);
-
-    unsigned int shared_bytes_overlaps = args.num_types * sizeof(typename Shape::param_type);
-    unsigned int max_extra_bytes = max(0,(int) (32768 - attr_overlaps.sharedSizeBytes - shared_bytes_overlaps));
-
-    // attach the parameters to the kernel stream so that they are visible
-    // when other kernels are called
-    cudaStreamAttachMemAsync(args.stream, d_params, 0, cudaMemAttachSingle);
-    for (unsigned int i = 0; i < args.num_types; ++i)
-        {
-        // attach nested memory regions
-        d_params[i].attach_to_stream(args.stream);
-        }
-
-    // determine dynamically requested shared memory
-    char *ptr = (char *)nullptr;
-    unsigned int available_bytes = max_extra_bytes;
-    for (unsigned int i = 0; i < args.num_types; ++i)
-        {
-        d_params[i].load_shared(ptr, available_bytes);
-        }
-    unsigned int extra_bytes = max_extra_bytes - available_bytes;
-
-    shared_bytes_overlaps += extra_bytes;
 
     // narrow phase: check overlaps
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
@@ -588,15 +553,87 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.image_hkl,
                                                      args.max_n_overlaps,
                                                      args.max_n_reject,
-                                                     args.d_conditions,
-                                                     max_extra_bytes);
+                                                     args.d_conditions);
 
-    // read back number of collisions
-    unsigned int n_collisions = 0;
-    cudaMemcpy(&n_collisions, args.d_n_overlaps, sizeof(unsigned int), cudaMemcpyDeviceToHost);
+    return cudaSuccess;
+    }
+
+//! Kernel driver for gpu_hpmc_clusters_overlaps_kernel()
+/*! \param args Bundled arguments
+    \param d_params Per-type shape parameters
+    \returns Error codes generated by any CUDA calls, or cudaSuccess when there is no error
+
+    This templatized method is the kernel driver for parallel update of any shape. It is instantiated for every shape at the
+    bottom of this file.
+
+    \ingroup hpmc_kernels
+*/
+template< class Shape >
+cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t& args, const typename Shape::param_type *d_params)
+    {
+    assert(args.d_postype);
+    assert(args.d_orientation);
+    assert(args.d_image);
+    assert(args.d_tag);
+    assert(args.d_cell_size);
+
+    assert(args.d_postype_test);
+    assert(args.d_orientation_test);
+    assert(args.d_image_test);
+    assert(args.d_tag_test);
+
+    // bind the textures
+    clusters_postype_tex.normalized = false;
+    clusters_postype_tex.filterMode = cudaFilterModePoint;
+    cudaError_t error = cudaBindTexture(0, clusters_postype_tex, args.d_postype, sizeof(Scalar4)*args.max_n);
+    if (error != cudaSuccess)
+        return error;
+
+    clusters_orientation_tex.normalized = false;
+    clusters_orientation_tex.filterMode = cudaFilterModePoint;
+    error = cudaBindTexture(0, clusters_orientation_tex, args.d_orientation, sizeof(Scalar4)*args.max_n);
+    if (error != cudaSuccess)
+        return error;
+
+    // required for memory coherency
+    cudaDeviceSynchronize();
+
+    // determine the maximum block size for the overlap check kernel and clamp the input block size down
+    static int max_block_size_overlaps = -1;
+    static cudaFuncAttributes attr_overlaps;
+    if (max_block_size_overlaps == -1)
+        {
+        cudaFuncGetAttributes(&attr_overlaps, gpu_hpmc_clusters_overlaps_kernel<Shape>);
+        max_block_size_overlaps = attr_overlaps.maxThreadsPerBlock;
+        }
+
+    unsigned int block_size_overlaps = min(args.block_size, (unsigned int)max_block_size_overlaps);
+
+    unsigned int shared_bytes_overlaps = args.num_types * sizeof(typename Shape::param_type);
+    unsigned int max_extra_bytes = max(0,(int) (32768 - attr_overlaps.sharedSizeBytes - shared_bytes_overlaps));
+
+    // attach the parameters to the kernel stream so that they are visible
+    // when other kernels are called
+    cudaStreamAttachMemAsync(args.stream, d_params, 0, cudaMemAttachSingle);
+    for (unsigned int i = 0; i < args.num_types; ++i)
+        {
+        // attach nested memory regions
+        d_params[i].attach_to_stream(args.stream);
+        }
+
+    // determine dynamically requested shared memory
+    char *ptr = (char *)nullptr;
+    unsigned int available_bytes = max_extra_bytes;
+    for (unsigned int i = 0; i < args.num_types; ++i)
+        {
+        d_params[i].load_shared(ptr, available_bytes);
+        }
+    unsigned int extra_bytes = max_extra_bytes - available_bytes;
+
+    shared_bytes_overlaps += extra_bytes;
 
     dim3 threads_overlaps(block_size_overlaps,1,1);
-    dim3 grid_overlaps( n_collisions / block_size_overlaps + 1, 1, 1);
+    dim3 grid_overlaps( args.ncollisions / block_size_overlaps + 1, 1, 1);
 
     // narrow phase: check overlaps
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
@@ -607,7 +644,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.d_tag,
                                                      args.num_types,
                                                      d_params,
-                                                     n_collisions,
+                                                     args.ncollisions,
                                                      args.d_collisions,
                                                      args.d_overlaps,
                                                      args.d_n_overlaps,

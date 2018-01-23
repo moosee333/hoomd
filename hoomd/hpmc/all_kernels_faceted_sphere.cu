@@ -21,6 +21,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeFacetedSphere>(const hpmc_free_vo
                                                        const typename ShapeFacetedSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_clusters<ShapeFacetedSphere>(const hpmc_clusters_args_t &args,
                                                        const typename ShapeFacetedSphere::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters_overlaps<ShapeFacetedSphere>(const hpmc_clusters_args_t &args,
+                                                       const typename ShapeFacetedSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeFacetedSphere>(const hpmc_args_t& args,
                                                   const typename ShapeFacetedSphere::param_type *d_params);
 template cudaError_t gpu_hpmc_update_aabb<ShapeFacetedSphere>(const hpmc_args_t& args,

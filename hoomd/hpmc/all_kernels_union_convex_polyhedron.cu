@@ -22,6 +22,8 @@ template cudaError_t gpu_hpmc_free_volume<ShapeUnion<ShapeConvexPolyhedron> >(co
                                                   const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
 template cudaError_t gpu_hpmc_clusters<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_clusters_args_t &args,
                                                   const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters_overlaps<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_clusters_args_t &args,
+                                                  const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
 template cudaError_t gpu_hpmc_update<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_args_t& args,
                                                   const typename ShapeUnion<ShapeConvexPolyhedron> ::param_type *d_params);
 template cudaError_t gpu_hpmc_update_aabb<ShapeUnion<ShapeConvexPolyhedron> >(const hpmc_args_t& args,

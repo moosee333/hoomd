@@ -46,11 +46,17 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         */
         virtual void setAutotunerParams(bool enable, unsigned int period)
             {
-            m_tuner_old_new->setPeriod(period);
-            m_tuner_old_new->setEnabled(enable);
+            m_tuner_old_new_collisions->setPeriod(period);
+            m_tuner_old_new_collisions->setEnabled(enable);
 
-            m_tuner_new_new->setPeriod(period);
-            m_tuner_new_new->setEnabled(enable);
+            m_tuner_old_new_overlaps->setPeriod(period);
+            m_tuner_old_new_overlaps->setEnabled(enable);
+
+            m_tuner_new_new_collisions->setPeriod(period);
+            m_tuner_new_new_collisions->setEnabled(enable);
+
+            m_tuner_new_new_overlaps->setPeriod(period);
+            m_tuner_new_new_overlaps->setEnabled(enable);
             }
 
 
@@ -72,8 +78,10 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         GPUVector<unsigned int> m_components;  //!< The connected component labels per particle
         #endif
 
-        std::unique_ptr<Autotuner> m_tuner_old_new;     //!< Autotuner for checking old against new
-        std::unique_ptr<Autotuner> m_tuner_new_new;     //!< Autotuner for checking new against new
+        std::unique_ptr<Autotuner> m_tuner_old_new_collisions;     //!< Autotuner for checking new against new (broad phase)
+        std::unique_ptr<Autotuner> m_tuner_old_new_overlaps;       //!< Autotuner for checking new against new (narrow phase)
+        std::unique_ptr<Autotuner> m_tuner_new_new_collisions;     //!< Autotuner for checking new against new (broad phase)
+        std::unique_ptr<Autotuner> m_tuner_new_new_overlaps;       //!< Autotuner for checking new against new (narrow phase)
 
         cudaStream_t m_stream;                //!< CUDA stream for kernel execution
 
@@ -126,15 +134,11 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     // initialize the autotuners
     cudaDeviceProp dev_prop = this->m_exec_conf->dev_prop;
 
-    std::vector<unsigned int> valid_params;
+    m_tuner_old_new_collisions.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_old_new_collisions", this->m_exec_conf));
+    m_tuner_old_new_overlaps.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_old_new_overlaps", this->m_exec_conf));
 
-    // pack two block sizes into one parameter
-    for (unsigned int block_size_overlaps = dev_prop.warpSize; block_size_overlaps <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size_overlaps += dev_prop.warpSize)
-        for (unsigned int block_size_collisions = dev_prop.warpSize; block_size_collisions <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size_collisions += dev_prop.warpSize)
-            valid_params.push_back(block_size_overlaps*10000+block_size_collisions);
-
-    m_tuner_old_new.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_clusters_old_new", this->m_exec_conf));
-    m_tuner_new_new.reset(new Autotuner(valid_params, 5, 1000000, "hpmc_clusters_new_new", this->m_exec_conf));
+    m_tuner_new_new_collisions.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_new_new_collisions", this->m_exec_conf));
+    m_tuner_new_new_overlaps.reset(new Autotuner(dev_prop.warpSize, dev_prop.maxThreadsPerBlock, dev_prop.warpSize, 5, 1000000, "hpmc_clusters_new_new_overlaps", this->m_exec_conf));
 
     // create a cuda stream to ensure managed memory coherency
     cudaStreamCreate(&m_stream);
@@ -186,186 +190,229 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
     // old new
     bool reallocate = true;
-    do
         {
-        // reset flags
-        m_conditions.resetFlags(make_uint2(0,0));
+        // access new particle data
+        ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::read);
+        ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::read);
+        ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_tag(this->m_pdata->getTags(), access_location::device, access_mode::read);
 
-            {
-            // access new particle data
-            ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::read);
-            ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::read);
-            ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::read);
-            ArrayHandle<unsigned int> d_tag(this->m_pdata->getTags(), access_location::device, access_mode::read);
+        // access backed up particle data
+        ArrayHandle<Scalar4> d_postype_backup(this->m_postype_backup, access_location::device, access_mode::read);
+        ArrayHandle<Scalar4> d_orientation_backup(this->m_orientation_backup, access_location::device, access_mode::read);
+        ArrayHandle<int3> d_image_backup(this->m_image_backup, access_location::device, access_mode::read);
 
-            // access backed up particle data
-            ArrayHandle<Scalar4> d_postype_backup(this->m_postype_backup, access_location::device, access_mode::read);
-            ArrayHandle<Scalar4> d_orientation_backup(this->m_orientation_backup, access_location::device, access_mode::read);
-            ArrayHandle<int3> d_image_backup(this->m_image_backup, access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_new_tag(m_new_tag, access_location::device, access_mode::read);
 
-            ArrayHandle<unsigned int> d_new_tag(m_new_tag, access_location::device, access_mode::read);
+        // interaction matrix
+        ArrayHandle<unsigned int> d_check_overlaps(this->m_mc->getInteractionMatrix(), access_location::device, access_mode::read);
+        const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
 
-            ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::overwrite);
-            ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
-            ArrayHandle<unsigned int> d_reject(m_reject, access_location::device, access_mode::overwrite);
-            ArrayHandle<unsigned int> d_n_overlaps(m_n_overlaps, access_location::device, access_mode::overwrite);
-            ArrayHandle<unsigned int> d_n_reject(m_n_reject, access_location::device, access_mode::overwrite);
+        detail::hpmc_clusters_args_t clusters_args(this->m_n_particles_old,
+                                           0, // ncollisions
+                                           d_postype.data,
+                                           d_orientation.data,
+                                           d_image.data,
+                                           d_tag.data,
+                                           this->m_pdata->getNTypes(),
+                                           timestep,
+                                           this->m_sysdef->getNDimensions(),
+                                           box,
+                                           0, //block_size
+                                           1, //stride
+                                           detail::NODE_CAPACITY, // group_size
+                                           this->m_pdata->getMaxN(),
+                                           d_check_overlaps.data,
+                                           overlap_idx,
+                                           line,
+                                           d_postype_backup.data,
+                                           d_orientation_backup.data,
+                                           d_image_backup.data,
+                                           d_new_tag.data,
+                                           0, //d_overlaps.data,
+                                           0, //d_collisions.data,
+                                           0, //m_overlaps.getNumElements(),
+                                           0, //d_n_overlaps.data,
+                                           0, //d_reject.data,
+                                           0, //m_reject.getNumElements(),
+                                           0, //d_n_reject.data,
+                                           0, //m_conditions.getDeviceFlags(),
+                                           swap,
+                                           swap ? this->m_ab_types[0] : 0,
+                                           swap ? this->m_ab_types[1] : 0,
+                                           aabb_tree,
+                                           image_list,
+                                           image_hkl,
+                                           m_stream,
+                                           this->m_exec_conf->dev_prop);
 
-            ArrayHandle<unsigned int> d_check_overlaps(this->m_mc->getInteractionMatrix(), access_location::device, access_mode::read);
-            const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
-
-            m_tuner_old_new->begin();
-
-            unsigned int param = m_tuner_old_new->getParam();
-            unsigned int block_size_overlaps = param / 10000;
-            unsigned int block_size_collisions = param % 10000;
-
-            detail::hpmc_clusters_args_t clusters_args(this->m_n_particles_old,
-                                               d_postype.data,
-                                               d_orientation.data,
-                                               d_image.data,
-                                               d_tag.data,
-                                               this->m_pdata->getNTypes(),
-                                               timestep,
-                                               this->m_sysdef->getNDimensions(),
-                                               box,
-                                               block_size_collisions,
-                                               block_size_overlaps,
-                                               1, //stride
-                                               detail::NODE_CAPACITY, // group_size
-                                               this->m_pdata->getMaxN(),
-                                               d_check_overlaps.data,
-                                               overlap_idx,
-                                               line,
-                                               d_postype_backup.data,
-                                               d_orientation_backup.data,
-                                               d_image_backup.data,
-                                               d_new_tag.data,
-                                               d_overlaps.data,
-                                               d_collisions.data,
-                                               m_overlaps.getNumElements(),
-                                               d_n_overlaps.data,
-                                               d_reject.data,
-                                               m_reject.getNumElements(),
-                                               d_n_reject.data,
-                                               m_conditions.getDeviceFlags(),
-                                               swap,
-                                               swap ? this->m_ab_types[0] : 0,
-                                               swap ? this->m_ab_types[1] : 0,
-                                               aabb_tree,
-                                               image_list,
-                                               image_hkl,
-                                               m_stream,
-                                               this->m_exec_conf->dev_prop);
-
-            // invoke kernel for checking overlaps
-            detail::gpu_hpmc_clusters<Shape>(clusters_args, params.data());
-
-            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
-                CHECK_CUDA_ERROR();
-
-            m_tuner_old_new->end();
-            }
-
-        uint2 flags = m_conditions.readFlags();
-
-        // resize to largest element + 1
-        if (flags.x)
-            {
-            m_overlaps.resize(flags.x);
-            m_collisions.resize(flags.x);
-            }
-
-        if (flags.y)
-            m_reject.resize(flags.y);
-
-        reallocate = flags.x || flags.y;
-        } while(reallocate);
-
-        {
-        // extract number of entries in the adjacency matrix
-        ArrayHandle<unsigned int> h_n_overlaps(m_n_overlaps, access_location::host, access_mode::read);
-        m_n_overlaps_old_new = *h_n_overlaps.data;
-
-        // resize array to reflect actual size of data
-        ArrayHandle<unsigned int> h_n_reject(m_n_reject, access_location::host, access_mode::read);
-        m_reject.resize(*h_n_reject.data);
-        }
-
-    if (line)
-        {
-        // with line transformations, check new configuration against itself to detect interactions across PBC
-        // append to existing list of overlapping pairs
         do
             {
             // reset flags
             m_conditions.resetFlags(make_uint2(0,0));
 
                 {
-                // access new particle data
-                ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::read);
-                ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::read);
-                ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::read);
-                ArrayHandle<unsigned int> d_tag(this->m_pdata->getTags(), access_location::device, access_mode::read);
-
                 ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::overwrite);
-                ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
-                ArrayHandle<unsigned int> d_n_interact_new_new(m_n_interact_new_new, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_reject(m_reject, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_n_overlaps(m_n_overlaps, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_n_reject(m_n_reject, access_location::device, access_mode::overwrite);
 
-                ArrayHandle<unsigned int> d_check_overlaps(this->m_mc->getInteractionMatrix(), access_location::device, access_mode::read);
-                const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
+                m_tuner_old_new_collisions->begin();
 
-                m_tuner_new_new->begin();
+                unsigned int param = m_tuner_old_new_collisions->getParam();
+                clusters_args.block_size = param;
 
-                unsigned int param = m_tuner_new_new->getParam();
-                unsigned int block_size_overlaps = param / 10000;
-                unsigned int block_size_collisions = param % 10000;
+                clusters_args.d_collisions = d_collisions.data;
+                clusters_args.max_n_overlaps = m_overlaps.getNumElements();
+                clusters_args.d_n_overlaps = d_n_overlaps.data;
+                clusters_args.d_reject = d_reject.data;
+                clusters_args.max_n_reject = m_reject.getNumElements();
+                clusters_args.d_n_reject = d_n_reject.data;
+                clusters_args.d_conditions = m_conditions.getDeviceFlags();
 
-                detail::hpmc_clusters_args_t clusters_args(this->m_pdata->getN(),
-                                                   d_postype.data,
-                                                   d_orientation.data,
-                                                   d_image.data,
-                                                   d_tag.data,
-                                                   this->m_pdata->getNTypes(),
-                                                   timestep,
-                                                   this->m_sysdef->getNDimensions(),
-                                                   box,
-                                                   block_size_collisions,
-                                                   block_size_overlaps,
-                                                   1, //stride
-                                                   detail::NODE_CAPACITY, // group_size
-                                                   this->m_pdata->getMaxN(),
-                                                   d_check_overlaps.data,
-                                                   overlap_idx,
-                                                   line,
-                                                   d_postype.data,
-                                                   d_orientation.data,
-                                                   d_image.data,
-                                                   d_tag.data,
-                                                   d_overlaps.data + m_n_overlaps_old_new,
-                                                   d_collisions.data,
-                                                   m_overlaps.getNumElements()-m_n_overlaps_old_new,
-                                                   d_n_interact_new_new.data,
-                                                   0, // d_reject
-                                                   0, // max_n_reject
-                                                   0, // d_n_reject
-                                                   m_conditions.getDeviceFlags(),
-                                                   swap,
-                                                   swap ? this->m_ab_types[0] : 0,
-                                                   swap ? this->m_ab_types[1] : 0,
-                                                   aabb_tree,
-                                                   image_list,
-                                                   image_hkl,
-                                                   m_stream,
-                                                   this->m_exec_conf->dev_prop);
-
-                // invoke kernel for checking overlaps
+                // invoke kernel for checking collisions between circumspheres
                 detail::gpu_hpmc_clusters<Shape>(clusters_args, params.data());
 
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
 
-                m_tuner_new_new->end();
+                m_tuner_old_new_collisions->end();
+                }
+
+            uint2 flags = m_conditions.readFlags();
+
+            // resize to largest element + 1
+            if (flags.x)
+                {
+                m_overlaps.resize(flags.x);
+                m_collisions.resize(flags.x);
+                }
+
+            if (flags.y)
+                m_reject.resize(flags.y);
+
+            reallocate = flags.x || flags.y;
+            } while(reallocate);
+
+            {
+            // resize array to reflect actual size of data
+            ArrayHandle<unsigned int> h_n_reject(m_n_reject, access_location::host, access_mode::read);
+            m_reject.resize(*h_n_reject.data);
+
+            // get size of collision list
+            ArrayHandle<unsigned int> h_n_overlaps(m_n_overlaps, access_location::host, access_mode::read);
+            clusters_args.ncollisions = *h_n_overlaps.data;
+            }
+
+            {
+            ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::read);
+            ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_n_overlaps(m_n_overlaps, access_location::device, access_mode::overwrite);
+
+            m_tuner_old_new_overlaps->begin();
+
+            unsigned int param = m_tuner_old_new_collisions->getParam();
+            clusters_args.block_size = param;
+
+            clusters_args.d_overlaps = d_overlaps.data;
+            clusters_args.d_collisions = d_collisions.data;
+            clusters_args.d_n_overlaps = d_n_overlaps.data;
+
+            // invoke kernel for checking actual overlaps (narrow phase)
+            detail::gpu_hpmc_clusters_overlaps<Shape>(clusters_args, params.data());
+
+            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                CHECK_CUDA_ERROR();
+
+            m_tuner_old_new_overlaps->end();
+            }
+
+        // extract number of entries in the adjacency matrix
+        ArrayHandle<unsigned int> h_n_overlaps(m_n_overlaps, access_location::host, access_mode::read);
+        m_n_overlaps_old_new = *h_n_overlaps.data;
+        } // end ArrayHandle scope
+
+    if (line)
+        {
+        // with line transformations, check new configuration against itself to detect interactions across PBC
+        // append to existing list of overlapping pairs
+
+        // access new particle data
+        ArrayHandle<Scalar4> d_postype(this->m_pdata->getPositions(), access_location::device, access_mode::read);
+        ArrayHandle<Scalar4> d_orientation(this->m_pdata->getOrientationArray(), access_location::device, access_mode::read);
+        ArrayHandle<int3> d_image(this->m_pdata->getImages(), access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_tag(this->m_pdata->getTags(), access_location::device, access_mode::read);
+
+        // interaction matrix
+        ArrayHandle<unsigned int> d_check_overlaps(this->m_mc->getInteractionMatrix(), access_location::device, access_mode::read);
+        const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
+
+        detail::hpmc_clusters_args_t clusters_args(this->m_pdata->getN(),
+                                           0, // ncollisions
+                                           d_postype.data,
+                                           d_orientation.data,
+                                           d_image.data,
+                                           d_tag.data,
+                                           this->m_pdata->getNTypes(),
+                                           timestep,
+                                           this->m_sysdef->getNDimensions(),
+                                           box,
+                                           0, // block_size
+                                           1, //stride
+                                           detail::NODE_CAPACITY, // group_size
+                                           this->m_pdata->getMaxN(),
+                                           d_check_overlaps.data,
+                                           overlap_idx,
+                                           line,
+                                           d_postype.data,
+                                           d_orientation.data,
+                                           d_image.data,
+                                           d_tag.data,
+                                           0, // d_overlaps
+                                           0, // d_collisions
+                                           0, // max_n_overlaps
+                                           0, // d_n_overlaps
+                                           0, // d_reject
+                                           0, // max_n_reject
+                                           0, // d_n_reject
+                                           0, // d_conditions
+                                           swap,
+                                           swap ? this->m_ab_types[0] : 0,
+                                           swap ? this->m_ab_types[1] : 0,
+                                           aabb_tree,
+                                           image_list,
+                                           image_hkl,
+                                           m_stream,
+                                           this->m_exec_conf->dev_prop);
+
+
+        do
+            {
+            // reset flags
+            m_conditions.resetFlags(make_uint2(0,0));
+
+                {
+                // access collision list arrays
+                ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_n_interact_new_new(m_n_interact_new_new, access_location::device, access_mode::overwrite);
+
+                clusters_args.d_collisions = d_collisions.data;
+                clusters_args.max_n_overlaps = m_overlaps.getNumElements() - m_n_overlaps_old_new;
+                clusters_args.d_n_overlaps = d_n_interact_new_new.data;
+                clusters_args.d_conditions = m_conditions.getDeviceFlags();
+
+                m_tuner_new_new_collisions->begin();
+
+                unsigned int param = m_tuner_new_new_collisions->getParam();
+                clusters_args.block_size = param;
+
+                // invoke kernel for checking circumsphere overlaps (broad phase)
+                detail::gpu_hpmc_clusters<Shape>(clusters_args, params.data());
+
+                if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                    CHECK_CUDA_ERROR();
+
+                m_tuner_new_new_collisions->end();
                 }
 
             uint2 flags = m_conditions.readFlags();
@@ -378,6 +425,36 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
             reallocate = flags.x;
             } while(reallocate);
+
+            {
+            // extract number of collisions
+            ArrayHandle<unsigned int> h_n_interact_new_new(m_n_interact_new_new, access_location::host, access_mode::read);
+            clusters_args.ncollisions = *h_n_interact_new_new.data;
+            }
+
+            {
+            // access collision and overlap list
+            ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::read);
+            ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
+            ArrayHandle<unsigned int> d_n_interact_new_new(m_n_interact_new_new, access_location::device, access_mode::overwrite);
+
+            clusters_args.d_overlaps = d_overlaps.data + m_n_overlaps_old_new;
+            clusters_args.d_collisions = d_collisions.data;
+            clusters_args.d_n_overlaps = d_n_interact_new_new.data;
+
+            m_tuner_new_new_overlaps->begin();
+
+            unsigned int param = m_tuner_new_new_overlaps->getParam();
+            clusters_args.block_size = param;
+
+            // invoke kernel for checking actual overlaps (narrow phase)
+            detail::gpu_hpmc_clusters_overlaps<Shape>(clusters_args, params.data());
+
+            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                CHECK_CUDA_ERROR();
+
+            m_tuner_new_new_overlaps->end();
+            }
 
             {
             // extract number of overlaps
