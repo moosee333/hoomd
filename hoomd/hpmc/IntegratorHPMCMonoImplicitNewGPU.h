@@ -393,15 +393,6 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::update(unsigned int timestep)
     BoxDim box = this->m_pdata->getBox();
     Scalar3 npd = box.getNearestPlaneDistance();
 
-    if ((box.getPeriodic().x && npd.x <= this->m_nominal_width*2) ||
-        (box.getPeriodic().y && npd.y <= this->m_nominal_width*2) ||
-        (this->m_sysdef->getNDimensions() == 3 && box.getPeriodic().z && npd.z <= this->m_nominal_width*2))
-        {
-        this->m_exec_conf->msg->error() << "Simulation box too small for implicit depletant simulations on GPU - increase it so the minimum image convention works" << std::endl;
-        throw std::runtime_error("Error performing HPMC update");
-        }
-
-
     // update the cell list
     this->m_cl->compute(timestep);
 
@@ -1329,9 +1320,6 @@ template< class Shape >
 void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeCellSets()
     {
     this->m_exec_conf->msg->notice(6) << "hpmc recomputing active cells" << std::endl;
-    // "ghost cells" might contain active particles. So they must be included in the active cell sets
-    // we should not run into a multiple issue since the base multiple is 2 and the ghost cells added are 2 in each
-    // direction. Check just to be on the safe side
 
     m_cell_sets.resize(this->m_pdata->getNTypes());
     m_inverse_cell_set.resize(this->m_pdata->getNTypes());
@@ -1343,13 +1331,15 @@ void IntegratorHPMCMonoImplicitNewGPU< Shape >::initializeCellSets()
         // every other cell is active along each direction, excluding ghost cells
         uint3 dim = m_cl_type[itype]->getDim();
         const Index3D& cell_indexer = m_cl_type[itype]->getCellIndexer();
-        unsigned int n_active = dim.x / 2 * dim.y / 2;
-        unsigned int n_sets = 4;
+        unsigned int n_active = (dim.x + 1) / 2 * (dim.y + 1) / 2;
+        unsigned int n_sets = 1;
+        n_sets *= dim.x > 1 ? 2 : 1;
+        n_sets *= dim.y > 1 ? 2 : 1;
 
         if (this->m_sysdef->getNDimensions() == 3)
             {
-            n_active *= dim.z / 2;
-            n_sets = 8;
+            n_active *= (dim.z + 1) / 2;
+            n_sets *= dim.z > 1 ? 2 : 1;
             }
 
         GPUArray< unsigned int > cell_sets(n_active, n_sets, this->m_exec_conf);
