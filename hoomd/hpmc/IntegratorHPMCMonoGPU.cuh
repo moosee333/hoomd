@@ -2085,7 +2085,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
     __syncthreads();
 
     // identify the active cell that this thread handles (use y/z component, x is reserved for parallel overlap checks)
-    unsigned int active_cell_idx = blockIdx.y*blockDim.y + threadIdx.z;
+    unsigned int active_cell_idx = blockIdx.y*blockDim.z + threadIdx.z;
 
     // this thread is inactive if it indexes past the end of the active cell list
     if (active_cell_idx >= n_active_cells)
