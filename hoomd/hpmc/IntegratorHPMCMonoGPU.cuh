@@ -2115,7 +2115,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
     unsigned int ignore_stats;
     unsigned int i;
     unsigned int typ_i;
-    Scalar4 orientation_i;
+    Scalar4 orientation_i = make_scalar4(1,0,0,0);
     vec3<Scalar> pos_i;
     bool move_active;
     bool move_type_translate;
@@ -2284,7 +2284,7 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
 
     __syncthreads();
 
-    if (active)
+    if (active && master)
         {
         if (move_active)
             {
