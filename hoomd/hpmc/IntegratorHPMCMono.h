@@ -402,8 +402,8 @@ IntegratorHPMCMono<Shape>::IntegratorHPMCMono(std::shared_ptr<SystemDefinition> 
               m_image_list_is_initialized(false),
               m_image_list_valid(false),
               m_hasOrientation(true),
-              m_extra_image_width(0.0),
-              m_aabb_tree(m_exec_conf->isCUDAEnabled())
+              m_aabb_tree(m_exec_conf->isCUDAEnabled()),
+              m_extra_image_width(0.0)
     {
     // allocate the parameter storage
     m_params = std::vector<param_type, managed_allocator<param_type> >(m_pdata->getNTypes(), param_type(), managed_allocator<param_type>(m_exec_conf->isCUDAEnabled()));
