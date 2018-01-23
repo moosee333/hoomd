@@ -1,6 +1,7 @@
 // Copyright (c) 2009-2017 The Regents of the University of Michigan
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
+#undef NVGRAPH_AVAILABLE // currently unstable
 #ifdef NVGRAPH_AVAILABLE
 
 #include "UpdaterClustersGPU.cuh"
@@ -9,6 +10,7 @@
 #include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
+#include <thrust/device_ptr.h>
 #include <thrust/copy.h>
 
 #include <thrust/random.h>
