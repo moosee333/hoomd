@@ -100,9 +100,9 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
 
         //! Determine connected components of the interaction graph
         #ifdef ENABLE_TBB
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<tbb::concurrent_vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters);
         #else
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<std::vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters);
         #endif
     };
 
@@ -265,9 +265,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
                 {
                 ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::overwrite);
-                ArrayHandle<unsigned int> d_reject(m_reject, access_location::device, access_mode::overwrite);
                 ArrayHandle<unsigned int> d_n_overlaps(m_n_overlaps, access_location::device, access_mode::overwrite);
-                ArrayHandle<unsigned int> d_n_reject(m_n_reject, access_location::device, access_mode::overwrite);
 
                 m_tuner_old_new_collisions->begin();
 
@@ -278,9 +276,6 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 clusters_args.d_collisions = d_collisions.data;
                 clusters_args.max_n_overlaps = m_overlaps.getNumElements();
                 clusters_args.d_n_overlaps = d_n_overlaps.data;
-                clusters_args.d_reject = d_reject.data;
-                clusters_args.max_n_reject = m_reject.getNumElements();
-                clusters_args.d_n_reject = d_n_reject.data;
                 clusters_args.d_conditions = m_conditions.getDeviceFlags();
 
                 // invoke kernel for checking collisions between circumspheres
@@ -301,51 +296,70 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 m_collisions.resize(flags.x);
                 }
 
-            if (flags.y)
-                m_reject.resize(flags.y);
-
-            reallocate = flags.x || flags.y;
+            reallocate = flags.x;
             } while(reallocate);
 
             {
-            // resize array to reflect actual size of data
-            ArrayHandle<unsigned int> h_n_reject(m_n_reject, access_location::host, access_mode::read);
-            m_reject.resize(*h_n_reject.data);
-
             // get size of collision list
             ArrayHandle<unsigned int> h_n_overlaps(m_n_overlaps, access_location::host, access_mode::read);
             clusters_args.ncollisions = *h_n_overlaps.data;
             }
 
+        do
             {
-            ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::read);
-            ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
-            ArrayHandle<unsigned int> d_n_overlaps(m_n_overlaps, access_location::device, access_mode::overwrite);
+            // reset flags
+            m_conditions.resetFlags(make_uint2(0,0));
 
-            m_tuner_old_new_overlaps->begin();
+                {
+                ArrayHandle<uint3> d_collisions(m_collisions, access_location::device, access_mode::read);
+                ArrayHandle<uint2> d_overlaps(m_overlaps, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_n_overlaps(m_n_overlaps, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_reject(m_reject, access_location::device, access_mode::overwrite);
+                ArrayHandle<unsigned int> d_n_reject(m_n_reject, access_location::device, access_mode::overwrite);
 
-            unsigned int param = m_tuner_old_new_collisions->getParam();
-            clusters_args.block_size = param;
+                m_tuner_old_new_overlaps->begin();
 
-            clusters_args.d_overlaps = d_overlaps.data;
-            clusters_args.d_collisions = d_collisions.data;
-            clusters_args.d_n_overlaps = d_n_overlaps.data;
+                unsigned int param = m_tuner_old_new_collisions->getParam();
+                clusters_args.block_size = param;
 
-            // invoke kernel for checking actual overlaps (narrow phase)
-            detail::gpu_hpmc_clusters_overlaps<Shape>(clusters_args, params.data());
+                clusters_args.d_overlaps = d_overlaps.data;
+                clusters_args.d_collisions = d_collisions.data;
+                clusters_args.d_n_overlaps = d_n_overlaps.data;
+                clusters_args.d_conditions = m_conditions.getDeviceFlags();
+                clusters_args.d_reject = d_reject.data;
+                clusters_args.max_n_reject = m_reject.getNumElements();
+                clusters_args.d_n_reject = d_n_reject.data;
 
-            if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
-                CHECK_CUDA_ERROR();
+                // invoke kernel for checking actual overlaps (narrow phase)
+                detail::gpu_hpmc_clusters_overlaps<Shape>(clusters_args, params.data());
 
-            m_tuner_old_new_overlaps->end();
-            }
+                if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
+                    CHECK_CUDA_ERROR();
+
+                m_tuner_old_new_overlaps->end();
+                }
+
+            uint2 flags = m_conditions.readFlags();
+
+            // resize to largest element + 1
+            if (flags.y)
+                m_reject.resize(flags.y);
+
+            reallocate = flags.y;
+            } while(reallocate);
+
+        // resize array to reflect actual size of data
+        ArrayHandle<unsigned int> h_n_reject(m_n_reject, access_location::host, access_mode::read);
+        m_reject.resize(*h_n_reject.data);
 
         // extract number of entries in the adjacency matrix
         ArrayHandle<unsigned int> h_n_overlaps(m_n_overlaps, access_location::host, access_mode::read);
         m_n_overlaps_old_new = *h_n_overlaps.data;
         } // end ArrayHandle scope
 
-    if (line)
+    m_n_overlaps_new_new = 0;
+
+    if (line && !swap)
         {
         // with line transformations, check new configuration against itself to detect interactions across PBC
         // append to existing list of overlapping pairs
@@ -483,9 +497,9 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
 template<class Shape>
 #ifdef ENABLE_TBB
-void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
+void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
 #else
-void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, std::vector<std::vector<unsigned int> >& clusters)
+void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters)
 #endif
     {
     // collect interactions on rank 0
@@ -591,7 +605,7 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
                 this->m_local_reject.insert(h_reject.data[i]);
             }
 
-        if (line)
+        if (line && !swap)
             {
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
             unsigned int offs = m_n_overlaps_old_new;

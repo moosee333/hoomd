@@ -184,7 +184,6 @@ template< class Shape >
 __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const Scalar4 *d_postype,
                                      const Scalar4 *d_orientation,
-                                     const int3 *d_image,
                                      const unsigned int *d_tag,
                                      const unsigned int num_types,
                                      const unsigned int timestep,
@@ -195,21 +194,14 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const typename Shape::param_type *d_params,
                                      uint3 *d_collisions,
                                      unsigned int *d_n_overlaps,
-                                     unsigned int *d_reject,
-                                     unsigned int *d_n_reject,
                                      const Scalar4 *d_postype_test,
                                      const Scalar4 *d_orientation_test,
-                                     const int3 *d_image_test,
                                      const unsigned int *d_tag_test,
                                      bool line,
                                      bool swap,
-                                     unsigned int type_A,
-                                     unsigned int type_B,
                                      const AABBTree aabb_tree,
                                      const ManagedArray<vec3<Scalar> > image_list,
-                                     const ManagedArray<int3> image_hkl,
                                      unsigned int max_n_overlaps,
-                                     unsigned int max_n_reject,
                                      uint2 *d_conditions)
     {
     // determine particle idx
@@ -254,7 +246,6 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
     vec3<Scalar> pos_i(postype);
     unsigned int type = __scalar_as_int(postype.w);
     unsigned int tag = d_tag_test[i];
-    int3 img = d_image_test[i];
 
     Shape shape_i(quat<Scalar>(d_orientation_test[i]), s_params[type]);
 
@@ -312,40 +303,6 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                 d_collisions[n_overlaps] = make_uint3(i,j, cur_image);
                                 }
 
-                            // the rejection test shouldn't use many registers, so leave it here
-                            if (d_reject)
-                                {
-                                bool reject = false;
-
-                                if (line)
-                                    {
-                                    int3 delta_img = -image_hkl[cur_image] + img - d_image[j];
-                                    reject = delta_img.x || delta_img.y || delta_img.z;
-                                    }
-                                else if (swap)
-                                    {
-                                    reject = ((type != type_A && type != type_B) || (typ_j != type_A && typ_j != type_B));
-                                    }
-
-                                if (reject)
-                                    {
-                                    unsigned int n_reject = atomicAdd(d_n_reject, 1);
-                                    if (n_reject >= max_n_reject)
-                                        atomicMax(&(*d_conditions).y, n_reject+1);
-                                    else
-                                        {
-                                        d_reject[n_reject] = tag;
-                                        }
-
-                                    n_reject = atomicAdd(d_n_reject, 1);
-                                    if (n_reject >= max_n_reject)
-                                         atomicMax(&(*d_conditions).y, n_reject+1);
-                                    else
-                                        {
-                                        d_reject[n_reject] = tag_j;
-                                        }
-                                    }
-                                } // end if (d_reject)
                             } // end if circumsphere overlap
                         } // end loop over particles in node
                     } // end isLeaf
@@ -365,6 +322,7 @@ template< class Shape >
 __global__ void gpu_hpmc_clusters_overlaps_kernel(
                                      const Scalar4 *d_postype,
                                      const Scalar4 *d_orientation,
+                                     const int3 *d_image,
                                      const unsigned int *d_tag,
                                      const unsigned int num_types,
                                      const typename Shape::param_type *d_params,
@@ -372,11 +330,20 @@ __global__ void gpu_hpmc_clusters_overlaps_kernel(
                                      const uint3 *d_collisions,
                                      uint2 *d_overlaps,
                                      unsigned int *d_n_overlaps,
+                                     unsigned int *d_reject,
+                                     unsigned int *d_n_reject,
                                      const Scalar4 *d_postype_test,
                                      const Scalar4 *d_orientation_test,
+                                     const int3 *d_image_test,
                                      const unsigned int *d_tag_test,
                                      const ManagedArray<vec3<Scalar> > image_list,
-                                     unsigned int max_n_overlaps,
+                                     const ManagedArray<int3> image_hkl,
+                                     bool line,
+                                     bool swap,
+                                     unsigned int type_A,
+                                     unsigned int type_B,
+                                     unsigned int max_n_reject,
+                                     uint2 *d_conditions,
                                      unsigned int max_extra_bytes)
     {
     // load the per type pair parameters into shared memory
@@ -415,10 +382,6 @@ __global__ void gpu_hpmc_clusters_overlaps_kernel(
     if (idx >= n_collisions)
         return;
 
-    // if the previous kernel overflowed memory, abort here
-    if (idx >= max_n_overlaps)
-        return;
-
     unsigned int i = d_collisions[idx].x;
     unsigned int j = d_collisions[idx].y;
     unsigned int cur_image = d_collisions[idx].z;
@@ -429,6 +392,7 @@ __global__ void gpu_hpmc_clusters_overlaps_kernel(
     vec3<Scalar> pos_image = pos_i + image_list[cur_image];
     unsigned int type_i = __scalar_as_int(postype_i.w);
     unsigned int tag_i = d_tag_test[i];
+    int3 img_i = d_image_test[i];
 
     Shape shape_i(quat<Scalar>(d_orientation_test[i]), s_params[type_i]);
 
@@ -447,6 +411,40 @@ __global__ void gpu_hpmc_clusters_overlaps_kernel(
         // write to overlaps list
         unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
         d_overlaps[n_overlaps] = make_uint2(tag_i,tag_j);
+
+        if (d_reject)
+            {
+            bool reject = false;
+
+            if (line && !swap)
+                {
+                int3 delta_img = -image_hkl[cur_image] + img_i - d_image[j];
+                reject = delta_img.x || delta_img.y || delta_img.z;
+                }
+            else if (swap)
+                {
+                reject = ((type_i != type_A && type_i != type_B) || (type_j != type_A && type_j != type_B));
+                }
+
+            if (reject)
+                {
+                unsigned int n_reject = atomicAdd(d_n_reject, 1);
+                if (n_reject >= max_n_reject)
+                    atomicMax(&(*d_conditions).y, n_reject+1);
+                else
+                    {
+                    d_reject[n_reject] = tag_i;
+                    }
+
+                n_reject = atomicAdd(d_n_reject, 1);
+                if (n_reject >= max_n_reject)
+                     atomicMax(&(*d_conditions).y, n_reject+1);
+                else
+                    {
+                    d_reject[n_reject] = tag_j;
+                    }
+                }
+            } // end if (d_reject)
         }
     }
 
@@ -527,7 +525,6 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.N,
                                                      args.d_postype,
                                                      args.d_orientation,
-                                                     args.d_image,
                                                      args.d_tag,
                                                      args.num_types,
                                                      args.timestep,
@@ -538,21 +535,14 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      d_params,
                                                      args.d_collisions,
                                                      args.d_n_overlaps,
-                                                     args.d_reject,
-                                                     args.d_n_reject,
                                                      args.d_postype_test,
                                                      args.d_orientation_test,
-                                                     args.d_image_test,
                                                      args.d_tag_test,
                                                      args.line,
                                                      args.swap,
-                                                     args.type_A,
-                                                     args.type_B,
                                                      args.aabb_tree,
                                                      args.image_list,
-                                                     args.image_hkl,
                                                      args.max_n_overlaps,
-                                                     args.max_n_reject,
                                                      args.d_conditions);
 
     return cudaSuccess;
@@ -641,6 +631,7 @@ cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t& args, const t
     gpu_hpmc_clusters_overlaps_kernel<Shape><<<grid_overlaps, threads_overlaps, shared_bytes_overlaps, args.stream>>>(
                                                      args.d_postype,
                                                      args.d_orientation,
+                                                     args.d_image,
                                                      args.d_tag,
                                                      args.num_types,
                                                      d_params,
@@ -648,11 +639,20 @@ cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t& args, const t
                                                      args.d_collisions,
                                                      args.d_overlaps,
                                                      args.d_n_overlaps,
+                                                     args.d_reject,
+                                                     args.d_n_reject,
                                                      args.d_postype_test,
                                                      args.d_orientation_test,
+                                                     args.d_image_test,
                                                      args.d_tag_test,
                                                      args.image_list,
-                                                     args.max_n_overlaps,
+                                                     args.image_hkl,
+                                                     args.line,
+                                                     args.swap,
+                                                     args.type_A,
+                                                     args.type_B,
+                                                     args.max_n_reject,
+                                                     args.d_conditions,
                                                      max_extra_bytes);
 
 
