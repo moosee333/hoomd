@@ -2183,6 +2183,8 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
         detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
 
         unsigned int n_images = image_list.size();
+        unsigned int num_nodes = aabb_tree.getNumNodes();
+
         for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
             {
             vec3<Scalar> pos_i_image = pos_i + image_list[cur_image];
@@ -2190,74 +2192,96 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
             detail::AABB aabb = aabb_i_local;
             aabb.translate(pos_i_image);
 
-            // stackless search
-            unsigned int num_nodes = aabb_tree.getNumNodes();
+            unsigned int cur_node_idx = 0;
+            unsigned int offs = 0;
 
-            for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes; ++cur_node_idx)
-                {
-                if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
-                    {
-                    if (aabb_tree.isNodeLeaf(cur_node_idx))
+            // stackless search in a double loop to reduce branch divergence
+            do {
+                unsigned int typ_j = UINT_MAX;
+                vec3<Scalar> r_ij;
+                quat<Scalar> orientation_j;
+                bool circumsphere_overlap = false;
+
+                do {
+                    if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
                         {
-                        for (unsigned int cur_p = 0; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                        if (aabb_tree.isNodeLeaf(cur_node_idx))
                             {
-                            // read in its position and orientation
-                            unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
-
-                            Scalar4 postype_j;
-                            quat<Scalar> orientation_j;
-
-                            if (j != i)
+                            for (unsigned int cur_p = offs; cur_p < aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
                                 {
-                                postype_j = d_postype[j];
-                                orientation_j = quat<Scalar>(d_orientation[j]);
-                                }
-                            else
-                                {
-                                if (cur_image == 0)
-                                    continue;
+                                // read in its position and orientation
+                                unsigned int j = aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                                Scalar4 postype_j;
+                                if (j != i)
+                                    {
+                                    postype_j = d_postype[j];
+                                    orientation_j = quat<Scalar>(d_orientation[j]);
+                                    }
                                 else
                                     {
-                                    postype_j = make_scalar4(pos_i.x, pos_i.y, pos_i.z, __int_as_scalar(typ_i));
-                                    orientation_j = shape_i.orientation;
+                                    if (cur_image == 0)
+                                        continue;
+                                    else
+                                        {
+                                        postype_j = make_scalar4(pos_i.x, pos_i.y, pos_i.z, __int_as_scalar(typ_i));
+                                        orientation_j = shape_i.orientation;
+                                        }
                                     }
-                                }
 
-                            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+                                // place i in j's image
+                                r_ij = vec3<Scalar>(postype_j) - pos_i_image;
 
-                            unsigned int typ_j = __scalar_as_int(postype_j.w);
-                            Shape shape_j(orientation_j, s_params[typ_j]);
+                                typ_j = __scalar_as_int(postype_j.w);
+                                Shape shape_j(orientation_j, s_params[typ_j]);
 
-                            overlap_checks++;
+                                overlap_checks++;
 
-                            // test circumsphere overlap
-                            OverlapReal rsq = dot(r_ij,r_ij);
-                            OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-                            bool circumsphere = rsq*OverlapReal(4.0) <= DaDb * DaDb;
+                                // test circumsphere overlap
+                                OverlapReal rsq = dot(r_ij,r_ij);
+                                OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+                                bool circumsphere = rsq*OverlapReal(4.0) <= DaDb * DaDb;
 
-                            if (s_check_overlaps[overlap_idx(typ_i, typ_j)]
-                                && circumsphere
-                                && test_overlap(r_ij, shape_i, shape_j, err_count))
-                                {
-                                overlap = true;
-                                break;
-                                }
+                                if (s_check_overlaps[overlap_idx(typ_i, typ_j)] && circumsphere)
+                                    {
+                                    circumsphere_overlap = true;
+                                    offs = cur_p+1;
+                                    if (offs >= aabb_tree.getNodeNumParticles(cur_node_idx))
+                                        {
+                                        offs = 0;
+                                        cur_node_idx++;
+                                        }
+                                    break;
+                                    }
+                                } // end loop over leaf node
                             }
-                        }
-                    }
-                else
-                    {
-                    // skip ahead
-                    cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
-                    }
+                        if (circumsphere_overlap)
+                            break;
 
-                if (overlap)
-                    break;
-                } // end loop over AABB nodes
+                        offs = 0;
+                        } // end isLeaf
+                    else
+                        {
+                        // skip ahead
+                        cur_node_idx += aabb_tree.getNodeSkip(cur_node_idx);
+                        }
+                    cur_node_idx++;
+                    } while (cur_node_idx < num_nodes);
+
+                if (circumsphere_overlap)
+                    {
+                    // test for overlap
+                    Shape shape_j(orientation_j, s_params[typ_j]);
+                    if (test_overlap(r_ij, shape_i, shape_j, err_count))
+                        {
+                        overlap = true;
+                        break;
+                        }
+                    } // end circumsphere overlap
+                } while (cur_node_idx < num_nodes);
             if (overlap)
                 break;
             } // end loop over images
-
 
         if (move_active)
             {
