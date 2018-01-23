@@ -1429,8 +1429,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
             h_diameter_backup.data[i] = h_diameter.data[i];
             h_charge_backup.data[i] = h_charge.data[i];
             h_tag_backup.data[i] = h_tag.data[i];
-            // reset image
-            h_image_backup.data[i] = make_int3(0,0,0);
+            h_image_backup.data[i] = h_image.data[i];
             }
         }
 
@@ -1461,12 +1460,14 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
 
     quat<Scalar> q;
 
+    unsigned int ndim = m_sysdef->getNDimensions();
+
     if (line)
         {
         // random normalized vector
         vec3<Scalar> n;
 
-        if (m_sysdef->getNDimensions() == 3)
+        if (ndim == 3)
             {
             Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
             Scalar z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
@@ -1486,7 +1487,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
         Scalar3 f;
         f.x = rng.template s<Scalar>();
         f.y = rng.template s<Scalar>();
-        if (m_sysdef->getNDimensions() == 3)
+        if (ndim == 3)
             {
             f.z = rng.template s<Scalar>();
             }
@@ -1496,7 +1497,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
             }
 
         pivot = vec3<Scalar>(box.makeCoordinates(f));
-        if (m_sysdef->getNDimensions() == 2)
+        if (ndim == 2)
             {
             // force z component to be zero
             pivot.z = 0.0;
@@ -1557,8 +1558,15 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
 
         for (unsigned int i = 0; i < snap.size; ++i)
             {
-            // reset image
-            snap.image[i] = make_int3(0,0,0);
+            // reconstruct periodic image
+            if (!swap)
+                {
+                int3 img = snap.image[i];
+                if (ndim == 2)
+                    img.z = 0;
+
+                snap.pos[i] = box.shift(snap.pos[i], img);
+                }
 
             if (swap)
                 {
@@ -1595,9 +1603,16 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                     m_ptl_reject.insert(i);
                     }
 
-                // wrap particle back into box
-                snap.image[i] = box.getImage(snap.pos[i]);
-                snap.pos[i] = box.shift(snap.pos[i],-snap.image[i]);
+                if (! swap)
+                    {
+                    // wrap particle back into box, keeping track of image
+                    int3 img = box.getImage(snap.pos[i]);
+                    if (ndim == 2)
+                        img.z = 0;
+
+                    snap.image[i] = img;
+                    snap.pos[i] = box.shift(snap.pos[i],-snap.image[i]);
+                    }
                 }
             }
         }
@@ -1690,6 +1705,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                     snap.pos[i] = snap_old.pos[i];
                     snap.orientation[i] = snap_old.orientation[i];
                     snap.type[i] = snap_old.type[i];
+                    snap.image[i] = snap_old.image[i];
 
                     if (flip)
                         {
