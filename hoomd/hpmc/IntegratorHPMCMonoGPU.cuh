@@ -2337,9 +2337,9 @@ __global__ void gpu_hpmc_mpmc_aabb_kernel(Scalar4 *d_postype,
             if (!ignore_stats && accepted && move_type_translate)
                 atomicAdd(&d_counters->translate_accept_count, 1);
             if (!ignore_stats && accepted && !move_type_translate)
-                atomicAdd(&d_counters->translate_reject_count, 1);
-            if (!ignore_stats && !accepted && move_type_translate)
                 atomicAdd(&d_counters->rotate_accept_count, 1);
+            if (!ignore_stats && !accepted && move_type_translate)
+                atomicAdd(&d_counters->translate_reject_count, 1);
             if (!ignore_stats && !accepted && !move_type_translate)
                 atomicAdd(&d_counters->rotate_reject_count, 1);
             }
