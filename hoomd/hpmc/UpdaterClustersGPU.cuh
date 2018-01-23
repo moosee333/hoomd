@@ -517,9 +517,6 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     // narrow phase: check overlaps
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
 
-    if (args.d_n_reject)
-        cudaMemsetAsync(args.d_n_reject, 0, sizeof(unsigned int),args.stream);
-
     // broad phase: detect collisions between circumspheres
     gpu_hpmc_clusters_kernel<Shape><<<grid_collisions, threads_collisions, shared_bytes_collisions, args.stream>>>(
                                                      args.N,
@@ -627,6 +624,9 @@ cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t& args, const t
 
     // narrow phase: check overlaps
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
+
+    if (args.d_n_reject)
+        cudaMemsetAsync(args.d_n_reject, 0, sizeof(unsigned int),args.stream);
 
     gpu_hpmc_clusters_overlaps_kernel<Shape><<<grid_overlaps, threads_overlaps, shared_bytes_overlaps, args.stream>>>(
                                                      args.d_postype,
