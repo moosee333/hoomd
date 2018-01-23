@@ -595,7 +595,12 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
             {
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
             unsigned int offs = m_n_overlaps_old_new;
+
+            #ifdef ENABLE_TBB
+            tbb::parallel_for((unsigned int) 0, m_n_overlaps_new_new, [&] (unsigned int i)
+            #else
             for (unsigned int i = 0; i < m_n_overlaps_new_new; ++i)
+            #endif
                 {
                 #ifndef NVGRAPH_AVAILABLE
                 this->m_G.addEdge(h_overlaps.data[offs + i].x, h_overlaps.data[offs + i].y);
@@ -605,14 +610,24 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
                 this->m_local_reject.insert(h_overlaps.data[offs + i].x);
                 this->m_local_reject.insert(h_overlaps.data[offs + i].y);
                 }
+            #ifdef ENABLE_TBB
+                );
+            #endif
             }
 
         #ifndef NVGRAPH_AVAILABLE
             {
             ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
 
+            #ifdef ENABLE_TBB
+            tbb::parallel_for((unsigned int) 0, m_n_overlaps_old_new, [&] (unsigned int i) {
+            #else
             for (unsigned int i = 0; i < m_n_overlaps_old_new; ++i)
+            #endif
                 this->m_G.addEdge(h_overlaps.data[i].x, h_overlaps.data[i].y);
+            #ifdef ENABLE_TBB
+                });
+            #endif
             }
         #endif
 
