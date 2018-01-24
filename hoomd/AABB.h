@@ -17,12 +17,12 @@
 
 // need to declare these class methods with __device__ qualifiers when building in nvcc
 // DEVICE is __host__ __device__ when included in nvcc and blank when included into the host compiler
-#undef DEVICE
+#undef HOSTDEVICE
 
 #ifdef NVCC
-#define DEVICE __device__
+#define HOSTDEVICE __host__ __device__
 #else
-#define DEVICE __attribute__((always_inline))
+#define HOSTDEVICE __attribute__((always_inline))
 #endif
 
 #if !defined(NVCC) && defined(__SSE__)
@@ -109,7 +109,7 @@ struct AABB
     unsigned int tag;  //!< Optional tag id, useful for particle ids
 
     //! Default construct a 0 AABB
-    DEVICE AABB() : tag(0)
+    HOSTDEVICE AABB() : tag(0)
         {
         #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
         double in = 0.0f;
@@ -129,7 +129,7 @@ struct AABB
     /*! \param _lower Lower left corner of the AABB
         \param _upper Upper right corner of the AABB
     */
-    DEVICE AABB(const vec3<Scalar>& _lower, const vec3<Scalar>& _upper) : tag(0)
+    HOSTDEVICE AABB(const vec3<Scalar>& _lower, const vec3<Scalar>& _upper) : tag(0)
         {
         #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
         lower_v = sse_load_vec3_double(_lower);
@@ -150,7 +150,7 @@ struct AABB
     /*! \param _position Position of the sphere
         \param radius Radius of the sphere
     */
-    DEVICE AABB(const vec3<Scalar>& _position, Scalar radius) : tag(0)
+    HOSTDEVICE AABB(const vec3<Scalar>& _position, Scalar radius) : tag(0)
         {
         vec3<Scalar> new_lower, new_upper;
         new_lower.x = _position.x - radius;
@@ -179,7 +179,7 @@ struct AABB
     /*! \param _position Position of the point
         \param _tag Global particle tag id
     */
-    DEVICE AABB(const vec3<Scalar>& _position, unsigned int _tag) : tag(_tag)
+    HOSTDEVICE AABB(const vec3<Scalar>& _position, unsigned int _tag) : tag(_tag)
         {
         #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
         lower_v = sse_load_vec3_double(_position);
@@ -197,7 +197,7 @@ struct AABB
         }
 
     //! Get the AABB's position
-    DEVICE vec3<Scalar> getPosition() const
+    HOSTDEVICE vec3<Scalar> getPosition() const
         {
         #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
         double half = 0.5;
@@ -218,7 +218,7 @@ struct AABB
         }
 
     //! Get the AABB's lower point
-    DEVICE vec3<Scalar> getLower() const
+    HOSTDEVICE vec3<Scalar> getLower() const
         {
         #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
         return sse_unload_vec3_double(lower_v);
@@ -233,7 +233,7 @@ struct AABB
         }
 
     //! Get the AABB's upper point
-    DEVICE vec3<Scalar> getUpper() const
+    HOSTDEVICE vec3<Scalar> getUpper() const
         {
         #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
         return sse_unload_vec3_double(upper_v);
@@ -248,7 +248,7 @@ struct AABB
         }
 
     //! Translate the AABB by the given vector
-    DEVICE void translate(const vec3<Scalar>& v)
+    HOSTDEVICE void translate(const vec3<Scalar>& v)
         {
         #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
         __m256d v_v = sse_load_vec3_double(v);
@@ -273,7 +273,7 @@ struct AABB
     \param b Second AABB
     \returns true when the two AABBs overlap, false otherwise
 */
-DEVICE inline bool overlap(const AABB& a, const AABB& b)
+HOSTDEVICE inline bool overlap(const AABB& a, const AABB& b)
     {
     #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
     int r0 = _mm256_movemask_pd(_mm256_cmp_pd(b.upper_v,a.lower_v,0x11));  // 0x11=lt
@@ -302,7 +302,7 @@ DEVICE inline bool overlap(const AABB& a, const AABB& b)
     \param b Second AABB
     \returns true when b is fully contained within a
 */
-DEVICE inline bool contains(const AABB& a, const AABB& b)
+HOSTDEVICE inline bool contains(const AABB& a, const AABB& b)
     {
     #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
     int r0 = _mm256_movemask_pd(_mm256_cmp_pd(b.lower_v,a.lower_v,0x1d));  // 0x1d=ge
@@ -328,7 +328,7 @@ DEVICE inline bool contains(const AABB& a, const AABB& b)
     \param b Second AABB
     \returns A new AABB that encloses *a* and *b*
 */
-DEVICE inline AABB merge(const AABB& a, const AABB& b)
+HOSTDEVICE inline AABB merge(const AABB& a, const AABB& b)
     {
     AABB new_aabb;
     #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
@@ -455,7 +455,7 @@ __device__ inline void AtomicMin(double * const address, const double value)
     \param b Second AABB
     \returns A new AABB that encloses *a* and *b*
 */
-DEVICE inline void atomicMerge(AABB& aabb, const AABB& a, const AABB& b)
+HOSTDEVICE inline void atomicMerge(AABB& aabb, const AABB& a, const AABB& b)
     {
     AtomicMin(&aabb.lower.x, a.lower.x);
     AtomicMin(&aabb.lower.x, b.lower.x);
@@ -480,5 +480,5 @@ DEVICE inline void atomicMerge(AABB& aabb, const AABB& a, const AABB& b)
 
 }; // end namespace hpmc
 
-#undef DEVICE
+#undef HOSTDEVICE
 #endif //__AABB_H__

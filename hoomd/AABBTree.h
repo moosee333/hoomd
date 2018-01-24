@@ -23,9 +23,9 @@
 // need to declare these class methods with __device__ qualifiers when building in nvcc
 // DEVICE is __host__ __device__ when included in nvcc and blank when included into the host compiler
 #ifdef NVCC
-#define DEVICE __device__
+#define HOSTDEVICE __host__ __device__
 #else
-#define DEVICE
+#define HOSTDEVICE
 #endif
 
 namespace hpmc
@@ -54,7 +54,6 @@ struct AABBNode
         skip = 0;
         }
 
-    AABB aabb;           //!< The box bounding this node's volume
     unsigned int left;   //!< Index of the left child
     unsigned int right;  //!< Index of the right child
     unsigned int parent; //!< Index of the parent node
@@ -117,13 +116,13 @@ class AABBTree
         #endif
 
         //! Update the AABB of a particle
-        DEVICE inline void update(unsigned int idx, const AABB& aabb);
+        HOSTDEVICE inline void update(unsigned int idx, const AABB& aabb);
 
         //! Get the height of a given particle's leaf node
-        DEVICE inline unsigned int height(unsigned int idx);
+        HOSTDEVICE inline unsigned int height(unsigned int idx);
 
         //! Get the number of nodes
-        DEVICE inline unsigned int getNumNodes() const
+        HOSTDEVICE inline unsigned int getNumNodes() const
             {
             return m_num_nodes;
             }
@@ -131,7 +130,7 @@ class AABBTree
         //! Test if a given index is a leaf node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline bool isNodeLeaf(unsigned int node) const
+        HOSTDEVICE inline bool isNodeLeaf(unsigned int node) const
             {
             return (m_nodes[node].left == INVALID_NODE);
             }
@@ -139,7 +138,7 @@ class AABBTree
         //! Get the AABBNode
         /*! \param node Index of the node (not the particle) to query
          */
-        DEVICE inline const AABBNode& getNode(unsigned int node) const
+        HOSTDEVICE inline const AABBNode& getNode(unsigned int node) const
             {
             return m_nodes[node];
             }
@@ -147,15 +146,15 @@ class AABBTree
         //! Get the AABB of a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline const AABB& getNodeAABB(unsigned int node) const
+        HOSTDEVICE inline const AABB& getNodeAABB(unsigned int node) const
             {
-            return (m_nodes[node].aabb);
+            return (m_aabbs[node]);
             }
 
         //! Get the skip of a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getNodeSkip(unsigned int node) const
+        HOSTDEVICE inline unsigned int getNodeSkip(unsigned int node) const
             {
             return (m_nodes[node].skip);
             }
@@ -163,7 +162,7 @@ class AABBTree
         //! Get the left child of a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getNodeLeft(unsigned int node) const
+        HOSTDEVICE inline unsigned int getNodeLeft(unsigned int node) const
             {
             return (m_nodes[node].left);
             }
@@ -171,7 +170,7 @@ class AABBTree
         //! Get the number of particles in a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getNodeNumParticles(unsigned int node) const
+        HOSTDEVICE inline unsigned int getNodeNumParticles(unsigned int node) const
             {
             return (m_nodes[node].num_particles);
             }
@@ -179,7 +178,7 @@ class AABBTree
         //! Get the particles in a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getNodeParticle(unsigned int node, unsigned int j) const
+        HOSTDEVICE inline unsigned int getNodeParticle(unsigned int node, unsigned int j) const
             {
             return (m_nodes[node].particles[j]);
             }
@@ -188,13 +187,20 @@ class AABBTree
         /*! \param node Index of the node (not the particle) to query
          *  \param j Local index in particle array for node
          */
-        DEVICE inline unsigned int getNodeParticleTag(unsigned int node, unsigned int j) const
+        HOSTDEVICE inline unsigned int getNodeParticleTag(unsigned int node, unsigned int j) const
             {
             return (m_nodes[node].particle_tags[j]);
             }
 
+        //! Return a handle to the nodes array
+        HOSTDEVICE inline const ManagedArray<AABB>& getAABBs() const
+            {
+            return m_aabbs;
+            }
+
     private:
         ManagedArray<AABBNode> m_nodes;     //!< The nodes of the tree
+        ManagedArray<AABB> m_aabbs;         //!< The AABBs of the tree
         unsigned int m_num_nodes;           //!< Number of nodes
         unsigned int m_node_capacity;       //!< Capacity of the nodes array
         unsigned int m_root;                //!< Index to the root node of the tree
@@ -249,15 +255,17 @@ inline unsigned int AABBTree::query(std::vector<unsigned int>& hits, const AABB&
 
     // avoid pointer indirection overhead of std::vector
     const AABBNode* nodes = m_nodes.get();
+    const AABB* aabbs = m_aabbs.get();
 
     // stackless search
     for (unsigned int current_node_idx = 0; current_node_idx < m_num_nodes; current_node_idx++)
         {
         // cache current node pointer
         const AABBNode& current_node = nodes[current_node_idx];
+        const AABB& current_aabb = aabbs[current_node_idx];
 
         box_overlap_counts++;
-        if (overlap(current_node.aabb, aabb))
+        if (overlap(current_aabb, aabb))
             {
             if (current_node.left == INVALID_NODE)
                 {
@@ -282,7 +290,7 @@ inline unsigned int AABBTree::query(std::vector<unsigned int>& hits, const AABB&
     Update the node for particle *idx* and its parent nodes to reflect a new position and/or extents. update() does not
     change the tree topology, so it is best for slight changes.
 */
-DEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
+HOSTDEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
     {
     assert(idx < m_mapping.size());
 
@@ -291,12 +299,12 @@ DEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
     assert(node_idx != INVALID_NODE);
 
     // grow its AABB if needed
-    if (!contains(m_nodes[node_idx].aabb, aabb))
+    if (!contains(m_aabbs[node_idx], aabb))
         {
         #if __CUDA_ARCH__
-        atomicMerge(m_nodes[node_idx].aabb, m_nodes[node_idx].aabb, aabb);
+        atomicMerge(m_aabbs[node_idx], m_aabbs[node_idx], aabb);
         #else
-        m_nodes[node_idx].aabb = merge(m_nodes[node_idx].aabb, aabb);
+        m_aabbs[node_idx] = merge(m_aabbs[node_idx], aabb);
         #endif
 
         // update all parent node AABBs
@@ -307,9 +315,9 @@ DEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
             unsigned int right_idx = m_nodes[current_node].right;
 
             #if __CUDA_ARCH__
-            atomicMerge(m_nodes[current_node].aabb, m_nodes[left_idx].aabb, m_nodes[right_idx].aabb);
+            atomicMerge(m_aabbs[current_node], m_aabbs[left_idx], m_aabbs[right_idx]);
             #else
-            m_nodes[current_node].aabb = merge(m_nodes[left_idx].aabb, m_nodes[right_idx].aabb);
+            m_aabbs[current_node] = merge(m_aabbs[left_idx], m_aabbs[right_idx]);
             #endif
 
             current_node = m_nodes[current_node].parent;
@@ -320,7 +328,7 @@ DEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
 /*! \param idx Particle to get height for
     \returns Height of the node
 */
-DEVICE inline unsigned int AABBTree::height(unsigned int idx)
+HOSTDEVICE inline unsigned int AABBTree::height(unsigned int idx)
     {
     assert(idx < m_mapping.size());
 
@@ -395,7 +403,7 @@ inline unsigned int AABBTree::buildNode(AABB *aabbs,
     if (len <= NODE_CAPACITY)
         {
         unsigned int new_node = allocateNode();
-        m_nodes[new_node].aabb = my_aabb;
+        m_aabbs[new_node] = my_aabb;
         m_nodes[new_node].parent = parent;
         m_nodes[new_node].num_particles = len;
 
@@ -507,7 +515,7 @@ inline unsigned int AABBTree::buildNode(AABB *aabbs,
     unsigned int new_right = buildNode(aabbs, idx, start+start_right, len-start_right, my_idx);
 
     // now, create the children and connect them up
-    m_nodes[my_idx].aabb = my_aabb;
+    m_aabbs[my_idx] = my_aabb;
     m_nodes[my_idx].parent = parent;
     m_nodes[my_idx].left = new_left;
     m_nodes[my_idx].right = new_right;
@@ -555,14 +563,17 @@ inline unsigned int AABBTree::allocateNode()
 
         // allocate new memory
         ManagedArray<AABBNode> m_new_nodes(m_new_node_capacity, m_managed);
+        ManagedArray<AABB> m_new_aabbs(m_new_node_capacity, m_managed);
 
         // if we have old memory, copy it over
         if (m_nodes.size())
             {
             memcpy(m_new_nodes.get(), m_nodes.get(), sizeof(AABBNode)*m_num_nodes);
+            memcpy(m_new_aabbs.get(), m_aabbs.get(), sizeof(AABB)*m_num_nodes);
             }
 
         m_nodes = m_new_nodes;
+        m_aabbs = m_new_aabbs;
         m_node_capacity = m_new_node_capacity;
         }
 

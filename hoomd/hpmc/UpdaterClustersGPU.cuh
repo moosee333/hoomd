@@ -254,6 +254,9 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
     unsigned int n_images = image_list.size();
 
+    // obtain a pointer to the managed memory holding the AABB nodes
+    const AABB *aabbs = aabb_tree.getAABBs().get();
+
     for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
         {
         vec3<Scalar> pos_image = pos_i + image_list[cur_image];
@@ -262,7 +265,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
         for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes; ++cur_node_idx)
             {
-            if (detail::overlap(aabb_tree.getNodeAABB(cur_node_idx), aabb))
+            if (detail::overlap(aabbs[cur_node_idx], aabb))
                 {
                 if (aabb_tree.isNodeLeaf(cur_node_idx))
                     {
@@ -516,6 +519,10 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
 
     // narrow phase: check overlaps
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
+
+    int device;
+    cudaGetDevice(&device);
+    cudaMemAdvise(args.aabb_tree.getAABBs().get(), args.aabb_tree.getAABBs().size()*sizeof(detail::AABB), cudaMemAdviseSetReadMostly, device);
 
     // broad phase: detect collisions between circumspheres
     gpu_hpmc_clusters_kernel<Shape><<<grid_collisions, threads_collisions, shared_bytes_collisions, args.stream>>>(
