@@ -282,11 +282,14 @@ struct gsd_shape_schema< hpmc::detail::poly3d_verts > : public gsd_schema_hpmc_b
             {
             float dsq = 0.0;
             hpmc::detail::poly3d_verts result(N[i], m_exec_conf->isCUDAEnabled());
+            auto x_handle = result.x.requestWriteAccess();
+            auto y_handle = result.y.requestWriteAccess();
+            auto z_handle = result.z.requestWriteAccess();
             for (unsigned int v = 0; v < N[i]; v++)
                 {
-                result.x[v] = vertices[count*3+0];
-                result.y[v] = vertices[count*3+1];
-                result.z[v] = vertices[count*3+2];
+                x_handle[v] = vertices[count*3+0];
+                y_handle[v] = vertices[count*3+1];
+                z_handle[v] = vertices[count*3+2];
                 dsq = fmax(result.x[v]*result.x[v] + result.y[v]*result.y[v] + result.z[v]*result.z[v], dsq);
                 count++;
                 }

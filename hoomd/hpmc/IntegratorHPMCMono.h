@@ -1394,10 +1394,12 @@ inline const ManagedArray<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImage
     m_image_list = ManagedArray<vec3<Scalar> >(images.size(), m_exec_conf->isCUDAEnabled());
     m_image_hkl = ManagedArray<int3 >(image_hkl.size(), m_exec_conf->isCUDAEnabled());
 
+    auto image_list_handle = m_image_list.requestWriteAccess();
+    auto image_hkl_handle = m_image_hkl.requestWriteAccess();
     for (unsigned int i = 0; i < images.size(); ++i)
         {
-        m_image_list[i] = images[i];
-        m_image_hkl[i] = image_hkl[i];
+        image_list_handle[i] = images[i];
+        image_hkl_handle[i] = image_hkl[i];
         }
 
     // cout << "built image list" << std::endl;

@@ -781,13 +781,16 @@ class ExternalFieldWall : public ExternalFieldMono<Shape>
             {
             vec3<Scalar> v0;
             v0 = shape.getCircumsphereDiameter()*wall.orientation;
-            wall.verts->x[0] = -v0.x;
-            wall.verts->y[0] = -v0.y;
-            wall.verts->z[0] = -v0.z;
+            auto x_handle = wall.verts->x.requestWriteAccess();
+            auto y_handle = wall.verts->y.requestWriteAccess();
+            auto z_handle = wall.verts->z.requestWriteAccess();
+            x_handle[0] = -v0.x;
+            y_handle[0] = -v0.y;
+            z_handle[0] = -v0.z;
 
-            wall.verts->x[1] = v0.x;
-            wall.verts->y[1] = v0.y;
-            wall.verts->z[1] = v0.z;
+            x_handle[1] = v0.x;
+            y_handle[1] = v0.y;
+            z_handle[1] = v0.z;
             wall.verts->diameter = 2.0*(shape.getCircumsphereDiameter()+wall.verts->sweep_radius);
             }
         std::string getSphWallParamName(size_t i)

@@ -59,45 +59,58 @@ class GPUTree
             unsigned int n = 0;
             m_num_leaves = 0;
 
+            unsigned int *left_handle = m_left.requestWriteAccess();
+            unsigned int *escape_handle = m_escape.requestWriteAccess();
+            vec3<OverlapReal> *center_handle = m_center.requestWriteAccess();
+            quat<OverlapReal> *rotation_handle = m_rotation.requestWriteAccess();
+            vec3<OverlapReal> *lengths_handle = m_lengths.requestWriteAccess();
+            unsigned int *mask_handle = m_mask.requestWriteAccess();
+            unsigned int *is_sphere_handle = m_is_sphere.requestWriteAccess();
+            unsigned int *leaf_ptr_handle = m_leaf_ptr.requestWriteAccess();
+
             // load data from AABTree
             for (unsigned int i = 0; i < tree.getNumNodes(); ++i)
                 {
-                m_left[i] = tree.getNodeLeft(i);
-                m_escape[i] = tree.getEscapeIndex(i);
+                left_handle[i] = tree.getNodeLeft(i);
+                escape_handle[i] = tree.getEscapeIndex(i);
 
-                m_center[i] = tree.getNodeOBB(i).getPosition();
-                m_rotation[i] = tree.getNodeOBB(i).rotation;
-                m_lengths[i] = tree.getNodeOBB(i).lengths;
-                m_mask[i] = tree.getNodeOBB(i).mask;
-                m_is_sphere[i] = tree.getNodeOBB(i).isSphere();
+                center_handle[i] = tree.getNodeOBB(i).getPosition();
+                rotation_handle[i] = tree.getNodeOBB(i).rotation;
+                lengths_handle[i] = tree.getNodeOBB(i).lengths;
+                mask_handle[i] = tree.getNodeOBB(i).mask;
+                is_sphere_handle[i] = tree.getNodeOBB(i).isSphere();
 
-                m_leaf_ptr[i] = n;
+                leaf_ptr_handle[i] = n;
                 n += tree.getNodeNumParticles(i);
 
-                if (m_left[i] == OBB_INVALID_NODE)
+                if (left_handle[i] == OBB_INVALID_NODE)
                     {
                     m_num_leaves++;
                     }
                 }
-            m_leaf_ptr[tree.getNumNodes()] = n;
+            leaf_ptr_handle[tree.getNumNodes()] = n;
 
             m_leaf_obb_ptr = ManagedArray<unsigned int>(m_num_leaves, managed);
+
+            unsigned int *leaf_obb_ptr_handle = m_leaf_obb_ptr.requestWriteAccess();
+
             m_num_leaves = 0;
             for (unsigned int i =0; i < tree.getNumNodes(); ++i)
                 {
-                if (m_left[i] == OBB_INVALID_NODE)
+                if (left_handle[i] == OBB_INVALID_NODE)
                     {
-                    m_leaf_obb_ptr[m_num_leaves++] = i;
+                    leaf_obb_ptr_handle[m_num_leaves++] = i;
                     }
                 }
 
             m_particles = ManagedArray<unsigned int>(n, managed);
 
+            unsigned int *particles_handle = m_particles.requestWriteAccess();
             for (unsigned int i = 0; i < tree.getNumNodes(); ++i)
                 {
                 for (unsigned int j = 0; j < tree.getNodeNumParticles(i); ++j)
                     {
-                    m_particles[m_leaf_ptr[i]+j] = tree.getNodeParticle(i,j);
+                    particles_handle[m_leaf_ptr[i]+j] = tree.getNodeParticle(i,j);
                     }
                 }
 
@@ -127,7 +140,8 @@ class GPUTree
                 initializeAncestorCounts(right_idx, tree, ancestors+1);
                 }
 
-            m_ancestors[idx] = ancestors;
+            unsigned int *ancestors_handle = m_ancestors.requestWriteAccess();
+            ancestors_handle[idx] = ancestors;
             }
         #endif
 

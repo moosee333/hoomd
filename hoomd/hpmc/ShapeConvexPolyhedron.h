@@ -60,9 +60,13 @@ struct poly3d_verts : param_base
         x = ManagedArray<OverlapReal>(N_align,_managed);
         y = ManagedArray<OverlapReal>(N_align,_managed);
         z = ManagedArray<OverlapReal>(N_align,_managed);
+
+        OverlapReal *x_handle = x.requestWriteAccess();
+        OverlapReal *y_handle = y.requestWriteAccess();
+        OverlapReal *z_handle = z.requestWriteAccess();
         for (unsigned int i = 0; i <  N_align; ++i)
             {
-            x[i] = y[i] = z[i] = OverlapReal(0.0);
+            x_handle[i] = y_handle[i] = z_handle[i] = OverlapReal(0.0);
             }
         }
     #endif

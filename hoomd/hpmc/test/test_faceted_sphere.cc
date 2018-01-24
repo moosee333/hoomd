@@ -142,9 +142,11 @@ UP_TEST( overlap_faceted )
 
     // place test spheres
     detail::faceted_sphere_params p(1, false);
+    auto n_handle = p.n.requestWriteAccess();
+    auto offset_handle = p.offset.requestWriteAccess();
     p.diameter = 1.0;
-    p.n[0] = vec3<OverlapReal>(1,0,0);
-    p.offset[0] = -.3;
+    n_handle[0] = vec3<OverlapReal>(1,0,0);
+    offset_handle[0] = -.3;
     p.ignore = 0;
     p.insphere_radius = .3;
     p.verts.N = 0;
@@ -174,25 +176,27 @@ UP_TEST( overlap_faceted )
     UP_ASSERT(test_overlap(r_ij, a,b,err_count));
     UP_ASSERT(test_overlap(-r_ij, b,a,err_count));
 
+    auto n2_handle = p2.n.requestWriteAccess();
+    auto offset2_handle = p2.offset.requestWriteAccess();
     p2.N = 1;
-    p2.offset[0] = -.3;
+    offset2_handle[0] = -.3;
 
     // facet particle b, but place it so that b's circumsphere doesn't intersect a
     for (unsigned int i = 0; i < 100; ++i)
         {
         // rotate b around z
         Scalar phi = 2.0*M_PI/100.0*i;
-        p2.n[0].x = cos(phi);
-        p2.n[0].y = sin(phi);
-        p2.n[0].z = 0.0;
+        n2_handle[0].x = cos(phi);
+        n2_handle[0].y = sin(phi);
+        n2_handle[0].z = 0.0;
         r_ij = vec3<Scalar>(0.81,0,0);
         UP_ASSERT(!test_overlap(r_ij, a,b,err_count));
         UP_ASSERT(!test_overlap(-r_ij, b,a,err_count));
         }
 
-    p2.n[0].x = -1;
-    p2.n[0].y = 0.0;
-    p2.n[0].z = 0.0;
+    n2_handle[0].x = -1;
+    n2_handle[0].y = 0.0;
+    n2_handle[0].z = 0.0;
 
     // place b close to a along x, with facing facets, then translate in y-z plane
     for (unsigned int i = 0; i < 100; ++i)
@@ -209,9 +213,9 @@ UP_TEST( overlap_faceted )
     for (unsigned int i = 0; i < 10; ++i)
         {
         Scalar phi = -0.5/180.0*M_PI+1.0/180.0*M_PI/10.0*i;
-        p2.n[0].x = -cos(phi);
-        p2.n[0].y = -sin(phi);
-        p2.n[0].z = 0.0;
+        n2_handle[0].x = -cos(phi);
+        n2_handle[0].y = -sin(phi);
+        n2_handle[0].z = 0.0;
         r_ij = vec3<Scalar>(.61,0,0);
         UP_ASSERT(!test_overlap(r_ij, a,b,err_count));
         UP_ASSERT(!test_overlap(-r_ij, b,a,err_count));
@@ -225,15 +229,15 @@ UP_TEST( overlap_faceted )
     // place particle b along that axis, with patch normal to it,
     // but barely not touching
     r_ij = v+v*fast::rsqrt(dot(v,v))*Scalar(0.3001);
-    p2.n[0] = -v*fast::rsqrt(dot(v,v));
-    p2.offset[0] = -.3;
+    n2_handle[0] = -v*fast::rsqrt(dot(v,v));
+    offset2_handle[0] = -.3;
     UP_ASSERT(!test_overlap(r_ij, a,b,err_count));
     UP_ASSERT(!test_overlap(-r_ij, b,a,err_count));
 
     // place particle b along that axis, with patch normal to it,
     // barely overlapping
     r_ij = v+v*fast::rsqrt(dot(v,v))*Scalar(0.2999);
-    p2.n[0] = -v*fast::rsqrt(dot(v,v));
+    n2_handle[0] = -v*fast::rsqrt(dot(v,v));
     UP_ASSERT(test_overlap(r_ij, a,b,err_count));
     UP_ASSERT(test_overlap(-r_ij, b,a,err_count));
     }
@@ -257,10 +261,12 @@ UP_TEST( overlap_faceted_twofacets )
     p.origin = vec3<OverlapReal>(0,0,0);
 
     // this shape has two facets intersecting inside the sphere
-    p.n[0] = vec3<OverlapReal>(1/sqrt(2),1/sqrt(2),0);
-    p.offset[0] = -0.9*1/(2*sqrt(2));
-    p.n[1] = vec3<OverlapReal>(1/sqrt(2),-1/sqrt(2),0);
-    p.offset[1] = -0.9*1/(2*sqrt(2));
+    auto n_handle = p.n.requestWriteAccess();
+    auto offset_handle = p.offset.requestWriteAccess();
+    n_handle[0] = vec3<OverlapReal>(1/sqrt(2),1/sqrt(2),0);
+    offset_handle[0] = -0.9*1/(2*sqrt(2));
+    n_handle[1] = vec3<OverlapReal>(1/sqrt(2),-1/sqrt(2),0);
+    offset_handle[1] = -0.9*1/(2*sqrt(2));
     ShapeFacetedSphere::initializeVertices(p,false);
     ShapeFacetedSphere a(o, p);
 
@@ -309,18 +315,24 @@ UP_TEST( overlap_faceted_threefacets )
     // this shape has three facets coming together in a corner inside the sphere
     OverlapReal phi(2.0*M_PI/3.0);
     OverlapReal theta(M_PI/4.0);
-    p.n[0] = vec3<OverlapReal>(sin(theta)*cos(0*phi),sin(theta)*sin(0*phi),cos(theta));
-    p.offset[0] = -0.9*cos(theta)/2;
-    p.n[1] = vec3<OverlapReal>(sin(theta)*cos(1*phi),sin(theta)*sin(1*phi),cos(theta));
-    p.offset[1] = -0.9*cos(theta)/2;
-    p.n[2] = vec3<OverlapReal>(sin(theta)*cos(2*phi),sin(theta)*sin(2*phi),cos(theta));
-    p.offset[2] = -0.9*cos(theta)/2;
+    auto n_handle = p.n.requestWriteAccess();
+    auto offset_handle = p.offset.requestWriteAccess();
+    n_handle[0] = vec3<OverlapReal>(sin(theta)*cos(0*phi),sin(theta)*sin(0*phi),cos(theta));
+    offset_handle[0] = -0.9*cos(theta)/2;
+    n_handle[1] = vec3<OverlapReal>(sin(theta)*cos(1*phi),sin(theta)*sin(1*phi),cos(theta));
+    offset_handle[1] = -0.9*cos(theta)/2;
+    n_handle[2] = vec3<OverlapReal>(sin(theta)*cos(2*phi),sin(theta)*sin(2*phi),cos(theta));
+    offset_handle[2] = -0.9*cos(theta)/2;
 
     p.verts = detail::poly3d_verts(1,false);
+    auto x_handle = p.verts.x.requestWriteAccess();
+    auto y_handle = p.verts.y.requestWriteAccess();
+    auto z_handle = p.verts.z.requestWriteAccess();
+
     p.verts.diameter = 1.0;
-    p.verts.x[0] = 0;
-    p.verts.y[0] = 0;
-    p.verts.z[0] = 0.9/2;
+    x_handle[0] = 0;
+    y_handle[0] = 0;
+    z_handle[0] = 0.9/2;
 
     ShapeFacetedSphere::initializeVertices(p,false);
 
@@ -373,7 +385,8 @@ UP_TEST( overlap_faceted_offset )
     // place test spheres
     detail::faceted_sphere_params p(1, false);
     p.diameter = 1.0;
-    p.n[0] = vec3<OverlapReal>(1,0,0);
+    auto n_handle = p.n.requestWriteAccess();
+    n_handle[0] = vec3<OverlapReal>(1,0,0);
     p.ignore = 0;
     p.insphere_radius = 0;
     p.verts.N = 0;
@@ -390,7 +403,8 @@ UP_TEST( overlap_faceted_offset )
     p2.verts.N = 0;
     p2.additional_verts.N = 0;
 
-    p.offset[0] = -.25;
+    auto offset_handle = p.offset.requestWriteAccess();
+    offset_handle[0] = -.25;
 
     ShapeFacetedSphere b(o, p2);
     vec3<Scalar> r_ij = vec3<Scalar>(.76,0,0);
@@ -401,7 +415,7 @@ UP_TEST( overlap_faceted_offset )
     UP_ASSERT(test_overlap(r_ij, a,b,err_count));
     UP_ASSERT(test_overlap(-r_ij, b,a,err_count));
 
-    p.offset[0] = 0;
+    offset_handle[0] = 0;
 
     r_ij = vec3<Scalar>(.51,0,0);
     UP_ASSERT(!test_overlap(r_ij, a,b,err_count));
@@ -411,7 +425,7 @@ UP_TEST( overlap_faceted_offset )
     UP_ASSERT(test_overlap(r_ij, a,b,err_count));
     UP_ASSERT(test_overlap(-r_ij, b,a,err_count));
 
-    p.offset[0] = .25;
+    offset_handle[0] = .25;
 
     r_ij = vec3<Scalar>(.26,0,0);
     UP_ASSERT(!test_overlap(r_ij, a,b,err_count));
@@ -438,13 +452,15 @@ UP_TEST( random_support_test )
     p.N = n;
     OverlapReal phi(2.0*M_PI/n);
     OverlapReal theta(M_PI/4.0);
+    auto n_handle = p.n.requestWriteAccess();
+    auto offset_handle = p.offset.requestWriteAccess();
     for (unsigned int i = 0; i < n; ++i)
         {
-        p.n[i] = vec3<OverlapReal>(sin(theta)*cos(i*phi),sin(theta)*sin(i*phi),cos(theta));
-        p.offset[i] = -1.1*cos(theta)/2;
+        n_handle[i] = vec3<OverlapReal>(sin(theta)*cos(i*phi),sin(theta)*sin(i*phi),cos(theta));
+        offset_handle[i] = -1.1*cos(theta)/2;
         }
-    //p.n[n] = vec3<OverlapReal>(0,0,1);
-    //p.offset[n] = -0.35;
+    //n_handle[n] = vec3<OverlapReal>(0,0,1);
+    //offset_handle[n] = -0.35;
 
     ShapeFacetedSphere::initializeVertices(p,false);
 
@@ -480,13 +496,15 @@ UP_TEST( random_support_test_2 )
     p.N = n;
     OverlapReal phi(M_PI*20.0/180.0);
     OverlapReal theta(M_PI/2.0);
+    auto n_handle = p.n.requestWriteAccess();
+    auto offset_handle = p.offset.requestWriteAccess();
     for (unsigned int i = 0; i < n; ++i)
         {
-        p.n[i] = vec3<OverlapReal>(sin(theta)*cos(i*phi),sin(theta)*sin(i*phi),cos(theta));
-        p.offset[i] = 0;
+        n_handle[i] = vec3<OverlapReal>(sin(theta)*cos(i*phi),sin(theta)*sin(i*phi),cos(theta));
+        offset_handle[i] = 0;
         }
-    //p.n[n] = vec3<OverlapReal>(0,0,1);
-    //p.offset[n] = -0.35;
+    //n_handle[n] = vec3<OverlapReal>(0,0,1);
+    //offset_handle[n] = -0.35;
 
     ShapeFacetedSphere::initializeVertices(p,false);
 
@@ -525,10 +543,12 @@ UP_TEST( overlap_special_case )
     p.N = n;
     OverlapReal phi(M_PI*20.0/180.0);
     OverlapReal theta(M_PI/2.0);
+    auto n_handle = p.n.requestWriteAccess();
+    auto offset_handle = p.offset.requestWriteAccess();
     for (unsigned int i = 0; i < n; ++i)
         {
-        p.n[i] = vec3<OverlapReal>(sin(theta)*cos(i*phi),sin(theta)*sin(i*phi),cos(theta));
-        p.offset[i] = 0;
+        n_handle[i] = vec3<OverlapReal>(sin(theta)*cos(i*phi),sin(theta)*sin(i*phi),cos(theta));
+        offset_handle[i] = 0;
         }
 
     ShapeFacetedSphere::initializeVertices(p,false);
