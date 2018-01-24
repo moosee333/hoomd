@@ -249,7 +249,7 @@ class ManagedArray
         const T* getCachedDeviceHandle(cudaStream_t stream) const
             {
             if (! *cache_is_current)
-                prefetchDeviceCache();
+                prefetchDeviceCache(stream);
 
             return d_data;
             }
