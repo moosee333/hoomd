@@ -18,6 +18,8 @@
 #include "hoomd/AABBTree.h"
 #include "hoomd/ManagedArray.h"
 
+#include <thrust/sort.h>
+#include <thrust/iterator/zip_iterator.h>
 
 namespace hpmc
 {
@@ -71,8 +73,12 @@ struct hpmc_clusters_args_t
                 const ManagedArray<vec3<Scalar> >& _image_list,
                 const ManagedArray<int3 >& _image_hkl,
                 cudaStream_t _stream,
-                const cudaDeviceProp& _devprop
-                )
+                const cudaDeviceProp& _devprop,
+                const CachedAllocator &_alloc,
+                unsigned int _N_old,
+                Scalar *_d_begin,
+                Scalar *_d_end,
+                unsigned int *_d_aabb_idx)
                 : N(_N),
                   ncollisions(_N),
                   d_postype(_d_postype),
@@ -109,7 +115,12 @@ struct hpmc_clusters_args_t
                   image_list(_image_list),
                   image_hkl(_image_hkl),
                   stream(_stream),
-                  devprop(_devprop)
+                  devprop(_devprop),
+                  alloc(_alloc),
+                  N_old(_N_old),
+                  d_begin(_d_begin),
+                  d_end(_d_end),
+                  d_aabb_idx(_d_aabb_idx)
         {
         };
 
@@ -150,6 +161,11 @@ struct hpmc_clusters_args_t
     const ManagedArray<int3 >& image_hkl; //!< Image list shifts for periodic boundary conditions
     cudaStream_t stream;               //!< Stream for kernel execution
     const cudaDeviceProp& devprop;    //!< CUDA device properties
+    const CachedAllocator &alloc;     //!< a caching allocator for thrust
+    unsigned int N_old;               //!< Number of particles in configuration to test against
+    Scalar *d_begin;                  //!< List of begin coordinates of AABBs along the sweep axis
+    Scalar *d_end;                    //!< List of end coordinates of AABBs along the sweep axis
+    unsigned int *d_aabb_idx;         //!< AABB indices corresponding to the (sorted) intervals
     };
 
 template< class Shape >
@@ -451,6 +467,221 @@ __global__ void gpu_hpmc_clusters_overlaps_kernel(
         }
     }
 
+//! Perform sweep and prune along one axis
+template<class Shape>
+__global__ void gpu_sweep_and_prune_kernel(
+    unsigned int N,
+    unsigned int Nold,
+    const Scalar4 *d_postype,
+    const Scalar4 *d_postype_old,
+    const typename Shape::param_type *d_params,
+    unsigned int num_types,
+    const Scalar *d_begin,
+    const Scalar *d_end,
+    unsigned int *d_aabb_idx,
+    Scalar sweep_length,
+    bool periodic,
+    ManagedArray<vec3<Scalar> > image_list,
+    const unsigned int *d_check_overlaps,
+    Index2D overlap_idx,
+    uint3 *d_collisions,
+    unsigned int max_n_overlaps,
+    unsigned int *d_n_overlaps,
+    uint2 *d_conditions
+    )
+    {
+    // load the per type pair parameters into shared memory
+    extern __shared__ char s_data[];
+    typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
+    unsigned int *s_check_overlaps = (unsigned int *)(s_params + num_types*sizeof(typename Shape::param_type));
+
+    // copy over parameters one int per thread for fast loads
+        {
+        unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
+        unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
+        unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
+
+        for (unsigned int cur_offset = 0; cur_offset < param_size; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < param_size)
+                {
+                ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
+                }
+            }
+
+        unsigned int ntyppairs = overlap_idx.getNumElements();
+        for (unsigned int cur_offset = 0; cur_offset < ntyppairs; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < ntyppairs)
+                {
+                s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
+                }
+            }
+        }
+
+    __syncthreads();
+
+    // the index of the interval we're colliding
+    unsigned int interval_i = blockIdx.x*blockDim.x+threadIdx.x;
+
+    if (interval_i >= N+Nold)
+        return;
+
+    // the end coordinate of this interval
+    Scalar end_i = d_end[interval_i];
+
+    unsigned int interval_j = interval_i;
+
+    // corresponding particle index
+    unsigned int i = d_aabb_idx[interval_i];
+
+    // the coordinates of particle i belonging to our interval
+    Scalar4 postype_i = (i < Nold) ? d_postype_old[i] : d_postype[i - Nold];
+    unsigned int typ_i = __scalar_as_int(postype_i.w);
+    Shape shape_i(quat<Scalar>(), s_params[typ_i]);
+    AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
+
+    Scalar image = 0;
+    do
+        {
+        interval_j++;
+        if (interval_j >= N+Nold)
+            {
+            if (periodic)
+                {
+                // wrap around periodic boundaries
+                interval_j = 0;
+                image+=sweep_length;
+                }
+            else
+                {
+                // no more intervals to the right
+                break;
+                }
+            }
+
+        // start coordinate of test interval
+        Scalar begin_j = d_begin[interval_j] + image;
+
+        if (begin_j > end_i)
+            break; // we're done
+
+        // get this interval's AABB index and AABB
+        unsigned int j = d_aabb_idx[interval_j];
+
+        // we're not reporting overlaps in the same configuration
+        if ((i < Nold && j < Nold) || (i >= Nold && j >= Nold))
+            continue;
+
+        Scalar4 postype_j = (j < Nold) ? d_postype_old[j] : d_postype[j - Nold];
+        unsigned int typ_j = __scalar_as_int(postype_j.w);
+
+        Shape shape_j(quat<Scalar>(), s_params[typ_j]);
+        AABB aabb_j = shape_j.getAABB(vec3<Scalar>(postype_j));
+
+        // check for AABB overlap
+        if (!s_check_overlaps[overlap_idx(typ_i,typ_j)]) continue;
+
+        // iterate over particle images to detect AABB overlap with periodic boundary conditions
+        unsigned int n_images = image_list.size();
+
+        for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
+            {
+            // get the AABB for particle i in the current periodic image
+            vec3<Scalar> pos_i_image = vec3<Scalar>(postype_i);
+
+            if (i < Nold)
+                pos_i_image += image_list[cur_image];
+            else
+                pos_i_image -= image_list[cur_image];
+
+            AABB aabb_i = aabb_i_local;
+            aabb_i.translate(pos_i_image);
+
+            if (overlap(aabb_i, aabb_j))
+                {
+                // check further for circumsphere overlap
+                vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+
+                OverlapReal rsq = dot(r_ij,r_ij);
+                OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+
+                if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                    {
+                    // write to collision list
+                    unsigned int typ_j = __scalar_as_int(postype_j.w);
+                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+
+                    unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
+                    if (n_overlaps >= max_n_overlaps)
+                        atomicMax(&(*d_conditions).x, n_overlaps+1);
+                    else
+                        {
+                        // write indices to collision list, we'll later convert to tags
+
+                        // .x index: test configuration
+                        // .y index: old configuration
+                        // .z index: image vector from test ptl to ptl from old configuration
+                        unsigned int idx_test = i < Nold ? j : i;
+                        unsigned int idx_old = i < Nold ? i : j;
+                        d_collisions[n_overlaps] = make_uint3(idx_test,idx_old, cur_image);
+                        }
+                    }
+                } // end if AABB overlap
+            } // end loop over images
+        } while (true);
+    }
+
+template<class Shape>
+__global__ void gpu_get_aabb_extents_kernel(
+    unsigned int N,
+    const Scalar4 *d_postype,
+    const typename Shape::param_type *d_params,
+    unsigned int num_types,
+    Scalar *d_begin,
+    Scalar *d_end,
+    vec3<Scalar> sweep_direction,
+    unsigned int *d_aabb_idx)
+    {
+    // load the per type pair parameters into shared memory
+    extern __shared__ char s_data[];
+    typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
+
+    // copy over parameters one int per thread for fast loads
+        {
+        unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
+        unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
+        unsigned int param_size = num_types*sizeof(typename Shape::param_type) / sizeof(int);
+
+        for (unsigned int cur_offset = 0; cur_offset < param_size; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < param_size)
+                {
+                ((int *)s_params)[cur_offset + tidx] = ((int *)d_params)[cur_offset + tidx];
+                }
+            }
+        }
+
+    __syncthreads();
+
+    unsigned int idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (idx >= N)
+        return;
+
+    // get the AABB extents along sweep axis for this particle
+    Scalar4 postype = d_postype[idx];
+    Shape shape(quat<Scalar>(), s_params[__scalar_as_int(postype.w)]);
+    AABB aabb = shape.getAABB(vec3<Scalar>(postype));
+
+    // and write them to global memory
+
+    d_begin[idx] = dot(aabb.getLower(),sweep_direction);
+    d_end[idx] = dot(aabb.getUpper(), sweep_direction);
+
+    // fill index array, to be sorted later
+    d_aabb_idx[idx] = idx;
+    }
 
 //! Kernel driver for gpu_hpmc_clusters_kernel()
 /*! \param args Bundled arguments
@@ -476,6 +707,106 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     assert(args.d_image_test);
     assert(args.d_tag_test);
 
+    // attach the parameters to the kernel stream so that they are visible
+    // when other kernels are called
+    for (unsigned int i = 0; i < args.num_types; ++i)
+        {
+        // attach nested memory regions
+        d_params[i].attach_to_stream(args.stream);
+        }
+    cudaStreamAttachMemAsync(args.stream, d_params, 0, cudaMemAttachSingle);
+
+    #if 1
+
+    // for now, as the sweep direction, choose the x axis
+    vec3<Scalar> sweep_vector(args.box.getLatticeVector(0));
+    Scalar sweep_length = sqrt(dot(sweep_vector,sweep_vector));
+    vec3<Scalar> sweep_direction(sweep_vector/sweep_length);
+    bool periodic = args.box.getPeriodic().x;
+
+    unsigned int shared_bytes_aabb_extents = args.num_types * sizeof(typename Shape::param_type);
+
+    // extract AABB extents for old configuration
+    unsigned int block_size_aabb = 256;
+    unsigned int n_blocks = args.N_old/block_size_aabb+1;
+
+    gpu_get_aabb_extents_kernel<Shape><<<n_blocks, block_size_aabb, shared_bytes_aabb_extents, args.stream>>>(
+        args.N_old,
+        args.d_postype,
+        d_params,
+        args.num_types,
+        args.d_begin,
+        args.d_end,
+        sweep_direction,
+        args.d_aabb_idx);
+
+    // append AABB extents for new configuration
+    block_size_aabb = 256;
+    n_blocks = args.N/block_size_aabb+1;
+
+    gpu_get_aabb_extents_kernel<Shape><<<n_blocks, block_size_aabb, shared_bytes_aabb_extents, args.stream>>>(
+        args.N,
+        args.d_postype_test,
+        d_params,
+        args.num_types,
+        args.d_begin + args.N_old,
+        args.d_end + args.N_old,
+        sweep_direction,
+        args.d_aabb_idx + args.N_old);
+
+    // sort the interval ends and indices (==values) by their beginnings (==keys)
+    thrust::device_ptr<Scalar> begin(args.d_begin);
+    thrust::device_ptr<Scalar> end(args.d_end);
+    thrust::device_ptr<unsigned int> aabb_idx(args.d_aabb_idx);
+
+    // combine the end point and the index in one iterator
+    auto values_it = thrust::make_zip_iterator(thrust::make_tuple(
+        end,
+        aabb_idx));
+
+    thrust::sort_by_key(
+        thrust::cuda::par(args.alloc),
+        begin,
+        begin + args.N_old + args.N,
+        values_it);
+
+    // determine the maximum block size and clamp the input block size down
+    static int max_block_size_sweep_and_prune = -1;
+    static cudaFuncAttributes attr_sweep_and_prune;
+    if (max_block_size_sweep_and_prune == -1)
+        {
+        cudaFuncGetAttributes(&attr_sweep_and_prune, gpu_hpmc_clusters_kernel<Shape>);
+        max_block_size_sweep_and_prune = attr_sweep_and_prune.maxThreadsPerBlock;
+        }
+
+    // setup the grid to run the kernel
+    unsigned int block_size_sweep_and_prune = min(args.block_size, (unsigned int)max_block_size_sweep_and_prune);
+
+    unsigned int shared_bytes_sweep_and_prune = args.num_types * sizeof(typename Shape::param_type)
+        + args.overlap_idx.getNumElements() * sizeof(unsigned int);
+
+    n_blocks = (args.N+args.N_old)/block_size_sweep_and_prune + 1;
+    gpu_sweep_and_prune_kernel<Shape><<<n_blocks, block_size_sweep_and_prune, shared_bytes_sweep_and_prune,args.stream>>>(args.N,
+        args.N_old,
+        args.d_postype_test,
+        args.d_postype,
+        d_params,
+        args.num_types,
+        args.d_begin,
+        args.d_end,
+        args.d_aabb_idx,
+        sweep_length,
+        periodic,
+        args.image_list,
+        args.d_check_overlaps,
+        args.overlap_idx,
+        args.d_collisions,
+        args.max_n_overlaps,
+        args.d_n_overlaps,
+        args.d_conditions);
+
+    #else
+    // AABB tree
     // bind the textures
     clusters_postype_tex.normalized = false;
     clusters_postype_tex.filterMode = cudaFilterModePoint;
@@ -517,12 +848,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
 
     unsigned int shared_bytes_collisions = args.num_types * sizeof(typename Shape::param_type) + args.overlap_idx.getNumElements()*sizeof(unsigned int);
 
-    // narrow phase: check overlaps
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
-
-    int device;
-    cudaGetDevice(&device);
-    cudaMemAdvise(args.aabb_tree.getAABBs().get(), args.aabb_tree.getAABBs().size()*sizeof(detail::AABB), cudaMemAdviseSetReadMostly, device);
 
     // broad phase: detect collisions between circumspheres
     gpu_hpmc_clusters_kernel<Shape><<<grid_collisions, threads_collisions, shared_bytes_collisions, args.stream>>>(
@@ -548,6 +874,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.image_list,
                                                      args.max_n_overlaps,
                                                      args.d_conditions);
+    #endif
 
     return cudaSuccess;
     }
@@ -605,15 +932,6 @@ cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t& args, const t
 
     unsigned int shared_bytes_overlaps = args.num_types * sizeof(typename Shape::param_type);
     unsigned int max_extra_bytes = max(0,(int) (32768 - attr_overlaps.sharedSizeBytes - shared_bytes_overlaps));
-
-    // attach the parameters to the kernel stream so that they are visible
-    // when other kernels are called
-    cudaStreamAttachMemAsync(args.stream, d_params, 0, cudaMemAttachSingle);
-    for (unsigned int i = 0; i < args.num_types; ++i)
-        {
-        // attach nested memory regions
-        d_params[i].attach_to_stream(args.stream);
-        }
 
     // determine dynamically requested shared memory
     char *ptr = (char *)nullptr;

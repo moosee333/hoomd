@@ -74,6 +74,10 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         unsigned int m_n_overlaps_old_new;     //!< Number of overlaps between old and new configuration
         unsigned int m_n_overlaps_new_new;     //!< Number of overlaps between new and new configuration
 
+        GPUVector<Scalar> m_begin;           //!< Starting coordinates of AABBs for sweep and prune
+        GPUVector<Scalar> m_end;             //!< End coordinates of AABBs for sweep and prune
+        GPUVector<unsigned int> m_aabb_idx;  //!< Sorted list of AABB indices
+
         #ifdef NVGRAPH_AVAILABLE
         GPUVector<unsigned int> m_components;  //!< The connected component labels per particle
         #endif
@@ -128,6 +132,11 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_components);
     #endif
 
+    // allocate memory for sweep and prune
+    GPUVector<Scalar>(this->m_exec_conf).swap(m_begin);
+    GPUVector<Scalar>(this->m_exec_conf).swap(m_end);
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_aabb_idx);
+
     m_n_overlaps_old_new = 0;
     m_n_overlaps_new_new = 0;
 
@@ -178,6 +187,12 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
     const BoxDim &box = this->m_pdata->getBox();
 
+    // resize arrays for sweep and prune
+    unsigned int Ntot = this->m_pdata->getN() + this->m_pdata->getNGhosts() + this->m_n_particles_old;
+    m_begin.resize(Ntot);
+    m_end.resize(Ntot);
+    m_aabb_idx.resize(Ntot);
+
     m_new_tag.resize(this->m_n_particles_old);
     assert(m_n_particles_old == map.size());
         {
@@ -220,6 +235,11 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<unsigned int> d_check_overlaps(this->m_mc->getInteractionMatrix(), access_location::device, access_mode::read);
         const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
 
+        // arrays for sweep and prune
+        ArrayHandle<Scalar> d_begin(m_begin, access_location::device, access_mode::overwrite);
+        ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
+
         detail::hpmc_clusters_args_t clusters_args(this->m_n_particles_old,
                                            0, // ncollisions
                                            d_postype.data,
@@ -256,7 +276,13 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            image_list,
                                            image_hkl,
                                            m_stream,
-                                           this->m_exec_conf->dev_prop);
+                                           this->m_exec_conf->dev_prop,
+                                           this->m_exec_conf->getCachedAllocator(),
+                                           this->m_pdata->getN() + this->m_pdata->getNGhosts(),
+                                           d_begin.data,
+                                           d_end.data,
+                                           d_aabb_idx.data
+                                           );
 
         do
             {
@@ -361,6 +387,12 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
 
     if (line && !swap)
         {
+        // resize arrays for sweep and prune
+        unsigned int Ntot = this->m_pdata->getN() + this->m_pdata->getNGhosts() + this->m_pdata->getN();
+        m_begin.resize(Ntot);
+        m_end.resize(Ntot);
+        m_aabb_idx.resize(Ntot);
+
         // with line transformations, check new configuration against itself to detect interactions across PBC
         // append to existing list of overlapping pairs
 
@@ -373,6 +405,11 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         // interaction matrix
         ArrayHandle<unsigned int> d_check_overlaps(this->m_mc->getInteractionMatrix(), access_location::device, access_mode::read);
         const Index2D& overlap_idx = this->m_mc->getOverlapIndexer();
+
+        // arrays for sweep and prune
+        ArrayHandle<Scalar> d_begin(m_begin, access_location::device, access_mode::overwrite);
+        ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
 
         detail::hpmc_clusters_args_t clusters_args(this->m_pdata->getN(),
                                            0, // ncollisions
@@ -410,7 +447,13 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            image_list,
                                            image_hkl,
                                            m_stream,
-                                           this->m_exec_conf->dev_prop);
+                                           this->m_exec_conf->dev_prop,
+                                           this->m_exec_conf->getCachedAllocator(),
+                                           this->m_pdata->getN() + this->m_pdata->getNGhosts(),
+                                           d_begin.data,
+                                           d_end.data,
+                                           d_aabb_idx.data
+                                           );
 
 
         do
