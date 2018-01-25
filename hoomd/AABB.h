@@ -146,6 +146,28 @@ struct AABB
         #endif
         }
 
+    //! Construct an AABB from the given lower and upper corners (given by CUDA data types)
+    /*! \param _lower Lower left corner of the AABB
+        \param _upper Upper right corner of the AABB
+    */
+    HOSTDEVICE AABB(const Scalar4& _lower, const Scalar4& _upper) : tag(0)
+        {
+        #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
+        lower_v = sse_load_vec3_double(_lower);
+        upper_v = sse_load_vec3_double(_upper);
+
+        #elif defined(__SSE__) && defined(SINGLE_PRECISION) && !defined(NVCC)
+        lower_v = sse_load_vec3_float(_lower);
+        upper_v = sse_load_vec3_float(_upper);
+
+        #else
+        lower = vec3<Scalar>(_lower.x,_lower.y,_lower.z);
+        upper = vec3<Scalar>(_upper.x,_upper.y,_upper.z);
+
+        #endif
+        }
+
+
     //! Construct an AABB from a sphere
     /*! \param _position Position of the sphere
         \param radius Radius of the sphere
@@ -341,12 +363,14 @@ HOSTDEVICE inline AABB merge(const AABB& a, const AABB& b)
 
     #else
 
+    #ifndef NVCC
     new_aabb.lower.x = std::min(a.lower.x, b.lower.x);
     new_aabb.lower.y = std::min(a.lower.y, b.lower.y);
     new_aabb.lower.z = std::min(a.lower.z, b.lower.z);
     new_aabb.upper.x = std::max(a.upper.x, b.upper.x);
     new_aabb.upper.y = std::max(a.upper.y, b.upper.y);
     new_aabb.upper.z = std::max(a.upper.z, b.upper.z);
+    #endif
 
     #endif
 
@@ -450,26 +474,26 @@ __device__ inline void AtomicMin(double * const address, const double value)
     }
 
 //! Merge two AABBs into a third one, atomic version
-/*! \param aabb the AABB to modify
+/*! \param aabb_lower lower corner of the AABB to modify
+    \param aabb_upper upper corner of the AABB to modify
     \param a First AABB
     \param b Second AABB
-    \returns A new AABB that encloses *a* and *b*
 */
-HOSTDEVICE inline void atomicMerge(AABB& aabb, const AABB& a, const AABB& b)
+HOSTDEVICE inline void atomicMerge(Scalar4& aabb_lower, Scalar4& aabb_upper, const AABB& a, const AABB& b)
     {
-    AtomicMin(&aabb.lower.x, a.lower.x);
-    AtomicMin(&aabb.lower.x, b.lower.x);
-    AtomicMin(&aabb.lower.y, a.lower.y);
-    AtomicMin(&aabb.lower.y, b.lower.y);
-    AtomicMin(&aabb.lower.z, a.lower.z);
-    AtomicMin(&aabb.lower.z, b.lower.z);
+    AtomicMin(&aabb_lower.x, a.lower.x);
+    AtomicMin(&aabb_lower.x, b.lower.x);
+    AtomicMin(&aabb_lower.y, a.lower.y);
+    AtomicMin(&aabb_lower.y, b.lower.y);
+    AtomicMin(&aabb_lower.z, a.lower.z);
+    AtomicMin(&aabb_lower.z, b.lower.z);
 
-    AtomicMax(&aabb.upper.x, a.upper.x);
-    AtomicMax(&aabb.upper.x, b.upper.x);
-    AtomicMax(&aabb.upper.y, a.upper.y);
-    AtomicMax(&aabb.upper.y, b.upper.y);
-    AtomicMax(&aabb.upper.z, a.upper.z);
-    AtomicMax(&aabb.upper.z, b.upper.z);
+    AtomicMax(&aabb_upper.x, a.upper.x);
+    AtomicMax(&aabb_upper.x, b.upper.x);
+    AtomicMax(&aabb_upper.y, a.upper.y);
+    AtomicMax(&aabb_upper.y, b.upper.y);
+    AtomicMax(&aabb_upper.z, a.upper.z);
+    AtomicMax(&aabb_upper.z, b.upper.z);
     }
 #endif // __CUDA_ARCH__
 
