@@ -146,9 +146,9 @@ class AABBTree
         //! Get the AABB of a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        HOSTDEVICE inline AABB getNodeAABB(unsigned int node) const
+        HOSTDEVICE inline const AABB& getNodeAABB(unsigned int node) const
             {
-            return AABB(m_aabbs_lower[node],m_aabbs_upper[node]);
+            return (m_aabbs[node]);
             }
 
         //! Get the skip of a given node
@@ -193,20 +193,14 @@ class AABBTree
             }
 
         //! Return a handle to the nodes array
-        HOSTDEVICE inline const ManagedArray<Scalar4>& getAABBsLower() const
+        HOSTDEVICE inline const ManagedArray<AABB>& getAABBs() const
             {
-            return m_aabbs_lower;
-            }
-
-        HOSTDEVICE inline const ManagedArray<Scalar4>& getAABBsUpper() const
-            {
-            return m_aabbs_upper;
+            return m_aabbs;
             }
 
     private:
         ManagedArray<AABBNode> m_nodes;     //!< The nodes of the tree
-        ManagedArray<Scalar4> m_aabbs_lower;//!< The AABBs of the tree, lower corners
-        ManagedArray<Scalar4> m_aabbs_upper;//!< The AABBs of the tree, upper corners
+        ManagedArray<AABB> m_aabbs;         //!< The AABBs of the tree
         unsigned int m_num_nodes;           //!< Number of nodes
         unsigned int m_node_capacity;       //!< Capacity of the nodes array
         unsigned int m_root;                //!< Index to the root node of the tree
@@ -261,15 +255,14 @@ inline unsigned int AABBTree::query(std::vector<unsigned int>& hits, const AABB&
 
     // avoid pointer indirection overhead of std::vector
     const AABBNode* nodes = m_nodes.get();
-    const Scalar4* aabbs_lower = m_aabbs_lower.get();
-    const Scalar4* aabbs_upper = m_aabbs_upper.get();
+    const AABB* aabbs = m_aabbs.get();
 
     // stackless search
     for (unsigned int current_node_idx = 0; current_node_idx < m_num_nodes; current_node_idx++)
         {
         // cache current node pointer
         const AABBNode& current_node = nodes[current_node_idx];
-        const AABB& current_aabb = AABB(aabbs_lower[current_node_idx], aabbs_upper[current_node_idx]);
+        const AABB& current_aabb = aabbs[current_node_idx];
 
         box_overlap_counts++;
         if (overlap(current_aabb, aabb))
@@ -306,14 +299,12 @@ HOSTDEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
     assert(node_idx != INVALID_NODE);
 
     // grow its AABB if needed
-    if (!contains(getNodeAABB(node_idx), aabb))
+    if (!contains(m_aabbs[node_idx], aabb))
         {
         #if __CUDA_ARCH__
-        atomicMerge(m_aabbs_lower[node_idx], m_aabbs_upper[node_idx], getNodeAABB(node_idx), aabb);
+        atomicMerge(m_aabbs[node_idx], m_aabbs[node_idx], aabb);
         #else
-        AABB new_aabb = merge(getNodeAABB(node_idx), aabb);
-        m_aabbs_lower[node_idx] = make_scalar4(new_aabb.getLower().x, new_aabb.getLower().y, new_aabb.getLower().z,0);
-        m_aabbs_upper[node_idx] = make_scalar4(new_aabb.getLower().x, new_aabb.getLower().y, new_aabb.getLower().z,0);
+        m_aabbs[node_idx] = merge(m_aabbs[node_idx], aabb);
         #endif
 
         // update all parent node AABBs
@@ -324,11 +315,9 @@ HOSTDEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
             unsigned int right_idx = m_nodes[current_node].right;
 
             #if __CUDA_ARCH__
-            atomicMerge(m_aabbs_lower[current_node], m_aabbs_upper[current_node], getNodeAABB(left_idx), getNodeAABB(right_idx));
+            atomicMerge(m_aabbs[current_node], m_aabbs[left_idx], m_aabbs[right_idx]);
             #else
-            AABB new_aabb = merge(getNodeAABB(left_idx), getNodeAABB(right_idx));
-            m_aabbs_lower[current_node] = make_scalar4(new_aabb.getLower().x, new_aabb.getLower().y, new_aabb.getLower().z,0);
-            m_aabbs_upper[current_node] = make_scalar4(new_aabb.getLower().x, new_aabb.getLower().y, new_aabb.getLower().z,0);
+            m_aabbs[current_node] = merge(m_aabbs[left_idx], m_aabbs[right_idx]);
             #endif
 
             current_node = m_nodes[current_node].parent;
@@ -414,8 +403,7 @@ inline unsigned int AABBTree::buildNode(AABB *aabbs,
     if (len <= NODE_CAPACITY)
         {
         unsigned int new_node = allocateNode();
-        m_aabbs_lower[new_node] = make_scalar4(my_aabb.getLower().x, my_aabb.getLower().y, my_aabb.getLower().z,0);
-        m_aabbs_upper[new_node] = make_scalar4(my_aabb.getUpper().x, my_aabb.getUpper().y, my_aabb.getUpper().z,0);
+        m_aabbs[new_node] = my_aabb;
         m_nodes[new_node].parent = parent;
         m_nodes[new_node].num_particles = len;
 
@@ -527,8 +515,7 @@ inline unsigned int AABBTree::buildNode(AABB *aabbs,
     unsigned int new_right = buildNode(aabbs, idx, start+start_right, len-start_right, my_idx);
 
     // now, create the children and connect them up
-    m_aabbs_lower[my_idx] = make_scalar4(my_aabb.getLower().x, my_aabb.getLower().y, my_aabb.getLower().z,0);
-    m_aabbs_upper[my_idx] = make_scalar4(my_aabb.getUpper().x, my_aabb.getUpper().y, my_aabb.getUpper().z,0);
+    m_aabbs[my_idx] = my_aabb;
     m_nodes[my_idx].parent = parent;
     m_nodes[my_idx].left = new_left;
     m_nodes[my_idx].right = new_right;
@@ -576,20 +563,17 @@ inline unsigned int AABBTree::allocateNode()
 
         // allocate new memory
         ManagedArray<AABBNode> m_new_nodes(m_new_node_capacity, m_managed);
-        ManagedArray<Scalar4> m_new_aabbs_lower(m_new_node_capacity, m_managed);
-        ManagedArray<Scalar4> m_new_aabbs_upper(m_new_node_capacity, m_managed);
+        ManagedArray<AABB> m_new_aabbs(m_new_node_capacity, m_managed);
 
         // if we have old memory, copy it over
         if (m_nodes.size())
             {
             memcpy(m_new_nodes.get(), m_nodes.get(), sizeof(AABBNode)*m_num_nodes);
-            memcpy(m_new_aabbs_lower.get(), m_aabbs_lower.get(), sizeof(Scalar4)*m_num_nodes);
-            memcpy(m_new_aabbs_upper.get(), m_aabbs_upper.get(), sizeof(Scalar4)*m_num_nodes);
+            memcpy(m_new_aabbs.get(), m_aabbs.get(), sizeof(AABB)*m_num_nodes);
             }
 
         m_nodes = m_new_nodes;
-        m_aabbs_lower = m_new_aabbs_lower;
-        m_aabbs_upper = m_new_aabbs_upper;
+        m_aabbs = m_new_aabbs;
         m_node_capacity = m_new_node_capacity;
         }
 
