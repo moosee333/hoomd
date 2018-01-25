@@ -470,12 +470,14 @@ void ParticleData::resize(unsigned int new_nparticles)
     {
     // do nothing if zero size is requested
 
-    /*
-       this assumes that no code makes attempts at reading particle data from non-existing arrays when
-       the number of particles on a rank is zero
-     */
     if (new_nparticles == 0)
+        {
+        // gurantee that arrays are allocated
+        if (! m_arrays_allocated)
+            allocate(1);
+        m_nparticles = new_nparticles;
         return;
+        }
 
     // allocate as necessary
     if (! m_arrays_allocated)
@@ -3344,4 +3346,4 @@ void export_SnapshotParticleData(py::module& m)
     .def("insert", &SnapshotParticleData<double>::insert)
     .def_readonly("is_accel_set", &SnapshotParticleData<double>::is_accel_set)
     ;
-    }
+   }
