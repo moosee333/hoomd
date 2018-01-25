@@ -200,6 +200,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      bool line,
                                      bool swap,
                                      const AABBTree aabb_tree,
+                                     unsigned int max_aabb_prefetch_bytes,
                                      const ManagedArray<vec3<Scalar> > image_list,
                                      unsigned int max_n_overlaps,
                                      uint2 *d_conditions)
@@ -212,6 +213,11 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     unsigned int *s_check_overlaps = (unsigned int *) (s_params + num_types);
     unsigned int ntyppairs = overlap_idx.getNumElements();
+
+    // obtain a pointer to the managed memory holding the AABB nodes
+    const AABB *d_aabbs = aabb_tree.getAABBs().get();
+    unsigned int n_aabb_prefetch = max_aabb_prefetch_bytes / sizeof(AABB);
+    AABB *s_aabbs = (AABB *) (s_check_overlaps + ntyppairs);
 
     // copy over parameters one int per thread for fast loads
         {
@@ -234,6 +240,15 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                 s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
                 }
             }
+
+        unsigned int n_aabb_prefetch_size = n_aabb_prefetch*sizeof(AABB)/sizeof(int);
+        for (unsigned int cur_offset = 0; cur_offset < n_aabb_prefetch_size; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < n_aabb_prefetch_size)
+                {
+                ((int *)s_aabbs)[cur_offset + tidx] = ((int *) d_aabbs)[cur_offset + tidx];
+                }
+            }
         }
 
     __syncthreads();
@@ -254,9 +269,6 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
     unsigned int n_images = image_list.size();
 
-    // obtain a pointer to the managed memory holding the AABB nodes
-    const AABB *aabbs = aabb_tree.getAABBs().get();
-
     for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
         {
         vec3<Scalar> pos_image = pos_i + image_list[cur_image];
@@ -265,7 +277,9 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
         for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes; ++cur_node_idx)
             {
-            if (detail::overlap(aabbs[cur_node_idx], aabb))
+            const AABB &node_aabb = cur_node_idx < n_aabb_prefetch ? s_aabbs[cur_node_idx] : d_aabbs[cur_node_idx];
+
+            if (detail::overlap(node_aabb, aabb))
                 {
                 if (aabb_tree.isNodeLeaf(cur_node_idx))
                     {
@@ -520,9 +534,9 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     // narrow phase: check overlaps
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
 
-    int device;
-    cudaGetDevice(&device);
-    cudaMemAdvise(args.aabb_tree.getAABBs().get(), args.aabb_tree.getAABBs().size()*sizeof(detail::AABB), cudaMemAdviseSetReadMostly, device);
+    unsigned int max_aabb_bytes = max(0,(int) (1024 - attr_collisions.sharedSizeBytes - shared_bytes_collisions));
+
+    shared_bytes_collisions += max_aabb_bytes;
 
     // broad phase: detect collisions between circumspheres
     gpu_hpmc_clusters_kernel<Shape><<<grid_collisions, threads_collisions, shared_bytes_collisions, args.stream>>>(
@@ -545,6 +559,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.line,
                                                      args.swap,
                                                      args.aabb_tree,
+                                                     max_aabb_bytes,
                                                      args.image_list,
                                                      args.max_n_overlaps,
                                                      args.d_conditions);
