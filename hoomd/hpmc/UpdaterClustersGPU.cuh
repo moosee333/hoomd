@@ -474,6 +474,8 @@ __global__ void gpu_sweep_and_prune_kernel(
     unsigned int Nold,
     const Scalar4 *d_postype,
     const Scalar4 *d_postype_old,
+    const unsigned int *d_tag,
+    const unsigned int *d_tag_old,
     const typename Shape::param_type *d_params,
     unsigned int num_types,
     const Scalar *d_begin,
@@ -493,7 +495,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     // load the per type pair parameters into shared memory
     extern __shared__ char s_data[];
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
-    unsigned int *s_check_overlaps = (unsigned int *)(s_params + num_types*sizeof(typename Shape::param_type));
+    unsigned int *s_check_overlaps = (unsigned int *)(s_params + num_types);
 
     // copy over parameters one int per thread for fast loads
         {
@@ -537,6 +539,7 @@ __global__ void gpu_sweep_and_prune_kernel(
 
     // the coordinates of particle i belonging to our interval
     Scalar4 postype_i = (i < Nold) ? d_postype_old[i] : d_postype[i - Nold];
+    unsigned int tag_i = (i < Nold) ? d_tag_old[i] : d_tag[i - Nold];
     unsigned int typ_i = __scalar_as_int(postype_i.w);
     Shape shape_i(quat<Scalar>(), s_params[typ_i]);
     AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
@@ -545,7 +548,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     do
         {
         interval_j++;
-        if (interval_j >= N+Nold)
+        if (interval_j == N+Nold)
             {
             if (periodic)
                 {
@@ -574,7 +577,11 @@ __global__ void gpu_sweep_and_prune_kernel(
             continue;
 
         Scalar4 postype_j = (j < Nold) ? d_postype_old[j] : d_postype[j - Nold];
+        unsigned int tag_j = (j < Nold) ? d_tag_old[j] : d_tag[j - Nold];
         unsigned int typ_j = __scalar_as_int(postype_j.w);
+
+        if (tag_i == tag_j)
+            continue;
 
         Shape shape_j(quat<Scalar>(), s_params[typ_j]);
         AABB aabb_j = shape_j.getAABB(vec3<Scalar>(postype_j));
@@ -591,9 +598,9 @@ __global__ void gpu_sweep_and_prune_kernel(
             vec3<Scalar> pos_i_image = vec3<Scalar>(postype_i);
 
             if (i < Nold)
-                pos_i_image += image_list[cur_image];
-            else
                 pos_i_image -= image_list[cur_image];
+            else
+                pos_i_image += image_list[cur_image];
 
             AABB aabb_i = aabb_i_local;
             aabb_i.translate(pos_i_image);
@@ -609,9 +616,6 @@ __global__ void gpu_sweep_and_prune_kernel(
                 if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
                     {
                     // write to collision list
-                    unsigned int typ_j = __scalar_as_int(postype_j.w);
-                    vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
-
                     unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
                     if (n_overlaps >= max_n_overlaps)
                         atomicMax(&(*d_conditions).x, n_overlaps+1);
@@ -622,7 +626,7 @@ __global__ void gpu_sweep_and_prune_kernel(
                         // .x index: test configuration
                         // .y index: old configuration
                         // .z index: image vector from test ptl to ptl from old configuration
-                        unsigned int idx_test = i < Nold ? j : i;
+                        unsigned int idx_test = i < Nold ? j - Nold : i - Nold;
                         unsigned int idx_old = i < Nold ? i : j;
                         d_collisions[n_overlaps] = make_uint3(idx_test,idx_old, cur_image);
                         }
@@ -641,6 +645,9 @@ __global__ void gpu_get_aabb_extents_kernel(
     Scalar *d_begin,
     Scalar *d_end,
     vec3<Scalar> sweep_direction,
+    Scalar sweep_length,
+    const BoxDim box,
+    unsigned int offs,
     unsigned int *d_aabb_idx)
     {
     // load the per type pair parameters into shared memory
@@ -676,11 +683,24 @@ __global__ void gpu_get_aabb_extents_kernel(
 
     // and write them to global memory
 
-    d_begin[idx] = dot(aabb.getLower(),sweep_direction);
-    d_end[idx] = dot(aabb.getUpper(), sweep_direction);
+    vec3<Scalar> lower = aabb.getLower();
+    vec3<Scalar> upper = aabb.getUpper();
+
+    Scalar begin = dot(lower, sweep_direction);
+    Scalar end = dot(upper, sweep_direction);
+
+    Scalar3 f = box.makeFraction(vec_to_scalar3(lower));
+    if (box.getPeriodic().x && f.x < 0.0)
+        {
+        begin += sweep_length;
+        end += sweep_length;
+        }
+
+    d_begin[idx] = begin;
+    d_end[idx] = end;
 
     // fill index array, to be sorted later
-    d_aabb_idx[idx] = idx;
+    d_aabb_idx[idx] = offs+idx;
     }
 
 //! Kernel driver for gpu_hpmc_clusters_kernel()
@@ -720,8 +740,8 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
 
     // for now, as the sweep direction, choose the x axis
     vec3<Scalar> sweep_vector(args.box.getLatticeVector(0));
-    Scalar sweep_length = sqrt(dot(sweep_vector,sweep_vector));
-    vec3<Scalar> sweep_direction(sweep_vector/sweep_length);
+    Scalar sweep_length = args.box.getNearestPlaneDistance().x;
+    vec3<Scalar> sweep_direction(sweep_vector/sqrt(dot(sweep_vector,sweep_vector)));
     bool periodic = args.box.getPeriodic().x;
 
     unsigned int shared_bytes_aabb_extents = args.num_types * sizeof(typename Shape::param_type);
@@ -738,6 +758,9 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         args.d_begin,
         args.d_end,
         sweep_direction,
+        sweep_length,
+        args.box,
+        0,
         args.d_aabb_idx);
 
     // append AABB extents for new configuration
@@ -752,6 +775,9 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         args.d_begin + args.N_old,
         args.d_end + args.N_old,
         sweep_direction,
+        sweep_length,
+        args.box,
+        args.N_old,
         args.d_aabb_idx + args.N_old);
 
     // sort the interval ends and indices (==values) by their beginnings (==keys)
@@ -775,7 +801,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     static cudaFuncAttributes attr_sweep_and_prune;
     if (max_block_size_sweep_and_prune == -1)
         {
-        cudaFuncGetAttributes(&attr_sweep_and_prune, gpu_hpmc_clusters_kernel<Shape>);
+        cudaFuncGetAttributes(&attr_sweep_and_prune, gpu_sweep_and_prune_kernel<Shape>);
         max_block_size_sweep_and_prune = attr_sweep_and_prune.maxThreadsPerBlock;
         }
 
@@ -785,11 +811,15 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     unsigned int shared_bytes_sweep_and_prune = args.num_types * sizeof(typename Shape::param_type)
         + args.overlap_idx.getNumElements() * sizeof(unsigned int);
 
+    cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
+
     n_blocks = (args.N+args.N_old)/block_size_sweep_and_prune + 1;
     gpu_sweep_and_prune_kernel<Shape><<<n_blocks, block_size_sweep_and_prune, shared_bytes_sweep_and_prune,args.stream>>>(args.N,
         args.N_old,
         args.d_postype_test,
         args.d_postype,
+        args.d_tag_test,
+        args.d_tag,
         d_params,
         args.num_types,
         args.d_begin,
