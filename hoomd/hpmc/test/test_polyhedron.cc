@@ -73,15 +73,12 @@ GPUTree build_tree(poly3d_data &data)
 
 void initialize_convex_hull(poly3d_data &data)
     {
-    auto x_handle = data.convex_hull_verts.x.requestWriteAccess();
-    auto y_handle = data.convex_hull_verts.y.requestWriteAccess();
-    auto z_handle = data.convex_hull_verts.z.requestWriteAccess();
     // for simplicity, use all vertices instead of convex hull
     for (unsigned int i = 0; i < data.n_verts; ++i)
         {
-        x_handle[i] = data.verts[i].x;
-        y_handle[i] = data.verts[i].y;
-        z_handle[i] = data.verts[i].z;
+        data.convex_hull_verts.x[i] = data.verts[i].x;
+        data.convex_hull_verts.y[i] = data.verts[i].y;
+        data.convex_hull_verts.z[i] = data.verts[i].z;
         }
     }
 
@@ -91,19 +88,16 @@ UP_TEST( construction )
 
     poly3d_data data(4,1,4,4,false);
     data.sweep_radius=data.convex_hull_verts.sweep_radius=0.0f;
-    auto verts_handle = data.verts.requestWriteAccess();
-    auto face_verts_handle = data.face_verts.requestWriteAccess();
-    auto face_offs_handle = data.face_offs.requestWriteAccess();
-    verts_handle[0] = vec3<OverlapReal>(0,0,0);
-    verts_handle[1] = vec3<OverlapReal>(1,0,0);
-    verts_handle[2] = vec3<OverlapReal>(0,1.25,0);
-    verts_handle[3] = vec3<OverlapReal>(0,0,1.1);
-    face_verts_handle[0] = 0;
-    face_verts_handle[1] = 1;
-    face_verts_handle[2] = 2;
-    face_verts_handle[3] = 3;
-    face_offs_handle[0] = 0;
-    face_offs_handle[1] = 4;
+    data.verts[0] = vec3<OverlapReal>(0,0,0);
+    data.verts[1] = vec3<OverlapReal>(1,0,0);
+    data.verts[2] = vec3<OverlapReal>(0,1.25,0);
+    data.verts[3] = vec3<OverlapReal>(0,0,1.1);
+    data.face_verts[0] = 0;
+    data.face_verts[1] = 1;
+    data.face_verts[2] = 2;
+    data.face_verts[3] = 3;
+    data.face_offs[0] = 0;
+    data.face_offs[1] = 4;
     data.ignore = 0;
     set_radius(data);
     initialize_convex_hull(data);
@@ -151,33 +145,29 @@ UP_TEST( overlap_octahedron_no_rot )
     poly3d_data data(6,8,24,6,false);
     data.sweep_radius=data.convex_hull_verts.sweep_radius=0.0f;
 
-    auto verts_handle = data.verts.requestWriteAccess();
-    auto face_verts_handle = data.face_verts.requestWriteAccess();
-    auto face_offs_handle = data.face_offs.requestWriteAccess();
-
-    verts_handle[0] = vec3<OverlapReal>(-0.5,-0.5,0);
-    verts_handle[1] = vec3<OverlapReal>(0.5,-0.5,0);
-    verts_handle[2] = vec3<OverlapReal>(0.5,0.5,0);
-    verts_handle[3] = vec3<OverlapReal>(-0.5,0.5,0);
-    verts_handle[4] = vec3<OverlapReal>(0,0,0.707106781186548);
-    verts_handle[5] = vec3<OverlapReal>(0,0,-0.707106781186548);
-    face_offs_handle[0] = 0;
-    face_verts_handle[0] = 0; face_verts_handle[1] = 4; face_verts_handle[2] = 1;
-    face_offs_handle[1] = 3;
-    face_verts_handle[3] = 1; face_verts_handle[4] = 4; face_verts_handle[5] = 2;
-    face_offs_handle[2] = 6;
-    face_verts_handle[6] = 2; face_verts_handle[7] = 4; face_verts_handle[8] = 3;
-    face_offs_handle[3] = 9;
-    face_verts_handle[9] = 3; face_verts_handle[10] = 4; face_verts_handle[11] = 0;
-    face_offs_handle[4] = 12;
-    face_verts_handle[12] = 0; face_verts_handle[13] = 5; face_verts_handle[14] = 1;
-    face_offs_handle[5] = 15;
-    face_verts_handle[15] = 1; face_verts_handle[16] = 5; face_verts_handle[17] = 2;
-    face_offs_handle[6] = 18;
-    face_verts_handle[18] = 2; face_verts_handle[19] = 5; face_verts_handle[20] = 3;
-    face_offs_handle[7] = 21;
-    face_verts_handle[21] = 3; face_verts_handle[22] = 5; face_verts_handle[23] = 0;
-    face_offs_handle[8] = 24;
+    data.verts[0] = vec3<OverlapReal>(-0.5,-0.5,0);
+    data.verts[1] = vec3<OverlapReal>(0.5,-0.5,0);
+    data.verts[2] = vec3<OverlapReal>(0.5,0.5,0);
+    data.verts[3] = vec3<OverlapReal>(-0.5,0.5,0);
+    data.verts[4] = vec3<OverlapReal>(0,0,0.707106781186548);
+    data.verts[5] = vec3<OverlapReal>(0,0,-0.707106781186548);
+    data.face_offs[0] = 0;
+    data.face_verts[0] = 0; data.face_verts[1] = 4; data.face_verts[2] = 1;
+    data.face_offs[1] = 3;
+    data.face_verts[3] = 1; data.face_verts[4] = 4; data.face_verts[5] = 2;
+    data.face_offs[2] = 6;
+    data.face_verts[6] = 2; data.face_verts[7] = 4; data.face_verts[8] = 3;
+    data.face_offs[3] = 9;
+    data.face_verts[9] = 3; data.face_verts[10] = 4; data.face_verts[11] = 0;
+    data.face_offs[4] = 12;
+    data.face_verts[12] = 0; data.face_verts[13] = 5; data.face_verts[14] = 1;
+    data.face_offs[5] = 15;
+    data.face_verts[15] = 1; data.face_verts[16] = 5; data.face_verts[17] = 2;
+    data.face_offs[6] = 18;
+    data.face_verts[18] = 2; data.face_verts[19] = 5; data.face_verts[20] = 3;
+    data.face_offs[7] = 21;
+    data.face_verts[21] = 3; data.face_verts[22] = 5; data.face_verts[23] = 0;
+    data.face_offs[8] = 24;
     data.ignore = 0;
     set_radius(data);
     initialize_convex_hull(data);
@@ -268,34 +258,29 @@ UP_TEST( overlap_sphero_octahedron_no_rot )
     poly3d_data data(6,8,24,6,false);
     data.sweep_radius=data.convex_hull_verts.sweep_radius=0.1f;
 
-    auto verts_handle = data.verts.requestWriteAccess();
-    auto face_verts_handle = data.face_verts.requestWriteAccess();
-    auto face_offs_handle = data.face_offs.requestWriteAccess();
-
-
-    verts_handle[0] = vec3<OverlapReal>(-0.5,-0.5,0);
-    verts_handle[1] = vec3<OverlapReal>(0.5,-0.5,0);
-    verts_handle[2] = vec3<OverlapReal>(0.5,0.5,0);
-    verts_handle[3] = vec3<OverlapReal>(-0.5,0.5,0);
-    verts_handle[4] = vec3<OverlapReal>(0,0,0.707106781186548);
-    verts_handle[5] = vec3<OverlapReal>(0,0,-0.707106781186548);
-    face_offs_handle[0] = 0;
-    face_verts_handle[0] = 0; face_verts_handle[1] = 4; face_verts_handle[2] = 1;
-    face_offs_handle[1] = 3;
-    face_verts_handle[3] = 1; face_verts_handle[4] = 4; face_verts_handle[5] = 2;
-    face_offs_handle[2] = 6;
-    face_verts_handle[6] = 2; face_verts_handle[7] = 4; face_verts_handle[8] = 3;
-    face_offs_handle[3] = 9;
-    face_verts_handle[9] = 3; face_verts_handle[10] = 4; face_verts_handle[11] = 0;
-    face_offs_handle[4] = 12;
-    face_verts_handle[12] = 0; face_verts_handle[13] = 5; face_verts_handle[14] = 1;
-    face_offs_handle[5] = 15;
-    face_verts_handle[15] = 1; face_verts_handle[16] = 5; face_verts_handle[17] = 2;
-    face_offs_handle[6] = 18;
-    face_verts_handle[18] = 2; face_verts_handle[19] = 5; face_verts_handle[20] = 3;
-    face_offs_handle[7] = 21;
-    face_verts_handle[21] = 3; face_verts_handle[22] = 5; face_verts_handle[23] = 0;
-    face_offs_handle[8] = 24;
+    data.verts[0] = vec3<OverlapReal>(-0.5,-0.5,0);
+    data.verts[1] = vec3<OverlapReal>(0.5,-0.5,0);
+    data.verts[2] = vec3<OverlapReal>(0.5,0.5,0);
+    data.verts[3] = vec3<OverlapReal>(-0.5,0.5,0);
+    data.verts[4] = vec3<OverlapReal>(0,0,0.707106781186548);
+    data.verts[5] = vec3<OverlapReal>(0,0,-0.707106781186548);
+    data.face_offs[0] = 0;
+    data.face_verts[0] = 0; data.face_verts[1] = 4; data.face_verts[2] = 1;
+    data.face_offs[1] = 3;
+    data.face_verts[3] = 1; data.face_verts[4] = 4; data.face_verts[5] = 2;
+    data.face_offs[2] = 6;
+    data.face_verts[6] = 2; data.face_verts[7] = 4; data.face_verts[8] = 3;
+    data.face_offs[3] = 9;
+    data.face_verts[9] = 3; data.face_verts[10] = 4; data.face_verts[11] = 0;
+    data.face_offs[4] = 12;
+    data.face_verts[12] = 0; data.face_verts[13] = 5; data.face_verts[14] = 1;
+    data.face_offs[5] = 15;
+    data.face_verts[15] = 1; data.face_verts[16] = 5; data.face_verts[17] = 2;
+    data.face_offs[6] = 18;
+    data.face_verts[18] = 2; data.face_verts[19] = 5; data.face_verts[20] = 3;
+    data.face_offs[7] = 21;
+    data.face_verts[21] = 3; data.face_verts[22] = 5; data.face_verts[23] = 0;
+    data.face_offs[8] = 24;
     data.ignore = 0;
     set_radius(data);
     initialize_convex_hull(data);
@@ -379,3 +364,103 @@ UP_TEST( overlap_sphero_octahedron_no_rot )
     UP_ASSERT(!test_overlap(-r_ij,b,a,err_count));
     }
 
+
+UP_TEST( overlap_octahedron_sphere )
+    {
+    // an octahedron and a sphere
+    vec3<Scalar> r_ij;
+    quat<Scalar> o;
+    BoxDim box(100);
+
+    // build an octahedron
+    poly3d_data data_a(6,8,24,6,false);
+
+    memset((void *)&data_a.verts[0], 0, sizeof(vec3<OverlapReal>)*6);
+    memset((void*)&data_a.face_offs[0], 0, sizeof(unsigned int)*9);
+    memset((void*)&data_a.face_verts[0], 0, sizeof(unsigned int)*24);
+
+    data_a.sweep_radius=data_a.convex_hull_verts.sweep_radius=0.0f;
+
+    data_a.verts[0] = vec3<OverlapReal>(-0.5,-0.5,0);
+    data_a.verts[1] = vec3<OverlapReal>(0.5,-0.5,0);
+    data_a.verts[2] = vec3<OverlapReal>(0.5,0.5,0);
+    data_a.verts[3] = vec3<OverlapReal>(-0.5,0.5,0);
+    data_a.verts[4] = vec3<OverlapReal>(0,0,0.707106781186548);
+    data_a.verts[5] = vec3<OverlapReal>(0,0,-0.707106781186548);
+    data_a.face_offs[0] = 0;
+    data_a.face_verts[0] = 0; data_a.face_verts[1] = 4; data_a.face_verts[2] = 1;
+    data_a.face_offs[1] = 3;
+    data_a.face_verts[3] = 1; data_a.face_verts[4] = 4; data_a.face_verts[5] = 2;
+    data_a.face_offs[2] = 6;
+    data_a.face_verts[6] = 2; data_a.face_verts[7] = 4; data_a.face_verts[8] = 3;
+    data_a.face_offs[3] = 9;
+    data_a.face_verts[9] = 3; data_a.face_verts[10] = 4; data_a.face_verts[11] = 0;
+    data_a.face_offs[4] = 12;
+    data_a.face_verts[12] = 0; data_a.face_verts[13] = 5; data_a.face_verts[14] = 1;
+    data_a.face_offs[5] = 15;
+    data_a.face_verts[15] = 1; data_a.face_verts[16] = 5; data_a.face_verts[17] = 2;
+    data_a.face_offs[6] = 18;
+    data_a.face_verts[18] = 2; data_a.face_verts[19] = 5; data_a.face_verts[20] = 3;
+    data_a.face_offs[7] = 21;
+    data_a.face_verts[21] = 3; data_a.face_verts[22] = 5; data_a.face_verts[23] = 0;
+    data_a.face_offs[8] = 24;
+    data_a.ignore = 0;
+    set_radius(data_a);
+    initialize_convex_hull(data_a);
+
+    poly3d_data data_b(1,1,1,1,false);
+
+    memset((void *)&data_a.verts[0], 0, sizeof(vec3<OverlapReal>)*1);
+    memset((void*)&data_a.face_offs[0], 0, sizeof(unsigned int)*1);
+    memset((void*)&data_a.face_verts[0], 0, sizeof(unsigned int)*1);
+
+    data_b.sweep_radius=data_b.convex_hull_verts.sweep_radius=0.5f;
+    data_b.verts[0] = vec3<OverlapReal>(0,0,0);
+    data_b.face_offs[0] = 0;
+    data_b.face_verts[0] = 0;
+    data_b.face_offs[1] = 1;
+    data_b.ignore = 0;
+    set_radius(data_b);
+
+    ShapePolyhedron::param_type octahedron_p = data_a;
+    octahedron_p.tree = build_tree(data_a);
+    ShapePolyhedron a(o, octahedron_p);
+
+    ShapePolyhedron::param_type sphere_p = data_b;
+    sphere_p.tree = build_tree(data_b);
+    ShapePolyhedron b(o, sphere_p);
+
+    // not overlapping
+    r_ij =  vec3<Scalar>(2.0,0,0);
+    UP_ASSERT(!test_overlap(r_ij,a,b,err_count));
+    UP_ASSERT(!test_overlap(-r_ij,b,a,err_count));
+
+    // not touching
+    r_ij =  vec3<Scalar>(1.0001,0,0);
+    UP_ASSERT(!test_overlap(r_ij,a,b,err_count));
+    UP_ASSERT(!test_overlap(-r_ij,b,a,err_count));
+
+    // touching
+    r_ij =  vec3<Scalar>(0.9999,0,0);
+    UP_ASSERT(test_overlap(r_ij,a,b,err_count));
+    UP_ASSERT(test_overlap(-r_ij,b,a,err_count));
+
+    // partially overlapping
+    r_ij =  vec3<Scalar>(0.5,0,0);
+    UP_ASSERT(test_overlap(r_ij,a,b,err_count));
+    UP_ASSERT(test_overlap(-r_ij,b,a,err_count));
+
+    // contained
+    r_ij =  vec3<Scalar>(0,0,0);
+    UP_ASSERT(test_overlap(r_ij,a,b,err_count));
+    UP_ASSERT(test_overlap(-r_ij,b,a,err_count));
+
+    // sphere below octahedron
+    r_ij =  vec3<Scalar>(0.0,0.0,-1.0/sqrt(2)-0.5-0.0001);
+    UP_ASSERT(!test_overlap(r_ij,a,b,err_count));
+    UP_ASSERT(!test_overlap(-r_ij,b,a,err_count));
+
+    r_ij =  vec3<Scalar>(0.0,0.0,-1.0/sqrt(2)-0.5+0.0001);
+    UP_ASSERT(test_overlap(r_ij,a,b,err_count));
+    UP_ASSERT(test_overlap(-r_ij,b,a,err_count));
+    }

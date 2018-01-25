@@ -30,22 +30,19 @@ poly3d_verts setup_verts(const vector< vec3<OverlapReal> > vlist)
 
     // extract the verts from the python list and compute the radius on the way
     OverlapReal radius_sq = OverlapReal(0.0);
-    auto x_handle = result.x.requestWriteAccess();
-    auto y_handle = result.y.requestWriteAccess();
-    auto z_handle = result.z.requestWriteAccess();
     for (unsigned int i = 0; i < vlist.size(); i++)
         {
         vec3<OverlapReal> vert = vlist[i];
-        x_handle[i] = vert.x;
-        y_handle[i] = vert.y;
-        z_handle[i] = vert.z;
+        result.x[i] = vert.x;
+        result.y[i] = vert.y;
+        result.z[i] = vert.z;
         radius_sq = std::max(radius_sq, dot(vert, vert));
         }
     for (unsigned int i = vlist.size(); i < result.N; i++)
         {
-        x_handle[i] = 0;
-        y_handle[i] = 0;
-        z_handle[i] = 0;
+        result.x[i] = 0;
+        result.y[i] = 0;
+        result.z[i] = 0;
         }
 
     // set the diameter

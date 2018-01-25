@@ -238,9 +238,8 @@ inline void AABBTree::init(unsigned int N)
     m_root = INVALID_NODE;
     m_mapping = ManagedArray<unsigned int>(N, m_managed);
 
-    unsigned int *mapping = m_mapping.requestWriteAccess();
     for (unsigned int i = 0; i < N; i++)
-        mapping[i] = INVALID_NODE;
+        m_mapping[i] = INVALID_NODE;
     }
 
 /*! \param hits Output vector of positive hits.
@@ -300,14 +299,12 @@ HOSTDEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
     assert(node_idx != INVALID_NODE);
 
     // grow its AABB if needed
-    AABB *aabbs = m_aabbs.requestWriteAccess();
-
     if (!contains(m_aabbs[node_idx], aabb))
         {
         #if __CUDA_ARCH__
-        atomicMerge(aabbs[node_idx], aabbs[node_idx], aabb);
+        atomicMerge(m_aabbs[node_idx], m_aabbs[node_idx], aabb);
         #else
-        aabbs[node_idx] = merge(aabbs[node_idx], aabb);
+        m_aabbs[node_idx] = merge(m_aabbs[node_idx], aabb);
         #endif
 
         // update all parent node AABBs
@@ -318,9 +315,9 @@ HOSTDEVICE inline void AABBTree::update(unsigned int idx, const AABB& aabb)
             unsigned int right_idx = m_nodes[current_node].right;
 
             #if __CUDA_ARCH__
-            atomicMerge(aabbs[current_node], aabbs[left_idx], aabbs[right_idx]);
+            atomicMerge(m_aabbs[current_node], m_aabbs[left_idx], m_aabbs[right_idx]);
             #else
-            aabbs[current_node] = merge(aabbs[left_idx], aabbs[right_idx]);
+            m_aabbs[current_node] = merge(m_aabbs[left_idx], m_aabbs[right_idx]);
             #endif
 
             current_node = m_nodes[current_node].parent;
@@ -406,24 +403,18 @@ inline unsigned int AABBTree::buildNode(AABB *aabbs,
     if (len <= NODE_CAPACITY)
         {
         unsigned int new_node = allocateNode();
-
-        AABB *tree_aabbs = m_aabbs.requestWriteAccess();
-        AABBNode *nodes = m_nodes.requestWriteAccess();
-
-        tree_aabbs[new_node] = my_aabb;
-        nodes[new_node].parent = parent;
-        nodes[new_node].num_particles = len;
-
-        unsigned int *mapping = m_mapping.requestWriteAccess();
+        m_aabbs[new_node] = my_aabb;
+        m_nodes[new_node].parent = parent;
+        m_nodes[new_node].num_particles = len;
 
         for (unsigned int i = 0; i < len; i++)
             {
             // assign the particle indices into the leaf node
-            nodes[new_node].particles[i] = idx[start+i];
-            nodes[new_node].particle_tags[i] = aabbs[start+i].tag;
+            m_nodes[new_node].particles[i] = idx[start+i];
+            m_nodes[new_node].particle_tags[i] = aabbs[start+i].tag;
 
             // assign the reverse mapping from particle indices to leaf node indices
-            mapping[idx[start+i]] = new_node;
+            m_mapping[idx[start+i]] = new_node;
             }
 
         return new_node;
@@ -518,19 +509,16 @@ inline unsigned int AABBTree::buildNode(AABB *aabbs,
     if (start_right == 0)
         start_right = 1;
 
-    // note: calling buildNode has side effects, the nodes array may be reallocated. So we need to determine the left
-    // and right children, then build our node (can't say nodes[my_idx].left = buildNode(...))
+    // note: calling buildNode has side effects, the m_nodes array may be reallocated. So we need to determine the left
+    // and right children, then build our node (can't say m_nodes[my_idx].left = buildNode(...))
     unsigned int new_left = buildNode(aabbs, idx, start+start_left, start_right-start_left, my_idx);
     unsigned int new_right = buildNode(aabbs, idx, start+start_right, len-start_right, my_idx);
 
     // now, create the children and connect them up
-
-    AABBNode *nodes = m_nodes.requestWriteAccess();
-    AABB *tree_aabbs = m_aabbs.requestWriteAccess();
-    tree_aabbs[my_idx] = my_aabb;
-    nodes[my_idx].parent = parent;
-    nodes[my_idx].left = new_left;
-    nodes[my_idx].right = new_right;
+    m_aabbs[my_idx] = my_aabb;
+    m_nodes[my_idx].parent = parent;
+    m_nodes[my_idx].left = new_left;
+    m_nodes[my_idx].right = new_right;
 
     return my_idx;
     }
@@ -551,14 +539,12 @@ inline unsigned int AABBTree::updateSkip(unsigned int idx)
         }
     else
         {
-        AABBNode *nodes = m_nodes.requestWriteAccess();
-
         // node idx needs to skip all the nodes underneath it (determined recursively)
         unsigned int left_idx = m_nodes[idx].left;
         unsigned int right_idx = m_nodes[idx].right;
 
         unsigned int skip = updateSkip(left_idx) + updateSkip(right_idx);
-        nodes[idx].skip = skip;
+        m_nodes[idx].skip = skip;
         return skip + 1;
         }
     }
@@ -582,11 +568,8 @@ inline unsigned int AABBTree::allocateNode()
         // if we have old memory, copy it over
         if (m_nodes.size())
             {
-            AABBNode *new_nodes = m_new_nodes.requestWriteAccess();
-            AABB *new_aabbs = m_new_aabbs.requestWriteAccess();
-
-            memcpy(new_nodes, m_nodes.get(), sizeof(AABBNode)*m_num_nodes);
-            memcpy(new_aabbs, m_aabbs.get(), sizeof(AABB)*m_num_nodes);
+            memcpy(m_new_nodes.get(), m_nodes.get(), sizeof(AABBNode)*m_num_nodes);
+            memcpy(m_new_aabbs.get(), m_aabbs.get(), sizeof(AABB)*m_num_nodes);
             }
 
         m_nodes = m_new_nodes;
@@ -594,8 +577,7 @@ inline unsigned int AABBTree::allocateNode()
         m_node_capacity = m_new_node_capacity;
         }
 
-    AABBNode *nodes = m_nodes.requestWriteAccess();
-    nodes[m_num_nodes] = AABBNode();
+    m_nodes[m_num_nodes] = AABBNode();
     m_num_nodes++;
     return m_num_nodes-1;
     }

@@ -341,14 +341,12 @@ HOSTDEVICE inline AABB merge(const AABB& a, const AABB& b)
 
     #else
 
-    #ifndef NVCC
     new_aabb.lower.x = std::min(a.lower.x, b.lower.x);
     new_aabb.lower.y = std::min(a.lower.y, b.lower.y);
     new_aabb.lower.z = std::min(a.lower.z, b.lower.z);
     new_aabb.upper.x = std::max(a.upper.x, b.upper.x);
     new_aabb.upper.y = std::max(a.upper.y, b.upper.y);
     new_aabb.upper.z = std::max(a.upper.z, b.upper.z);
-    #endif
 
     #endif
 

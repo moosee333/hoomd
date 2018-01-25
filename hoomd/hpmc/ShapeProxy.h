@@ -196,33 +196,27 @@ inline ShapePolyhedron::param_type make_poly3d_data(pybind11::list verts,pybind1
         }
 
     unsigned int k = 0;
-    auto x_handle = result.convex_hull_verts.x.requestWriteAccess();
-    auto y_handle = result.convex_hull_verts.y.requestWriteAccess();
-    auto z_handle = result.convex_hull_verts.z.requestWriteAccess();
     for (auto it = vertexBuffer.begin(); it != vertexBuffer.end(); ++it)
         {
-        x_handle[k] = it->x;
-        y_handle[k] = it->y;
-        z_handle[k] = it->z;
+        result.convex_hull_verts.x[k] = it->x;
+        result.convex_hull_verts.y[k] = it->y;
+        result.convex_hull_verts.z[k] = it->z;
         k++;
         }
 
-    unsigned int *face_offs_handle = result.face_offs.requestWriteAccess();
     for (unsigned int i = 0; i < len(face_offs); i++)
         {
         unsigned int offs = pybind11::cast<unsigned int>(face_offs[i]);
-        face_offs_handle[i] = offs;
+        result.face_offs[i] = offs;
         }
 
-    unsigned int *face_overlap_handle = result.face_overlap.requestWriteAccess();
     for (unsigned int i = 0; i < result.n_faces; i++)
         {
-        face_overlap_handle[i] = pybind11::cast<unsigned int>(overlap[i]);
+        result.face_overlap[i] = pybind11::cast<unsigned int>(overlap[i]);
         }
 
     // extract the verts from the python list and compute the radius on the way
     OverlapReal radius_sq = OverlapReal(0.0);
-    auto verts_handle = result.verts.requestWriteAccess();
     for (unsigned int i = 0; i < len(verts); i++)
         {
         pybind11::list v = pybind11::cast<pybind11::list>(verts[i]);
@@ -230,11 +224,10 @@ inline ShapePolyhedron::param_type make_poly3d_data(pybind11::list verts,pybind1
         vert.x = pybind11::cast<OverlapReal>(v[0]);
         vert.y = pybind11::cast<OverlapReal>(v[1]);
         vert.z = pybind11::cast<OverlapReal>(v[2]);
-        verts_handle[i] = vert;
+        result.verts[i] = vert;
         radius_sq = max(radius_sq, dot(vert, vert));
         }
 
-    auto face_verts_handle = result.face_verts.requestWriteAccess();
     for (unsigned int i = 0; i < len(face_verts); i++)
         {
         unsigned int j = pybind11::cast<unsigned int>(face_verts[i]);
@@ -244,7 +237,7 @@ inline ShapePolyhedron::param_type make_poly3d_data(pybind11::list verts,pybind1
             oss << "Invalid vertex index " << j << " specified" << std::endl;
             throw std::runtime_error(oss.str());
             }
-        face_verts_handle[i] = j;
+        result.face_verts[i] = j;
         }
 
     hpmc::detail::OBB *obbs = new hpmc::detail::OBB[len(face_offs)];
@@ -293,23 +286,20 @@ poly3d_verts make_poly3d_verts(pybind11::list verts, OverlapReal sweep_radius, b
 
     // extract the verts from the python list and compute the radius on the way
     OverlapReal radius_sq = OverlapReal(0.0);
-    auto x_handle = result.x.requestWriteAccess();
-    auto y_handle = result.y.requestWriteAccess();
-    auto z_handle = result.z.requestWriteAccess();
     for (unsigned int i = 0; i < len(verts); i++)
         {
         pybind11::list verts_i = pybind11::cast<pybind11::list>(verts[i]);
         vec3<OverlapReal> vert = vec3<OverlapReal>(pybind11::cast<OverlapReal>(verts_i[0]), pybind11::cast<OverlapReal>(verts_i[1]), pybind11::cast<OverlapReal>(verts_i[2]));
-        x_handle[i] = vert.x;
-        y_handle[i] = vert.y;
-        z_handle[i] = vert.z;
+        result.x[i] = vert.x;
+        result.y[i] = vert.y;
+        result.z[i] = vert.z;
         radius_sq = max(radius_sq, dot(vert, vert));
         }
     for (unsigned int i = len(verts); i < result.N; i++)
         {
-        x_handle[i] = 0;
-        y_handle[i] = 0;
-        z_handle[i] = 0;
+        result.x[i] = 0;
+        result.y[i] = 0;
+        result.z[i] = 0;
         }
 
     // set the diameter
@@ -330,13 +320,11 @@ faceted_sphere_params make_faceted_sphere(pybind11::list normals, pybind11::list
     result.ignore = ignore_stats;
 
     // extract the normals from the python list
-    auto n_handle = result.n.requestWriteAccess();
-    auto offset_handle = result.offset.requestWriteAccess();
     for (unsigned int i = 0; i < len(normals); i++)
         {
         pybind11::list normals_i = pybind11::cast<pybind11::list>(normals[i]);
-        n_handle[i] = vec3<OverlapReal>(pybind11::cast<OverlapReal>(normals_i[0]), pybind11::cast<OverlapReal>(normals_i[1]), pybind11::cast<OverlapReal>(normals_i[2]));
-        offset_handle[i] = pybind11::cast<OverlapReal>(offsets[i]);
+        result.n[i] = vec3<OverlapReal>(pybind11::cast<OverlapReal>(normals_i[0]), pybind11::cast<OverlapReal>(normals_i[1]), pybind11::cast<OverlapReal>(normals_i[2]));
+        result.offset[i] = pybind11::cast<OverlapReal>(offsets[i]);
         }
 
     // extract the vertices from the python list
@@ -452,16 +440,10 @@ typename ShapeUnion<Shape>::param_type make_union_params(pybind11::list _members
         OverlapReal y = pybind11::cast<OverlapReal>(orientations_i[2]);
         OverlapReal z = pybind11::cast<OverlapReal>(orientations_i[3]);
         quat<OverlapReal> orientation(s, vec3<OverlapReal>(x,y,z));
-
-        auto params_handle = result.mparams.requestWriteAccess();
-        auto pos_handle = result.mpos.requestWriteAccess();
-        auto orientation_handle = result.morientation.requestWriteAccess();
-        auto overlap_handle = result.moverlap.requestWriteAccess();
-
-        params_handle[i] = param;
-        pos_handle[i] = pos;
-        orientation_handle[i] = orientation;
-        overlap_handle[i] = pybind11::cast<unsigned int>(overlap[i]);
+        result.mparams[i] = param;
+        result.mpos[i] = pos;
+        result.morientation[i] = orientation;
+        result.moverlap[i] = pybind11::cast<unsigned int>(overlap[i]);
 
         Shape dummy(quat<Scalar>(), param);
         Scalar d = sqrt(dot(pos,pos));
@@ -845,6 +827,7 @@ struct access_shape_union_members
     typedef typename get_member_type<ShapeUnionType>::type member_type;
     unsigned int offset;
     access_shape_union_members(unsigned int ndx = 0) { offset = ndx; }
+    member_type& operator()(typename ShapeUnionType::param_type& param ) {return param.mparams[offset]; }
     const member_type& operator()(const typename ShapeUnionType::param_type& param ) const {return param.mparams[offset]; }
 };
 

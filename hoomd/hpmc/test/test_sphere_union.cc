@@ -64,19 +64,15 @@ UP_TEST( construction )
     par_i.ignore = 0;
 
     ShapeUnion<ShapeSphere>::param_type params(2,false);
-    auto pos_handle = params.mpos.requestWriteAccess();
-    auto orientation_handle = params.morientation.requestWriteAccess();
-    auto param_handle = params.mparams.requestWriteAccess();
-    auto overlap_handle = params.moverlap.requestWriteAccess();
     params.diameter = 2*R;
-    pos_handle[0] = vec3<Scalar>(x_i, 0, 0);
-    pos_handle[1] = vec3<Scalar>(x_j, 0, 0);
-    orientation_handle[0] = o;
-    orientation_handle[1] = o;
-    param_handle[0] = par_i;
-    param_handle[1] = par_j;
-    overlap_handle[0] = 1;
-    overlap_handle[1] = 1;
+    params.mpos[0] = vec3<Scalar>(x_i, 0, 0);
+    params.mpos[1] = vec3<Scalar>(x_j, 0, 0);
+    params.morientation[0] = o;
+    params.morientation[1] = o;
+    params.mparams[0] = par_i;
+    params.mparams[1] = par_j;
+    params.moverlap[0] = 1;
+    params.moverlap[1] = 1;
     build_tree<ShapeSphere>(params);
 
     // construct and check
@@ -122,20 +118,16 @@ UP_TEST( non_overlap )
     par_i.ignore = 0;
 
     ShapeUnion<ShapeSphere>::param_type params(2,false);
-    auto pos_handle = params.mpos.requestWriteAccess();
-    auto orientation_handle = params.morientation.requestWriteAccess();
-    auto param_handle = params.mparams.requestWriteAccess();
-    auto overlap_handle = params.moverlap.requestWriteAccess();
     params.diameter = 2*R;
-    pos_handle[0] = vec3<Scalar>(x_i, 0, 0);
-    pos_handle[1] = vec3<Scalar>(x_j, 0, 0);
-    orientation_handle[0] = o;
-    orientation_handle[1] = o;
-    param_handle[0] = par_i;
-    param_handle[1] = par_j;
+    params.mpos[0] = vec3<Scalar>(x_i, 0, 0);
+    params.mpos[1] = vec3<Scalar>(x_j, 0, 0);
+    params.morientation[0] = o;
+    params.morientation[1] = o;
+    params.mparams[0] = par_i;
+    params.mparams[1] = par_j;
     params.ignore = 0;
-    overlap_handle[0] = 1;
-    overlap_handle[1] = 1;
+    params.moverlap[0] = 1;
+    params.moverlap[1] = 1;
     build_tree<ShapeSphere>(params);
 
     // create two identical dumbbells
@@ -200,21 +192,16 @@ UP_TEST( overlapping_dumbbells )
     par_i.ignore = 0;
 
     ShapeUnion<ShapeSphere>::param_type params(2,false);
-    auto pos_handle = params.mpos.requestWriteAccess();
-    auto orientation_handle = params.morientation.requestWriteAccess();
-    auto param_handle = params.mparams.requestWriteAccess();
-    auto overlap_handle = params.moverlap.requestWriteAccess();
-
     params.diameter = 2*R;
-    pos_handle[0] = vec3<Scalar>(x_i, 0, 0);
-    pos_handle[1] = vec3<Scalar>(x_j, 0, 0);
-    orientation_handle[0] = o;
-    orientation_handle[1] = o;
-    param_handle[0] = par_i;
-    param_handle[1] = par_j;
+    params.mpos[0] = vec3<Scalar>(x_i, 0, 0);
+    params.mpos[1] = vec3<Scalar>(x_j, 0, 0);
+    params.morientation[0] = o;
+    params.morientation[1] = o;
+    params.mparams[0] = par_i;
+    params.mparams[1] = par_j;
     params.ignore = 0;
-    overlap_handle[0] = 1;
-    overlap_handle[1] = 1;
+    params.moverlap[0] = 1;
+    params.moverlap[1] = 1;
     build_tree<ShapeSphere>(params);
 
     // create two identical dumbbells

@@ -334,14 +334,11 @@ struct ShapeFacetedSphere
                         }
                     }
 
-                OverlapReal *x_handle =_params.additional_verts.x.requestWriteAccess();
-                OverlapReal *y_handle =_params.additional_verts.y.requestWriteAccess();
-                OverlapReal *z_handle =_params.additional_verts.z.requestWriteAccess();
                 if (allowed && dot(v1,v1) <= R*R*(1+SMALL))
                     {
-                    x_handle[_params.additional_verts.N] = v1.x;
-                    y_handle[_params.additional_verts.N] = v1.y;
-                    z_handle[_params.additional_verts.N] = v1.z;
+                    _params.additional_verts.x[_params.additional_verts.N] = v1.x;
+                    _params.additional_verts.y[_params.additional_verts.N] = v1.y;
+                    _params.additional_verts.z[_params.additional_verts.N] = v1.z;
                     _params.additional_verts.N++;
                     }
 
@@ -364,9 +361,9 @@ struct ShapeFacetedSphere
 
                 if (allowed && dot(v2,v2) <= R*R*(1+SMALL))
                     {
-                    x_handle[_params.additional_verts.N] = v2.x;
-                    y_handle[_params.additional_verts.N] = v2.y;
-                    z_handle[_params.additional_verts.N] = v2.z;
+                    _params.additional_verts.x[_params.additional_verts.N] = v2.x;
+                    _params.additional_verts.y[_params.additional_verts.N] = v2.y;
+                    _params.additional_verts.z[_params.additional_verts.N] = v2.z;
                     _params.additional_verts.N++;
                     }
                 }
