@@ -179,12 +179,6 @@ static scalar4_tex_t clusters_postype_tex;
 //! Texture for reading orientation
 static scalar4_tex_t clusters_orientation_tex;
 
-//! Texture for reading lower AABBs
-static scalar4_tex_t clusters_lower_AABB_tex;
-//! Texture for reading upper AABs
-static scalar4_tex_t clusters_upper_AABB_tex;
-
-
 //! Kernel to find overlaps between different configurations
 template< class Shape >
 __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
@@ -272,10 +266,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
         for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes; ++cur_node_idx)
             {
-            Scalar4 aabb_lower = texFetchScalar4(aabbs_lower, clusters_lower_AABB_tex, cur_node_idx);
-            Scalar4 aabb_upper = texFetchScalar4(aabbs_upper, clusters_upper_AABB_tex, cur_node_idx);
-
-            AABB node_aabb(aabb_lower, aabb_upper);
+            AABB node_aabb(aabbs_lower[cur_node_idx], aabbs_upper[cur_node_idx]);
             if (detail::overlap(node_aabb, aabb))
                 {
                 if (aabb_tree.isNodeLeaf(cur_node_idx))
@@ -497,20 +488,6 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     clusters_orientation_tex.normalized = false;
     clusters_orientation_tex.filterMode = cudaFilterModePoint;
     error = cudaBindTexture(0, clusters_orientation_tex, args.d_orientation, sizeof(Scalar4)*args.max_n);
-    if (error != cudaSuccess)
-        return error;
-
-    auto lower_AABBs = args.aabb_tree.getAABBsLower();
-    clusters_lower_AABB_tex.normalized = false;
-    clusters_lower_AABB_tex.filterMode = cudaFilterModePoint;
-    error = cudaBindTexture(0, clusters_lower_AABB_tex, lower_AABBs.get(), lower_AABBs.size()*sizeof(Scalar4));
-    if (error != cudaSuccess)
-        return error;
-
-    auto upper_AABBs = args.aabb_tree.getAABBsUpper();
-    clusters_upper_AABB_tex.normalized = false;
-    clusters_upper_AABB_tex.filterMode = cudaFilterModePoint;
-    error = cudaBindTexture(0, clusters_upper_AABB_tex, upper_AABBs.get(), upper_AABBs.size()*sizeof(Scalar4));
     if (error != cudaSuccess)
         return error;
 
