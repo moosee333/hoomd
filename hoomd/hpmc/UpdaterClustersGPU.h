@@ -77,6 +77,7 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         GPUVector<Scalar> m_begin;           //!< Starting coordinates of AABBs for sweep and prune
         GPUVector<Scalar> m_end;             //!< End coordinates of AABBs for sweep and prune
         GPUVector<unsigned int> m_aabb_idx;  //!< Sorted list of AABB indices
+        GPUVector<unsigned int> m_aabb_tag;  //!< Sorted list of AABB tags
 
         #ifdef NVGRAPH_AVAILABLE
         GPUVector<unsigned int> m_components;  //!< The connected component labels per particle
@@ -136,6 +137,7 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     GPUVector<Scalar>(this->m_exec_conf).swap(m_begin);
     GPUVector<Scalar>(this->m_exec_conf).swap(m_end);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_aabb_idx);
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_aabb_tag);
 
     m_n_overlaps_old_new = 0;
     m_n_overlaps_new_new = 0;
@@ -192,6 +194,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
     m_begin.resize(Ntot);
     m_end.resize(Ntot);
     m_aabb_idx.resize(Ntot);
+    m_aabb_tag.resize(Ntot);
 
     m_new_tag.resize(this->m_n_particles_old);
     assert(m_n_particles_old == map.size());
@@ -239,6 +242,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<Scalar> d_begin(m_begin, access_location::device, access_mode::overwrite);
         ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
 
         detail::hpmc_clusters_args_t clusters_args(this->m_n_particles_old,
                                            0, // ncollisions
@@ -281,7 +285,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            this->m_pdata->getN() + this->m_pdata->getNGhosts(),
                                            d_begin.data,
                                            d_end.data,
-                                           d_aabb_idx.data
+                                           d_aabb_idx.data,
+                                           d_aabb_tag.data
                                            );
 
         do
@@ -392,6 +397,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         m_begin.resize(Ntot);
         m_end.resize(Ntot);
         m_aabb_idx.resize(Ntot);
+        m_aabb_tag.resize(Ntot);
 
         // with line transformations, check new configuration against itself to detect interactions across PBC
         // append to existing list of overlapping pairs
@@ -410,6 +416,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<Scalar> d_begin(m_begin, access_location::device, access_mode::overwrite);
         ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
 
         detail::hpmc_clusters_args_t clusters_args(this->m_pdata->getN(),
                                            0, // ncollisions
@@ -452,7 +459,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            this->m_pdata->getN() + this->m_pdata->getNGhosts(),
                                            d_begin.data,
                                            d_end.data,
-                                           d_aabb_idx.data
+                                           d_aabb_idx.data,
+                                           d_aabb_tag.data
                                            );
 
 

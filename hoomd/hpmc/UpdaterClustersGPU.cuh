@@ -78,7 +78,8 @@ struct hpmc_clusters_args_t
                 unsigned int _N_old,
                 Scalar *_d_begin,
                 Scalar *_d_end,
-                unsigned int *_d_aabb_idx)
+                unsigned int *_d_aabb_idx,
+                unsigned int *_d_aabb_tag)
                 : N(_N),
                   ncollisions(_N),
                   d_postype(_d_postype),
@@ -120,7 +121,8 @@ struct hpmc_clusters_args_t
                   N_old(_N_old),
                   d_begin(_d_begin),
                   d_end(_d_end),
-                  d_aabb_idx(_d_aabb_idx)
+                  d_aabb_idx(_d_aabb_idx),
+                  d_aabb_tag(_d_aabb_tag)
         {
         };
 
@@ -166,6 +168,7 @@ struct hpmc_clusters_args_t
     Scalar *d_begin;                  //!< List of begin coordinates of AABBs along the sweep axis
     Scalar *d_end;                    //!< List of end coordinates of AABBs along the sweep axis
     unsigned int *d_aabb_idx;         //!< AABB indices corresponding to the (sorted) intervals
+    unsigned int *d_aabb_tag;         //!< AABB indices corresponding to the (sorted) intervals
     };
 
 template< class Shape >
@@ -481,6 +484,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     const Scalar *d_begin,
     const Scalar *d_end,
     unsigned int *d_aabb_idx,
+    unsigned int *d_aabb_tag,
     Scalar sweep_length,
     bool periodic,
     ManagedArray<vec3<Scalar> > image_list,
@@ -551,7 +555,7 @@ __global__ void gpu_sweep_and_prune_kernel(
 
     // the coordinates of particle i belonging to our interval
     Scalar4 postype_i = (i < Nold) ? d_postype_old[i] : d_postype[i - Nold];
-    unsigned int tag_i = (i < Nold) ? d_tag_old[i] : d_tag[i - Nold];
+    unsigned int tag_i = d_aabb_tag[interval_i];
     unsigned int typ_i = __scalar_as_int(postype_i.w);
     Shape shape_i(quat<Scalar>(), s_params[typ_i]);
     AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
@@ -575,7 +579,7 @@ __global__ void gpu_sweep_and_prune_kernel(
 
     next_begin = d_begin[interval_j];
     next_j = d_aabb_idx[interval_j];
-    next_tag_j = (next_j < Nold) ? d_tag_old[next_j] : d_tag[next_j - Nold];
+    next_tag_j = d_aabb_tag[interval_j];
 
     do
         {
@@ -600,7 +604,7 @@ __global__ void gpu_sweep_and_prune_kernel(
 
         next_begin = d_begin[interval_j];
         next_j = d_aabb_idx[interval_j];
-        next_tag_j = (next_j < Nold) ? d_tag_old[next_j] : d_tag[next_j - Nold];
+        next_tag_j = d_aabb_tag[interval_j];
 
         // we're not reporting overlaps in the same configuration
         if ((i < Nold && j < Nold) || (i >= Nold && j >= Nold))
@@ -668,6 +672,7 @@ template<class Shape>
 __global__ void gpu_get_aabb_extents_kernel(
     unsigned int N,
     const Scalar4 *d_postype,
+    const unsigned int *d_tag,
     const typename Shape::param_type *d_params,
     unsigned int num_types,
     Scalar *d_begin,
@@ -676,7 +681,8 @@ __global__ void gpu_get_aabb_extents_kernel(
     Scalar sweep_length,
     const BoxDim box,
     unsigned int offs,
-    unsigned int *d_aabb_idx)
+    unsigned int *d_aabb_idx,
+    unsigned int *d_aabb_tag)
     {
     // load the per type pair parameters into shared memory
     extern __shared__ char s_data[];
@@ -729,6 +735,7 @@ __global__ void gpu_get_aabb_extents_kernel(
 
     // fill index array, to be sorted later
     d_aabb_idx[idx] = offs+idx;
+    d_aabb_tag[idx] = d_tag[idx];
     }
 
 //! Kernel driver for gpu_hpmc_clusters_kernel()
@@ -781,6 +788,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     gpu_get_aabb_extents_kernel<Shape><<<n_blocks, block_size_aabb, shared_bytes_aabb_extents, args.stream>>>(
         args.N_old,
         args.d_postype,
+        args.d_tag,
         d_params,
         args.num_types,
         args.d_begin,
@@ -789,7 +797,8 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         sweep_length,
         args.box,
         0,
-        args.d_aabb_idx);
+        args.d_aabb_idx,
+        args.d_aabb_tag);
 
     // append AABB extents for new configuration
     block_size_aabb = 256;
@@ -798,6 +807,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     gpu_get_aabb_extents_kernel<Shape><<<n_blocks, block_size_aabb, shared_bytes_aabb_extents, args.stream>>>(
         args.N,
         args.d_postype_test,
+        args.d_tag_test,
         d_params,
         args.num_types,
         args.d_begin + args.N_old,
@@ -806,17 +816,20 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         sweep_length,
         args.box,
         args.N_old,
-        args.d_aabb_idx + args.N_old);
+        args.d_aabb_idx + args.N_old,
+        args.d_aabb_tag + args.N_old);
 
     // sort the interval ends and indices (==values) by their beginnings (==keys)
     thrust::device_ptr<Scalar> begin(args.d_begin);
     thrust::device_ptr<Scalar> end(args.d_end);
     thrust::device_ptr<unsigned int> aabb_idx(args.d_aabb_idx);
+    thrust::device_ptr<unsigned int> aabb_tag(args.d_aabb_tag);
 
     // combine the end point and the index in one iterator
     auto values_it = thrust::make_zip_iterator(thrust::make_tuple(
         end,
-        aabb_idx));
+        aabb_idx,
+        aabb_tag));
 
     thrust::sort_by_key(
         thrust::cuda::par(args.alloc),
@@ -854,6 +867,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         args.d_begin,
         args.d_end,
         args.d_aabb_idx,
+        args.d_aabb_tag,
         sweep_length,
         periodic,
         args.image_list,
