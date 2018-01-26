@@ -544,7 +544,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     __syncthreads();
 
     // the index of the interval we're colliding
-    unsigned int interval_i = (blockIdx.z * gridDim.y + blockIdx.y)*blockDim.y + threadIdx.y;
+    unsigned int interval_i = (blockIdx.y * gridDim.x + blockIdx.x)*blockDim.x + threadIdx.x;
 
     if (interval_i >= N+Nold)
         return;
@@ -552,7 +552,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     // the end coordinate of this interval
     Scalar end_i = d_end[interval_i];
 
-    unsigned int interval_j = interval_i + 1 + threadIdx.x;
+    unsigned int interval_j = interval_i + 1 + threadIdx.y;
 
     // corresponding particle index
     unsigned int i = d_aabb_idx[interval_i];
@@ -603,7 +603,7 @@ __global__ void gpu_sweep_and_prune_kernel(
         if (begin_j > end_i)
             break; // done
 
-        interval_j += blockDim.x;
+        interval_j += blockDim.y;
         while (interval_j >= N+Nold)
             {
             if (periodic)
@@ -623,9 +623,6 @@ __global__ void gpu_sweep_and_prune_kernel(
 
         unsigned int typ_j = __scalar_as_int(postype_j.w);
 
-        Shape shape_j(quat<Scalar>(), s_params[typ_j]);
-        AABB aabb_j = shape_j.getAABB(vec3<Scalar>(postype_j));
-
         // iterate over particle images to detect AABB overlap with periodic boundary conditions
         for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
             {
@@ -635,6 +632,9 @@ __global__ void gpu_sweep_and_prune_kernel(
 
             AABB aabb_i = aabb_i_local;
             aabb_i.translate(pos_i_image);
+
+            Shape shape_j(quat<Scalar>(), s_params[typ_j]);
+            AABB aabb_j = shape_j.getAABB(vec3<Scalar>(postype_j));
 
             if (overlap(aabb_i, aabb_j))
                 {
@@ -870,13 +870,13 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     unsigned int n_groups = block_size_sweep_and_prune/group_size;
     n_blocks = (args.N+args.N_old)/n_groups+1;
 
-    dim3 threads_sweep_and_prune(group_size,n_groups,1);
+    dim3 threads_sweep_and_prune(n_groups,group_size,1);
     dim3 grid_sweep_and_prune;
 
     if (n_blocks > (unsigned int) args.devprop.maxGridSize[1])
-        grid_sweep_and_prune = dim3(1, args.devprop.maxGridSize[1], n_blocks/args.devprop.maxGridSize[1] + 1);
+        grid_sweep_and_prune = dim3(args.devprop.maxGridSize[1], n_blocks/args.devprop.maxGridSize[1] + 1, 1);
     else
-        grid_sweep_and_prune = dim3(1, n_blocks, 1);
+        grid_sweep_and_prune = dim3(n_blocks, 1);
 
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
 
