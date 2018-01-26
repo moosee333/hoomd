@@ -777,7 +777,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         }
     cudaStreamAttachMemAsync(args.stream, d_params, 0, cudaMemAttachSingle);
 
-    #if 1
+    #if 0
 
     // for now, as the sweep direction, choose the x axis
     vec3<Scalar> sweep_vector(args.box.getLatticeVector(0));
