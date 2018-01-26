@@ -544,7 +544,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     __syncthreads();
 
     // the index of the interval we're colliding
-    unsigned int interval_i = blockIdx.x*blockDim.x+threadIdx.x;
+    unsigned int interval_i = (blockIdx.z * gridDim.y + blockIdx.y)*blockDim.y + threadIdx.y;
 
     if (interval_i >= N+Nold)
         return;
@@ -552,7 +552,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     // the end coordinate of this interval
     Scalar end_i = d_end[interval_i];
 
-    unsigned int interval_j = interval_i + 1;
+    unsigned int interval_j = interval_i + 1 + threadIdx.x;
 
     // corresponding particle index
     unsigned int i = d_aabb_idx[interval_i];
@@ -572,11 +572,11 @@ __global__ void gpu_sweep_and_prune_kernel(
     unsigned int next_tag_j;
     Scalar4 next_postype_j;
 
-    if (interval_j == N+Nold)
+    while (interval_j >= N+Nold)
         {
         if (periodic)
             {
-            interval_j = 0;
+            interval_j -= N+Nold;
             image += sweep_length;
             }
         else
@@ -599,15 +599,16 @@ __global__ void gpu_sweep_and_prune_kernel(
         if (begin_j > end_i)
             break; // done
 
-        if (interval_j++ == N+Nold)
+        interval_j += blockDim.x;
+        while (interval_j >= N+Nold)
             {
             if (periodic)
                 {
-                interval_j = 0;
+                interval_j -= N+Nold;
                 image += sweep_length;
                 }
             else
-                break;
+                return;
             }
 
         next_tag_j = d_aabb_tag[interval_j];
@@ -857,16 +858,30 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         }
 
     // setup the grid to run the kernel
+
     unsigned int block_size_sweep_and_prune = min(args.block_size, (unsigned int)max_block_size_sweep_and_prune);
 
     unsigned int shared_bytes_sweep_and_prune = args.num_types * sizeof(typename Shape::param_type)
         + args.overlap_idx.getNumElements() * sizeof(unsigned int)
         + args.image_list.size() * sizeof(vec3<Scalar>);
 
+    unsigned int group_size = args.group_size;
+    while (block_size_sweep_and_prune % group_size)
+        group_size--;
+    unsigned int n_groups = block_size_sweep_and_prune/group_size;
+    n_blocks = (args.N+args.N_old)/n_groups+1;
+
+    dim3 threads_sweep_and_prune(group_size,n_groups,1);
+    dim3 grid_sweep_and_prune;
+
+    if (n_blocks > (unsigned int) args.devprop.maxGridSize[1])
+        grid_sweep_and_prune = dim3(1, args.devprop.maxGridSize[1], n_blocks/args.devprop.maxGridSize[1] + 1);
+    else
+        grid_sweep_and_prune = dim3(1, n_blocks, 1);
+
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
 
-    n_blocks = (args.N+args.N_old)/block_size_sweep_and_prune + 1;
-    gpu_sweep_and_prune_kernel<Shape><<<n_blocks, block_size_sweep_and_prune, shared_bytes_sweep_and_prune,args.stream>>>(args.N,
+    gpu_sweep_and_prune_kernel<Shape><<<grid_sweep_and_prune, threads_sweep_and_prune, shared_bytes_sweep_and_prune,args.stream>>>(args.N,
         args.N_old,
         args.d_postype_test,
         args.d_postype,

@@ -152,7 +152,8 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
 
     for (unsigned int block_size = dev_prop.warpSize; block_size <= (unsigned int) dev_prop.maxThreadsPerBlock; block_size += dev_prop.warpSize)
         {
-        for (unsigned int group_size=1; group_size <= detail::NODE_CAPACITY; group_size++)
+        unsigned int max_group_size = block_size;
+        for (unsigned int group_size=1; group_size <= max_group_size; group_size *= 2)
             {
             if ((block_size % group_size) == 0)
                 valid_params.push_back(block_size*1000000 +  group_size);
