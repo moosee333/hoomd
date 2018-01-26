@@ -588,6 +588,10 @@ __global__ void gpu_sweep_and_prune_kernel(
     next_tag_j = d_aabb_tag[interval_j];
     next_postype_j = d_aabb_postype[interval_j];
 
+    // multiply image vectors by this factor to account for
+    // the direction of the image vector in the overlaps kernel
+    Scalar img_mult = i < Nold ? -1.0 : 1.0;
+
     do
         {
         // start coordinate of test interval
@@ -617,10 +621,6 @@ __global__ void gpu_sweep_and_prune_kernel(
         next_postype_j = d_aabb_postype[interval_j];
         next_tag_j = d_aabb_tag[interval_j];
 
-        // we're not reporting overlaps in the same configuration
-        if ((i < Nold && j < Nold) || (i >= Nold && j >= Nold))
-            continue;
-
         unsigned int typ_j = __scalar_as_int(postype_j.w);
 
         Shape shape_j(quat<Scalar>(), s_params[typ_j]);
@@ -631,11 +631,7 @@ __global__ void gpu_sweep_and_prune_kernel(
             {
             // get the AABB for particle i in the current periodic image
             vec3<Scalar> pos_i_image = vec3<Scalar>(postype_i);
-
-            if (i < Nold)
-                pos_i_image -= s_image_list[cur_image];
-            else
-                pos_i_image += s_image_list[cur_image];
+            pos_i_image += img_mult*s_image_list[cur_image];
 
             AABB aabb_i = aabb_i_local;
             aabb_i.translate(pos_i_image);
@@ -652,6 +648,10 @@ __global__ void gpu_sweep_and_prune_kernel(
                     s_check_overlaps[overlap_idx(typ_i,typ_j)] &&
                     rsq*OverlapReal(4.0) <= DaDb * DaDb)
                     {
+                    // we're not reporting overlaps in the same configuration
+                    if ((i < Nold && j < Nold) || (i >= Nold && j >= Nold))
+                        continue;
+
                     // write to collision list
                     unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
                     if (n_overlaps >= max_n_overlaps)
@@ -659,7 +659,6 @@ __global__ void gpu_sweep_and_prune_kernel(
                     else
                         {
                         // write indices to collision list, we'll later convert to tags
-
                         // .x index: test configuration
                         // .y index: old configuration
                         // .z index: image vector from test ptl to ptl from old configuration
