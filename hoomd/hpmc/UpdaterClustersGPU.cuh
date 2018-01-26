@@ -496,8 +496,10 @@ __global__ void gpu_sweep_and_prune_kernel(
     extern __shared__ char s_data[];
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     unsigned int *s_check_overlaps = (unsigned int *)(s_params + num_types);
+    vec3<Scalar> *s_image_list = (vec3<Scalar> *)(s_check_overlaps + overlap_idx.getNumElements());
 
     // copy over parameters one int per thread for fast loads
+    unsigned int n_images = image_list.size();
         {
         unsigned int tidx = threadIdx.x+blockDim.x*threadIdx.y + blockDim.x*blockDim.y*threadIdx.z;
         unsigned int block_size = blockDim.x*blockDim.y*blockDim.z;
@@ -519,6 +521,16 @@ __global__ void gpu_sweep_and_prune_kernel(
                 s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
                 }
             }
+
+        unsigned int images_size = n_images*sizeof(vec3<Scalar>)/sizeof(int);
+        vec3<Scalar> *d_image_list = image_list.get();
+        for (unsigned int cur_offset = 0; cur_offset < images_size; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < images_size)
+                {
+                ((int *)s_image_list)[cur_offset + tidx] = ((int *) d_image_list)[cur_offset + tidx];
+                }
+            }
         }
 
     __syncthreads();
@@ -532,7 +544,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     // the end coordinate of this interval
     Scalar end_i = d_end[interval_i];
 
-    unsigned int interval_j = interval_i;
+    unsigned int interval_j = interval_i + 1;
 
     // corresponding particle index
     unsigned int i = d_aabb_idx[interval_i];
@@ -545,39 +557,56 @@ __global__ void gpu_sweep_and_prune_kernel(
     AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
 
     Scalar image = 0;
+
+    // initialize pre-fetch
+    Scalar next_begin;
+    unsigned int next_j;
+    unsigned int next_tag_j;
+    if (interval_j == N+Nold)
+        {
+        if (periodic)
+            {
+            interval_j = 0;
+            image += sweep_length;
+            }
+        else
+            return; // no intervals to the right
+        }
+
+    next_begin = d_begin[interval_j];
+    next_j = d_aabb_idx[interval_j];
+    next_tag_j = (next_j < Nold) ? d_tag_old[next_j] : d_tag[next_j - Nold];
+
     do
         {
-        interval_j++;
-        if (interval_j == N+Nold)
+        // start coordinate of test interval
+        Scalar begin_j = next_begin + image;
+        unsigned int j = next_j;
+        unsigned int tag_j = next_tag_j;
+
+        if (begin_j > end_i)
+            break; // done
+
+        if (interval_j++ == N+Nold)
             {
             if (periodic)
                 {
-                // wrap around periodic boundaries
                 interval_j = 0;
-                image+=sweep_length;
+                image += sweep_length;
                 }
             else
-                {
-                // no more intervals to the right
                 break;
-                }
             }
 
-        // start coordinate of test interval
-        Scalar begin_j = d_begin[interval_j] + image;
-
-        if (begin_j > end_i)
-            break; // we're done
-
-        // get this interval's AABB index and AABB
-        unsigned int j = d_aabb_idx[interval_j];
+        next_begin = d_begin[interval_j];
+        next_j = d_aabb_idx[interval_j];
+        next_tag_j = (next_j < Nold) ? d_tag_old[next_j] : d_tag[next_j - Nold];
 
         // we're not reporting overlaps in the same configuration
         if ((i < Nold && j < Nold) || (i >= Nold && j >= Nold))
             continue;
 
         Scalar4 postype_j = (j < Nold) ? d_postype_old[j] : d_postype[j - Nold];
-        unsigned int tag_j = (j < Nold) ? d_tag_old[j] : d_tag[j - Nold];
         unsigned int typ_j = __scalar_as_int(postype_j.w);
 
         if (tag_i == tag_j)
@@ -587,20 +616,19 @@ __global__ void gpu_sweep_and_prune_kernel(
         AABB aabb_j = shape_j.getAABB(vec3<Scalar>(postype_j));
 
         // check for AABB overlap
-        if (!s_check_overlaps[overlap_idx(typ_i,typ_j)]) continue;
+        if (!s_check_overlaps[overlap_idx(typ_i,typ_j)])
+            continue;
 
         // iterate over particle images to detect AABB overlap with periodic boundary conditions
-        unsigned int n_images = image_list.size();
-
         for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
             {
             // get the AABB for particle i in the current periodic image
             vec3<Scalar> pos_i_image = vec3<Scalar>(postype_i);
 
             if (i < Nold)
-                pos_i_image -= image_list[cur_image];
+                pos_i_image -= s_image_list[cur_image];
             else
-                pos_i_image += image_list[cur_image];
+                pos_i_image += s_image_list[cur_image];
 
             AABB aabb_i = aabb_i_local;
             aabb_i.translate(pos_i_image);
@@ -809,7 +837,8 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     unsigned int block_size_sweep_and_prune = min(args.block_size, (unsigned int)max_block_size_sweep_and_prune);
 
     unsigned int shared_bytes_sweep_and_prune = args.num_types * sizeof(typename Shape::param_type)
-        + args.overlap_idx.getNumElements() * sizeof(unsigned int);
+        + args.overlap_idx.getNumElements() * sizeof(unsigned int)
+        + args.image_list.size() * sizeof(vec3<Scalar>);
 
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
 
