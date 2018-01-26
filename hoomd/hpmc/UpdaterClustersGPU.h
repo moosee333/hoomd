@@ -78,6 +78,8 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         GPUVector<Scalar> m_end;             //!< End coordinates of AABBs for sweep and prune
         GPUVector<unsigned int> m_aabb_idx;  //!< Sorted list of AABB indices
         GPUVector<unsigned int> m_aabb_tag;  //!< Sorted list of AABB tags
+        GPUVector<unsigned int> m_scan_old;  //!< Intermediate scan output
+        GPUVector<unsigned int> m_scan_new;  //!< Intermediate scan output
         GPUVector<unsigned int> m_lookahead; //!< Pointer from one AABB to the next AABB of the opposite kind
 
         #ifdef NVGRAPH_AVAILABLE
@@ -139,6 +141,8 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     GPUVector<Scalar>(this->m_exec_conf).swap(m_end);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_aabb_idx);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_aabb_tag);
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_scan_old);
+    GPUVector<unsigned int>(this->m_exec_conf).swap(m_scan_new);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_lookahead);
 
     m_n_overlaps_old_new = 0;
@@ -197,6 +201,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
     m_end.resize(Ntot);
     m_aabb_idx.resize(Ntot);
     m_aabb_tag.resize(Ntot);
+    m_scan_old.resize(Ntot);
+    m_scan_new.resize(Ntot);
     m_lookahead.resize(Ntot);
 
     m_new_tag.resize(this->m_n_particles_old);
@@ -246,6 +252,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_scan_old(m_scan_old, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_scan_new(m_scan_new, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_lookahead(m_lookahead, access_location::device, access_mode::overwrite);
 
         detail::hpmc_clusters_args_t clusters_args(this->m_n_particles_old,
@@ -291,6 +299,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            d_end.data,
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
+                                           d_scan_old.data,
+                                           d_scan_new.data,
                                            d_lookahead.data
                                            );
 
@@ -403,6 +413,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         m_end.resize(Ntot);
         m_aabb_idx.resize(Ntot);
         m_aabb_tag.resize(Ntot);
+        m_scan_old.resize(Ntot);
+        m_scan_new.resize(Ntot);
         m_lookahead.resize(Ntot);
 
         // with line transformations, check new configuration against itself to detect interactions across PBC
@@ -423,6 +435,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_scan_old(m_scan_old, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_scan_new(m_scan_new, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_lookahead(m_lookahead, access_location::device, access_mode::overwrite);
 
         detail::hpmc_clusters_args_t clusters_args(this->m_pdata->getN(),
@@ -468,6 +482,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            d_end.data,
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
+                                           d_scan_old.data,
+                                           d_scan_new.data,
                                            d_lookahead.data
                                            );
 

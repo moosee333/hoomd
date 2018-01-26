@@ -83,6 +83,8 @@ struct hpmc_clusters_args_t
                 Scalar *_d_end,
                 unsigned int *_d_aabb_idx,
                 unsigned int *_d_aabb_tag,
+                unsigned int *_d_scan_old,
+                unsigned int *_d_scan_new,
                 unsigned int *_d_lookahead)
                 : N(_N),
                   ncollisions(_N),
@@ -127,6 +129,8 @@ struct hpmc_clusters_args_t
                   d_end(_d_end),
                   d_aabb_idx(_d_aabb_idx),
                   d_aabb_tag(_d_aabb_tag),
+                  d_scan_old(_d_scan_old),
+                  d_scan_new(_d_scan_new),
                   d_lookahead(_d_lookahead)
         {
         };
@@ -174,7 +178,9 @@ struct hpmc_clusters_args_t
     Scalar *d_end;                    //!< List of end coordinates of AABBs along the sweep axis
     unsigned int *d_aabb_idx;         //!< AABB indices corresponding to the (sorted) intervals
     unsigned int *d_aabb_tag;         //!< AABB indices corresponding to the (sorted) intervals
-    unsigned int *d_lookahead;        //!< Pointer from one AABB index in one set to the next index of the opposite set
+    unsigned int *d_scan_old;         //!< Intermediate result of scan
+    unsigned int *d_scan_new;         //!< Intermediate result of scan
+    unsigned int *d_lookahead;        //!< Pointer from one AABB index in one set to the next index of the same set
     };
 
 template< class Shape >
@@ -492,6 +498,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     unsigned int *d_aabb_idx,
     unsigned int *d_aabb_tag,
     unsigned int *d_lookahead,
+    unsigned int *d_lookahead_opposite,
     Scalar sweep_length,
     bool periodic,
     ManagedArray<vec3<Scalar> > image_list,
@@ -555,10 +562,11 @@ __global__ void gpu_sweep_and_prune_kernel(
     // the end coordinate of this interval
     Scalar end_i = d_end[interval_i];
 
-    unsigned int interval_j = interval_i + d_lookahead[interval_i];
+    unsigned int interval_j = interval_i + d_lookahead_opposite[interval_i];
 
     // corresponding particle index
     unsigned int i = d_aabb_idx[interval_i];
+    bool i_is_new = i >= Nold;
 
     // the coordinates of particle i belonging to our interval
     Scalar4 postype_i = (i < Nold) ? d_postype_old[i] : d_postype[i - Nold];
@@ -577,9 +585,13 @@ __global__ void gpu_sweep_and_prune_kernel(
         {
         if (periodic)
             {
-            // when wrapping around boundaries, we have to also re-initialize
+            // when wrapping around boundaries, we have to re-initialize
             // from the lookahead pointer, because it is not cylic
-            interval_j = (d_aabb_idx[0] == d_aabb_idx[N+Nold-1]) ? d_lookahead[0] : 0;
+            unsigned int j_wrap = d_aabb_idx[0];
+            bool j_wrap_is_new = j_wrap >= Nold;
+            interval_j = (i_is_new == j_wrap_is_new) ? d_lookahead_opposite[0] : 0;
+
+            // add up periodic images along sweep direction
             image += sweep_length;
             }
         else
@@ -605,7 +617,11 @@ __global__ void gpu_sweep_and_prune_kernel(
             {
             if (periodic)
                 {
-                interval_j = (d_aabb_idx[0] == d_aabb_idx[N+Nold-1]) ? d_lookahead[0] : 0;
+                unsigned int j_wrap = d_aabb_idx[0];
+                bool j_wrap_is_new = j_wrap >= Nold;
+                interval_j = (i_is_new == j_wrap_is_new) ? d_lookahead_opposite[0] : 0;
+
+                // add to periodic image along sweep direction
                 image += sweep_length;
                 }
             else
@@ -764,6 +780,22 @@ struct is_new : public thrust::unary_function<unsigned int, bool>
         }
     };
 
+struct scan_on_bool : public thrust::binary_function<bool, bool, bool>
+    {
+    scan_on_bool(bool _b)
+        : b(_b)
+        { }
+
+    bool b;
+
+    __device__
+    bool operator()(const bool& v, const bool& w) const
+        {
+        return v == b;
+        }
+    };
+
+
 //! Kernel driver for gpu_hpmc_clusters_kernel()
 /*! \param args Bundled arguments
     \param d_params Per-type shape parameters
@@ -863,20 +895,69 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         begin + args.N_old + args.N,
         values_it);
 
-    // compute the look-ahead table for finding the next element of the opposite kind
-    auto reverse_is_new = thrust::make_reverse_iterator(
-        thrust::make_transform_iterator(
-            aabb_idx + args.N_old + args.N,
-            is_new(args.N_old)));
-    thrust::device_ptr<unsigned int> lookahead(args.d_lookahead);
-    auto reverse_scan = thrust::make_reverse_iterator(lookahead + args.N_old + args.N);
+    // compute the look-ahead table for finding the next element of the same kind
+    auto is_new_it = thrust::make_transform_iterator(
+            aabb_idx,
+            is_new(args.N_old));
+    auto reverse_is_new = thrust::make_reverse_iterator(is_new_it + args.N_old + args.N);
 
-    thrust::inclusive_scan_by_key(
+    thrust::device_ptr<unsigned int> lookahead(args.d_lookahead);
+    thrust::device_ptr<unsigned int> scan_old(args.d_scan_old);
+    thrust::device_ptr<unsigned int> scan_new(args.d_scan_new);
+    auto reverse_scan_old = thrust::make_reverse_iterator(scan_old + args.N_old + args.N);
+    auto reverse_scan_new = thrust::make_reverse_iterator(scan_new + args.N_old + args.N);
+
+    // do a reverse segmented prefix sum
+    thrust::exclusive_scan_by_key(
         thrust::cuda::par(args.alloc),
         reverse_is_new,
         reverse_is_new + args.N_old + args.N,
         thrust::constant_iterator<unsigned int>(1),
-        reverse_scan);
+        reverse_scan_new,
+        1,
+        scan_on_bool(false));
+
+    thrust::exclusive_scan_by_key(
+        thrust::cuda::par(args.alloc),
+        reverse_is_new,
+        reverse_is_new + args.N_old + args.N,
+        thrust::constant_iterator<unsigned int>(1),
+        reverse_scan_old,
+        1,
+        scan_on_bool(true));
+
+    // combine the two jump indices into a single lookahead table
+    thrust::scatter_if(
+        thrust::cuda::par(args.alloc),
+        scan_new,
+        scan_new + args.N_old + args.N,
+        thrust::counting_iterator<unsigned int>(0),
+        is_new_it,
+        lookahead,
+        thrust::identity<bool>());
+
+    thrust::scatter_if(
+        thrust::cuda::par(args.alloc),
+        scan_old,
+        scan_old + args.N_old + args.N,
+        thrust::counting_iterator<unsigned int>(0),
+        is_new_it,
+        lookahead,
+        thrust::logical_not<bool>());
+
+    // construct the lookahead table from one set into the next AABB of the other
+
+    // reuse one of the scratch arrays
+    unsigned int *d_lookahead_opposite = args.d_scan_old;
+    thrust::device_ptr<unsigned int> lookahead_opposite(d_lookahead_opposite);
+    auto reverse_lookahead_opposite = thrust::make_reverse_iterator(lookahead_opposite + args.N_old + args.N);
+
+    thrust::inclusive_scan_by_key(
+         thrust::cuda::par(args.alloc),
+         reverse_is_new,
+         reverse_is_new + args.N_old + args.N,
+         thrust::constant_iterator<unsigned int>(1),
+         reverse_lookahead_opposite);
 
     // determine the maximum block size and clamp the input block size down
     static int max_block_size_sweep_and_prune = -1;
@@ -910,6 +991,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         args.d_aabb_idx,
         args.d_aabb_tag,
         args.d_lookahead,
+        d_lookahead_opposite,
         sweep_length,
         periodic,
         args.image_list,
