@@ -585,7 +585,6 @@ __global__ void gpu_sweep_and_prune_kernel(
     Scalar next_begin;
     unsigned int next_j;
     unsigned int next_tag_j;
-    unsigned int next_lookahead;
     Scalar4 next_postype_j;
 
     if (interval_j == N+Nold)
@@ -608,7 +607,6 @@ __global__ void gpu_sweep_and_prune_kernel(
     next_begin = d_begin[interval_j];
     next_j = d_aabb_idx[interval_j];
     next_tag_j = d_aabb_tag[interval_j];
-    next_lookahead = d_lookahead[interval_j];
     next_postype_j = d_aabb_postype[interval_j];
 
     do
@@ -622,7 +620,7 @@ __global__ void gpu_sweep_and_prune_kernel(
         if (begin_j > end_i)
             break; // done
 
-        interval_j += next_lookahead;
+        interval_j += d_lookahead[interval_j];
         if (interval_j == N+Nold)
             {
             if (periodic)
@@ -641,8 +639,8 @@ __global__ void gpu_sweep_and_prune_kernel(
         next_tag_j = d_aabb_tag[interval_j];
         next_begin = d_begin[interval_j];
         next_j = d_aabb_idx[interval_j];
-        next_lookahead = d_lookahead[interval_j];
         next_postype_j = d_aabb_postype[interval_j];
+        next_tag_j = d_aabb_tag[interval_j];
 
         unsigned int typ_j = __scalar_as_int(postype_j.w);
 
