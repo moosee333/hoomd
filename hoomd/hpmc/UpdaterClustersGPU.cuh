@@ -649,10 +649,6 @@ __global__ void gpu_sweep_and_prune_kernel(
         Shape shape_j(quat<Scalar>(), s_params[typ_j]);
         AABB aabb_j = shape_j.getAABB(vec3<Scalar>(postype_j));
 
-        // check for AABB overlap
-        if (!s_check_overlaps[overlap_idx(typ_i,typ_j)])
-            continue;
-
         // iterate over particle images to detect AABB overlap with periodic boundary conditions
         for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
             {
@@ -675,7 +671,9 @@ __global__ void gpu_sweep_and_prune_kernel(
                 OverlapReal rsq = dot(r_ij,r_ij);
                 OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
 
-                if (tag_i != tag_j && rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                if (tag_i != tag_j &&
+                    s_check_overlaps[overlap_idx(typ_i,typ_j)] &&
+                    rsq*OverlapReal(4.0) <= DaDb * DaDb)
                     {
                     // write to collision list
                     unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
