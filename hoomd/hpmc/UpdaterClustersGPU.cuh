@@ -581,6 +581,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     Scalar next_begin;
     unsigned int next_j;
     unsigned int next_tag_j;
+    unsigned int next_lookahead;
     if (interval_j == N+Nold)
         {
         if (periodic)
@@ -601,6 +602,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     next_begin = d_begin[interval_j];
     next_j = d_aabb_idx[interval_j];
     next_tag_j = d_aabb_tag[interval_j];
+    next_lookahead = d_lookahead[interval_j];
 
     do
         {
@@ -612,7 +614,7 @@ __global__ void gpu_sweep_and_prune_kernel(
         if (begin_j > end_i)
             break; // done
 
-        interval_j += d_lookahead[interval_j];
+        interval_j += next_lookahead;
         if (interval_j == N+Nold)
             {
             if (periodic)
@@ -631,6 +633,7 @@ __global__ void gpu_sweep_and_prune_kernel(
         next_begin = d_begin[interval_j];
         next_j = d_aabb_idx[interval_j];
         next_tag_j = d_aabb_tag[interval_j];
+        next_lookahead = d_lookahead[interval_j];
 
         // we're not reporting overlaps in the same configuration
 //        if ((i < Nold && j < Nold) || (i >= Nold && j >= Nold))
