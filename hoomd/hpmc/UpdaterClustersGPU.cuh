@@ -83,6 +83,7 @@ struct hpmc_clusters_args_t
                 Scalar *_d_end,
                 unsigned int *_d_aabb_idx,
                 unsigned int *_d_aabb_tag,
+                Scalar4 *_d_aabb_postype,
                 unsigned int *_d_scan_old,
                 unsigned int *_d_scan_new,
                 unsigned int *_d_lookahead)
@@ -129,6 +130,7 @@ struct hpmc_clusters_args_t
                   d_end(_d_end),
                   d_aabb_idx(_d_aabb_idx),
                   d_aabb_tag(_d_aabb_tag),
+                  d_aabb_postype(_d_aabb_postype),
                   d_scan_old(_d_scan_old),
                   d_scan_new(_d_scan_new),
                   d_lookahead(_d_lookahead)
@@ -177,7 +179,8 @@ struct hpmc_clusters_args_t
     Scalar *d_begin;                  //!< List of begin coordinates of AABBs along the sweep axis
     Scalar *d_end;                    //!< List of end coordinates of AABBs along the sweep axis
     unsigned int *d_aabb_idx;         //!< AABB indices corresponding to the (sorted) intervals
-    unsigned int *d_aabb_tag;         //!< AABB indices corresponding to the (sorted) intervals
+    unsigned int *d_aabb_tag;         //!< particle tags corresponding to the (sorted) intervals
+    Scalar4 *d_aabb_postype;          //!< particle positions and types corresponding to the (sorted) intervals
     unsigned int *d_scan_old;         //!< Intermediate result of scan
     unsigned int *d_scan_new;         //!< Intermediate result of scan
     unsigned int *d_lookahead;        //!< Pointer from one AABB index in one set to the next index of the same set
@@ -499,6 +502,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     unsigned int *d_aabb_tag,
     unsigned int *d_lookahead,
     unsigned int *d_lookahead_opposite,
+    const Scalar4 *d_aabb_postype,
     Scalar sweep_length,
     bool periodic,
     ManagedArray<vec3<Scalar> > image_list,
@@ -582,6 +586,8 @@ __global__ void gpu_sweep_and_prune_kernel(
     unsigned int next_j;
     unsigned int next_tag_j;
     unsigned int next_lookahead;
+    Scalar4 next_postype_j;
+
     if (interval_j == N+Nold)
         {
         if (periodic)
@@ -603,6 +609,7 @@ __global__ void gpu_sweep_and_prune_kernel(
     next_j = d_aabb_idx[interval_j];
     next_tag_j = d_aabb_tag[interval_j];
     next_lookahead = d_lookahead[interval_j];
+    next_postype_j = d_aabb_postype[interval_j];
 
     do
         {
@@ -610,6 +617,7 @@ __global__ void gpu_sweep_and_prune_kernel(
         Scalar begin_j = next_begin + image;
         unsigned int j = next_j;
         unsigned int tag_j = next_tag_j;
+        Scalar4 postype_j = next_postype_j;
 
         if (begin_j > end_i)
             break; // done
@@ -630,20 +638,13 @@ __global__ void gpu_sweep_and_prune_kernel(
                 break;
             }
 
+        next_tag_j = d_aabb_tag[interval_j];
         next_begin = d_begin[interval_j];
         next_j = d_aabb_idx[interval_j];
-        next_tag_j = d_aabb_tag[interval_j];
         next_lookahead = d_lookahead[interval_j];
+        next_postype_j = d_aabb_postype[interval_j];
 
-        // we're not reporting overlaps in the same configuration
-//        if ((i < Nold && j < Nold) || (i >= Nold && j >= Nold))
-//            continue;
-
-        Scalar4 postype_j = (j < Nold) ? d_postype_old[j] : d_postype[j - Nold];
         unsigned int typ_j = __scalar_as_int(postype_j.w);
-
-        if (tag_i == tag_j)
-            continue;
 
         Shape shape_j(quat<Scalar>(), s_params[typ_j]);
         AABB aabb_j = shape_j.getAABB(vec3<Scalar>(postype_j));
@@ -674,7 +675,7 @@ __global__ void gpu_sweep_and_prune_kernel(
                 OverlapReal rsq = dot(r_ij,r_ij);
                 OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
 
-                if (rsq*OverlapReal(4.0) <= DaDb * DaDb)
+                if (tag_i != tag_j && rsq*OverlapReal(4.0) <= DaDb * DaDb)
                     {
                     // write to collision list
                     unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
@@ -711,7 +712,8 @@ __global__ void gpu_get_aabb_extents_kernel(
     const BoxDim box,
     unsigned int offs,
     unsigned int *d_aabb_idx,
-    unsigned int *d_aabb_tag)
+    unsigned int *d_aabb_tag,
+    Scalar4 *d_aabb_postype)
     {
     // load the per type pair parameters into shared memory
     extern __shared__ char s_data[];
@@ -765,6 +767,7 @@ __global__ void gpu_get_aabb_extents_kernel(
     // fill index array, to be sorted later
     d_aabb_idx[idx] = offs+idx;
     d_aabb_tag[idx] = d_tag[idx];
+    d_aabb_postype[idx] = d_postype[idx];
     }
 
 //! A binary predicate to distinguish between old and new configuration by index
@@ -859,7 +862,8 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         args.box,
         0,
         args.d_aabb_idx,
-        args.d_aabb_tag);
+        args.d_aabb_tag,
+        args.d_aabb_postype);
 
     // append AABB extents for new configuration
     block_size_aabb = 256;
@@ -878,19 +882,22 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         args.box,
         args.N_old,
         args.d_aabb_idx + args.N_old,
-        args.d_aabb_tag + args.N_old);
+        args.d_aabb_tag + args.N_old,
+        args.d_aabb_postype + args.N_old);
 
     // sort the interval ends and indices (==values) by their beginnings (==keys)
     thrust::device_ptr<Scalar> begin(args.d_begin);
     thrust::device_ptr<Scalar> end(args.d_end);
     thrust::device_ptr<unsigned int> aabb_idx(args.d_aabb_idx);
     thrust::device_ptr<unsigned int> aabb_tag(args.d_aabb_tag);
+    thrust::device_ptr<Scalar4> aabb_postype(args.d_aabb_postype);
 
-    // combine the end point and the index in one iterator
+    // combine the end point and the AABB data into one iterator
     auto values_it = thrust::make_zip_iterator(thrust::make_tuple(
         end,
         aabb_idx,
-        aabb_tag));
+        aabb_tag,
+        aabb_postype));
 
     thrust::sort_by_key(
         thrust::cuda::par(args.alloc),
@@ -995,6 +1002,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
         args.d_aabb_tag,
         args.d_lookahead,
         d_lookahead_opposite,
+        args.d_aabb_postype,
         sweep_length,
         periodic,
         args.image_list,

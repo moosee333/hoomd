@@ -78,6 +78,7 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         GPUVector<Scalar> m_end;             //!< End coordinates of AABBs for sweep and prune
         GPUVector<unsigned int> m_aabb_idx;  //!< Sorted list of AABB indices
         GPUVector<unsigned int> m_aabb_tag;  //!< Sorted list of AABB tags
+        GPUVector<Scalar4> m_aabb_postype;   //!< Sorted list of positions and types corresponding to the AABBs
         GPUVector<unsigned int> m_scan_old;  //!< Intermediate scan output
         GPUVector<unsigned int> m_scan_new;  //!< Intermediate scan output
         GPUVector<unsigned int> m_lookahead; //!< Pointer from one AABB to the next AABB of the opposite kind
@@ -141,6 +142,7 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     GPUVector<Scalar>(this->m_exec_conf).swap(m_end);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_aabb_idx);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_aabb_tag);
+    GPUVector<Scalar4>(this->m_exec_conf).swap(m_aabb_postype);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_scan_old);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_scan_new);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_lookahead);
@@ -201,6 +203,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
     m_end.resize(Ntot);
     m_aabb_idx.resize(Ntot);
     m_aabb_tag.resize(Ntot);
+    m_aabb_postype.resize(Ntot);
     m_scan_old.resize(Ntot);
     m_scan_new.resize(Ntot);
     m_lookahead.resize(Ntot);
@@ -252,6 +255,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
+        ArrayHandle<Scalar4> d_aabb_postype(m_aabb_postype, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_scan_old(m_scan_old, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_scan_new(m_scan_new, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_lookahead(m_lookahead, access_location::device, access_mode::overwrite);
@@ -299,6 +303,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            d_end.data,
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
+                                           d_aabb_postype.data,
                                            d_scan_old.data,
                                            d_scan_new.data,
                                            d_lookahead.data
@@ -413,6 +418,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         m_end.resize(Ntot);
         m_aabb_idx.resize(Ntot);
         m_aabb_tag.resize(Ntot);
+        m_aabb_postype.resize(Ntot);
         m_scan_old.resize(Ntot);
         m_scan_new.resize(Ntot);
         m_lookahead.resize(Ntot);
@@ -435,6 +441,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<Scalar> d_end(m_end, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
+        ArrayHandle<Scalar4> d_aabb_postype(m_aabb_postype, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_scan_old(m_scan_old, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_scan_new(m_scan_new, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_lookahead(m_lookahead, access_location::device, access_mode::overwrite);
@@ -482,6 +489,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            d_end.data,
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
+                                           d_aabb_postype.data,
                                            d_scan_old.data,
                                            d_scan_new.data,
                                            d_lookahead.data
