@@ -14,6 +14,7 @@
 #include "UpdaterClusters.h"
 #include "UpdaterClustersGPU.cuh"
 #include "hoomd/AABBTree.h"
+#include "OBBTree.h"
 
 #include <cuda_runtime.h>
 
@@ -222,6 +223,34 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
     auto &image_list = this->m_mc->updateImageList();
     auto &image_hkl = this->m_mc->getImageHKL();
 
+    // build the OBB tree
+    detail::OBBTree obb_tree(true);
+
+    if (this->m_prof)
+        this->m_prof->push("build OBB tree");
+
+        {
+        ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+
+        // grow the OBB list to the needed size
+        unsigned int n_obb = this->m_pdata->getN()+this->m_pdata->getNGhosts();
+        std::vector<detail::OBB> obbs(n_obb);
+        if (n_obb > 0)
+            {
+            for (unsigned int cur_particle = 0; cur_particle < n_obb; cur_particle++)
+                {
+                unsigned int i = cur_particle;
+                Shape shape(quat<Scalar>(h_orientation.data[i]), params[__scalar_as_int(h_postype.data[i].w)]);
+                obbs[i] = detail::OBB(vec3<Scalar>(h_postype.data[i]),Scalar(0.5)*shape.getCircumsphereDiameter());
+                }
+            obb_tree.buildTree(&obbs.front(), n_obb, 16, false);
+            }
+        }
+    if (this->m_prof)
+        this->m_prof->pop();
+
+
     // old new
     bool reallocate = true;
         {
@@ -283,6 +312,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            swap ? this->m_ab_types[1] : 0,
                                            aabb_tree,
                                            image_list,
+                                           obb_tree,
                                            image_hkl,
                                            m_stream,
                                            this->m_exec_conf->dev_prop,
@@ -460,6 +490,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            swap ? this->m_ab_types[1] : 0,
                                            aabb_tree,
                                            image_list,
+                                           obb_tree,
                                            image_hkl,
                                            m_stream,
                                            this->m_exec_conf->dev_prop,

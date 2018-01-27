@@ -1799,7 +1799,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
         }
 
     // clamp down child kernel block size
-    unsigned int block_size_overlaps = min(max_block_size_overlaps, args.block_size_overlaps);
+    unsigned int block_size_overlaps = min(max_block_size_overlaps, (int) args.block_size_overlaps);
 
     // manage extra shared memory in nested kernel
     static unsigned int base_shared_bytes = UINT_MAX;
@@ -1808,7 +1808,7 @@ cudaError_t gpu_hpmc_insert_depletants_dp(const hpmc_implicit_args_new_t& args, 
     bool shared_bytes_changed = base_shared_bytes != shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
     base_shared_bytes = shared_bytes_overlaps + attr_overlaps.sharedSizeBytes;
 
-    unsigned int max_extra_bytes = max(0,32768 - base_shared_bytes);
+    unsigned int max_extra_bytes = max(0,32768 - (int)base_shared_bytes);
     static unsigned int extra_bytes = UINT_MAX;
 
     if (args.load_shared)

@@ -2368,7 +2368,7 @@ cudaError_t gpu_hpmc_update_aabb(const hpmc_args_t& args, const typename Shape::
 
     // NVIDIA recommends not using more than 32k of shared memory per block
     // http://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
-    unsigned int max_extra_bytes = max(0,32768 - base_shared_bytes);
+    unsigned int max_extra_bytes = max(0,32768 - (int)base_shared_bytes);
     //unsigned int max_extra_bytes = args.devprop.sharedMemPerBlock - base_shared_bytes;
     static unsigned int extra_bytes = UINT_MAX;
     if (extra_bytes == UINT_MAX || args.update_shape_param || shared_bytes_changed)
@@ -2957,7 +2957,7 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
 
     // NVIDIA recommends not using more than 32k of shared memory per block
     // http://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
-    unsigned int max_extra_bytes = max(0,32768 - base_shared_bytes);
+    unsigned int max_extra_bytes = max(0,32768 - (int)base_shared_bytes);
     static unsigned int extra_bytes = UINT_MAX;
 
     if (args.load_shared)
@@ -2985,7 +2985,7 @@ cudaError_t gpu_hpmc_check_overlaps(const hpmc_args_t& args, const typename Shap
     dim3 threads(group_size, n_groups,1);
     dim3 grid( args.csi.getNumElements() / n_groups + 1, 1, 1);
 
-    unsigned int block_size_overlaps = min(args.block_size_overlaps, max_block_size_overlaps);
+    unsigned int block_size_overlaps = min((int)args.block_size_overlaps, max_block_size_overlaps);
 
     gpu_hpmc_schedule_overlaps_kernel<Shape><<<grid, threads, shared_bytes, args.stream>>>(args.d_postype,
                                                                  args.d_orientation,
