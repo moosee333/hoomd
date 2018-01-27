@@ -224,7 +224,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
     auto &image_hkl = this->m_mc->getImageHKL();
 
     // build the OBB tree
-    detail::OBBTree obb_tree(true);
+    detail::OBBTree obb_tree;
 
     if (this->m_prof)
         this->m_prof->push("build OBB tree");
@@ -247,6 +247,8 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
             obb_tree.buildTree(&obbs.front(), n_obb, 16, false);
             }
         }
+    detail::GPUTree gpu_tree(obb_tree, true);
+
     if (this->m_prof)
         this->m_prof->pop();
 
@@ -312,7 +314,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            swap ? this->m_ab_types[1] : 0,
                                            aabb_tree,
                                            image_list,
-                                           obb_tree,
+                                           gpu_tree,
                                            image_hkl,
                                            m_stream,
                                            this->m_exec_conf->dev_prop,
@@ -490,7 +492,7 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            swap ? this->m_ab_types[1] : 0,
                                            aabb_tree,
                                            image_list,
-                                           obb_tree,
+                                           gpu_tree,
                                            image_hkl,
                                            m_stream,
                                            this->m_exec_conf->dev_prop,

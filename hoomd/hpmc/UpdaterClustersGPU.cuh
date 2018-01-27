@@ -18,7 +18,7 @@
 #include "hoomd/AABBTree.h"
 #include "hoomd/ManagedArray.h"
 
-#include "OBBTree.h"
+#include "GPUTree.h"
 
 #include <thrust/sort.h>
 #include <thrust/iterator/zip_iterator.h>
@@ -73,7 +73,7 @@ struct hpmc_clusters_args_t
                 unsigned int _type_B,
                 const AABBTree& _aabb_tree,
                 const ManagedArray<vec3<Scalar> >& _image_list,
-                const OBBTree& _obb_tree,
+                const GPUTree& _obb_tree,
                 const ManagedArray<int3 >& _image_hkl,
                 cudaStream_t _stream,
                 const cudaDeviceProp& _devprop,
@@ -165,7 +165,7 @@ struct hpmc_clusters_args_t
     unsigned int type_A;              //!< Type A of swap pair
     unsigned int type_B;              //!< Type B of swap pair
     const AABBTree& aabb_tree;        //!< AABB tree data structure for overlap checks
-    const OBBTree& obb_tree;         //!< OBB tree data structure for overlap checks
+    const GPUTree& obb_tree;         //!< OBB tree data structure for overlap checks
     const ManagedArray<vec3<Scalar> >& image_list; //!< Image list for periodic boundary conditions
     const ManagedArray<int3 >& image_hkl; //!< Image list shifts for periodic boundary conditions
     cudaStream_t stream;               //!< Stream for kernel execution
@@ -226,7 +226,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const unsigned int *d_tag_test,
                                      bool line,
                                      bool swap,
-                                     const OBBTree tree,
+                                     const GPUTree tree,
                                      const ManagedArray<vec3<Scalar> > image_list,
                                      unsigned int max_n_overlaps,
                                      uint2 *d_conditions)
@@ -285,15 +285,16 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
         vec3<Scalar> pos_image = pos_i + image_list[cur_image];
         OBB obb(pos_image, Scalar(0.5)*shape_i.getCircumsphereDiameter());
 
-        for (unsigned int cur_node_idx = 0; cur_node_idx < num_nodes;)
+        unsigned int cur_node_idx = 0;
+        while (cur_node_idx < num_nodes)
             {
-            if (detail::overlap(tree.getNodeOBB(cur_node_idx), obb))
+            if (detail::overlap(tree.getOBB(cur_node_idx), obb))
                 {
-                if (tree.isNodeLeaf(cur_node_idx))
+                if (tree.isLeaf(cur_node_idx))
                     {
-                    for (unsigned int cur_p = threadIdx.x; cur_p < tree.getNodeNumParticles(cur_node_idx); cur_p+=blockDim.x)
+                    for (unsigned int cur_p = threadIdx.x; cur_p < tree.getNumParticles(cur_node_idx); cur_p+=blockDim.x)
                         {
-                        unsigned int j = tree.getNodeParticle(cur_node_idx, cur_p);
+                        unsigned int j = tree.getParticle(cur_node_idx, cur_p);
 
                         unsigned int tag_j = d_tag[j];
                         if (tag_j == tag)
@@ -335,7 +336,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                     } // end isLeaf
                 else
                     {
-                    cur_node_idx = tree.getNodeLeft(cur_node_idx);
+                    cur_node_idx = tree.getLeftChild(cur_node_idx);
                     }
                 } // end AABB overlap
             else

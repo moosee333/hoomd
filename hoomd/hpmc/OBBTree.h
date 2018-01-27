@@ -60,7 +60,7 @@ struct OBBNode
     unsigned int parent; //!< Index of the parent node
     unsigned int escape; //!< Index of next node in in-order traversal
 
-    ManagedArray<unsigned int> particles;      //!< Indices of the particles contained in the node
+    std::vector<unsigned int> particles;      //!< Indices of the particles contained in the node
     };
 
 //! OBB Tree
@@ -74,7 +74,7 @@ struct OBBNode
 
     **Implementation details**
 
-    OBBTree stores all nodes in a flat array manged by ManagedArray. The tree is in *post-order*.
+    OBBTree stores all nodes in a flat array manged by std::vector. The tree is in *post-order*.
     The nodes store the indices of their left and right children along with their OBB. Nodes
     are allocated as needed with allocate(). With multiple particles per leaf node, the total number of internal nodes
     needed is not known (but can be estimated) until build time.
@@ -188,7 +188,6 @@ class OBBTree
         //! Initialize the tree to hold N particles
         inline void init(unsigned int N);
 
-        #ifndef NVCC
         //! Build a node of the tree recursively
         inline unsigned int buildNode(OBB *obbs, std::vector<std::vector<vec3<OverlapReal> > >& internal_coordinates,
             std::vector< std::vector<OverlapReal> >& vertex_radii, std::vector<unsigned int>& idx,
@@ -200,7 +199,6 @@ class OBBTree
 
         //! Update the escape index for a node
         inline void updateEscapeIndex(unsigned int idx, unsigned int parent_idx);
-        #endif
     };
 
 
@@ -343,11 +341,10 @@ inline unsigned int OBBTree::buildNode(OBB *obbs,
         m_nodes[new_node].obb = my_obb;
         m_nodes[new_node].parent = parent;
 
-        m_nodes[new_node].particles = ManagedArray<unsigned int>(len,m_managed);
         for (unsigned int i = 0; i < len; i++)
             {
             // assign the particle indices into the leaf node
-            m_nodes[new_node].particles[i] = idx[start+i];
+            m_nodes[new_node].particles.push_back(idx[start+i]);
             }
 
         return new_node;
