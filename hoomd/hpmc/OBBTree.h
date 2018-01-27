@@ -40,6 +40,8 @@ namespace detail
 
 const unsigned int OBB_INVALID_NODE = 0xffffffff;   //!< Invalid node index sentinel
 
+#ifndef NVCC
+
 //! Node in an OBBTree
 /*! Stores data for a node in the OBB tree
 */
@@ -85,16 +87,18 @@ class OBBTree
     {
     public:
         //! Construct an OBBTree
-        OBBTree(bool managed = false)
-            : m_num_nodes(0), m_node_capacity(0), m_leaf_capacity(0), m_root(0), m_managed(managed)
+        OBBTree()
+            : m_nodes(0), m_num_nodes(0), m_node_capacity(0), m_leaf_capacity(0), m_root(0)
             {
             }
 
         // Destructor
         ~OBBTree()
-            { }
+            {
+            if (m_nodes)
+                delete [] m_nodes;
+            }
 
-        #ifndef NVCC
         //! Build a tree smartly from a list of OBBs and internal coordinates
         inline void buildTree(OBB *obbs, std::vector<std::vector<vec3<OverlapReal> > >& internal_coordinates,
             OverlapReal vertex_radius, unsigned int N, unsigned int leaf_capacity, bool sphere_tree);
@@ -104,10 +108,9 @@ class OBBTree
 
         //! Update the OBB of a particle
         inline void update(unsigned int idx, const OBB& obb);
-        #endif
 
         //! Get the number of nodes
-        DEVICE inline unsigned int getNumNodes() const
+        inline unsigned int getNumNodes() const
             {
             return m_num_nodes;
             }
@@ -115,7 +118,7 @@ class OBBTree
         //! Test if a given index is a leaf node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline bool isNodeLeaf(unsigned int node) const
+        inline bool isNodeLeaf(unsigned int node) const
             {
             return (m_nodes[node].left == OBB_INVALID_NODE);
             }
@@ -123,7 +126,7 @@ class OBBTree
         //! Get the OBBNode
         /*! \param node Index of the node (not the particle) to query
          */
-        DEVICE inline const OBBNode& getNode(unsigned int node) const
+        inline const OBBNode& getNode(unsigned int node) const
             {
             return m_nodes[node];
             }
@@ -131,7 +134,7 @@ class OBBTree
         //! Get the OBB of a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline const OBB& getNodeOBB(unsigned int node) const
+        inline const OBB& getNodeOBB(unsigned int node) const
             {
             return (m_nodes[node].obb);
             }
@@ -139,7 +142,7 @@ class OBBTree
         //! Get the the escape index for a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getEscapeIndex(unsigned int node) const
+        inline unsigned int getEscapeIndex(unsigned int node) const
             {
             return (m_nodes[node].escape);
             }
@@ -147,7 +150,7 @@ class OBBTree
         //! Get the left child of a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getNodeLeft(unsigned int node) const
+        inline unsigned int getNodeLeft(unsigned int node) const
             {
             return (m_nodes[node].left);
             }
@@ -155,7 +158,7 @@ class OBBTree
         //! Get the number of particles in a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getNodeNumParticles(unsigned int node) const
+        inline unsigned int getNodeNumParticles(unsigned int node) const
             {
             return (m_nodes[node].particles.size());
             }
@@ -163,25 +166,24 @@ class OBBTree
         //! Get the particles in a given node
         /*! \param node Index of the node (not the particle) to query
         */
-        DEVICE inline unsigned int getNodeParticle(unsigned int node, unsigned int j) const
+        inline unsigned int getNodeParticle(unsigned int node, unsigned int j) const
             {
             assert(m_nodes[node].particles.size() > j);
             return (m_nodes[node].particles[j]);
             }
 
         //! Get the capacity of leaf nodes
-        DEVICE unsigned int getLeafNodeCapacity() const
+        unsigned int getLeafNodeCapacity() const
             {
             return m_leaf_capacity;
             }
 
     private:
-        ManagedArray<OBBNode> m_nodes;      //!< The nodes of the tree
+        OBBNode *m_nodes;                  //!< The nodes of the tree
         unsigned int m_num_nodes;           //!< Number of nodes
         unsigned int m_node_capacity;       //!< Capacity of the nodes array
         unsigned int m_leaf_capacity;       //!< Number of particles in leaf nodes
         unsigned int m_root;                //!< Index to the root node of the tree
-        bool m_managed;                     //!< True if we use managed memory
 
         //! Initialize the tree to hold N particles
         inline void init(unsigned int N);
@@ -202,7 +204,6 @@ class OBBTree
     };
 
 
-#ifndef NVCC
 /*! \param N Number of particles to allocate space for
 
     Initialize the tree with room for N particles.
@@ -448,17 +449,19 @@ inline unsigned int OBBTree::allocateNode()
     if (m_num_nodes >= m_node_capacity)
         {
         // determine new capacity
+        OBBNode *m_new_nodes = NULL;
         unsigned int m_new_node_capacity = m_node_capacity*2;
         if (m_new_node_capacity == 0)
             m_new_node_capacity = 16;
 
         // allocate new memory
-        auto m_new_nodes = ManagedArray<OBBNode>(m_new_node_capacity,m_managed);
+        m_new_nodes = new OBBNode[m_new_node_capacity];
 
         // if we have old memory, copy it over
-        if (m_nodes.size())
+        if (m_nodes != NULL)
             {
-            std::copy(m_nodes.get(), m_nodes.get() + m_num_nodes, m_new_nodes.get());
+            std::copy(m_nodes, m_nodes + m_num_nodes, m_new_nodes);
+            delete[] m_nodes;
             }
         m_nodes = m_new_nodes;
         m_node_capacity = m_new_node_capacity;
