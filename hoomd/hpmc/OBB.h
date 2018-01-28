@@ -528,8 +528,8 @@ DEVICE inline Real MinAreaRect(
     for (unsigned int i = 0, j = numPts - 1; i < numPts; j = i, i++)
         {
         // Get current edge e0 (e0x,e0y), normalized
-        vec3<Scalar> pos_j = pos[map[start_idx+j]];
-        vec2<Real> e0 = project(pos[map[start_idx+i]]-pos_j,cur_axis,test_axis);
+        vec3<Scalar> pos_j(pos[map[start_idx+j]]);
+        vec2<Real> e0 = project(vec3<Scalar>(pos[map[start_idx+i]])-pos_j,cur_axis,test_axis);
 
         const Real eps_abs(1e-12); // if edge is too short, do not consider
         if (dot(e0,e0) < eps_abs) continue;
@@ -545,7 +545,7 @@ DEVICE inline Real MinAreaRect(
             {
             // Project points onto axes e0 and e1 and keep track
             // of minimum and maximum values along both axes
-            vec2<Real> d = project(pos[map[start_idx+k]]-pos_j, cur_axis, test_axis);
+            vec2<Real> d = project(vec3<Scalar>(pos[map[start_idx+k]])-pos_j, cur_axis, test_axis);
 
             Real dotp = dot(d, e0);
             if (dotp < min0) min0 = dotp;
@@ -560,7 +560,7 @@ DEVICE inline Real MinAreaRect(
         if (area < minArea)
             {
             minArea = area;
-            c = project(pos[map[start_idx+j]], cur_axis, test_axis) + 0.5 * ((min0 + max0) * e0 + (min1 + max1) * e1);
+            c = project(vec3<Scalar>(pos[map[start_idx+j]]), cur_axis, test_axis) + 0.5 * ((min0 + max0) * e0 + (min1 + max1) * e1);
             u[0] = e0; u[1] = e1;
             }
         }
@@ -1246,37 +1246,11 @@ DEVICE inline void computeBoundingVolume(
     unsigned int end_idx,
     const typename Shape::param_type& param)
     {
-    //for now, compute an AABB
-
     // construct a shape with given parameters
     Shape shape(quat<Scalar>(), param);
 
-    AABB aabb = shape.getAABB(vec3<Scalar>(postype[ map_tree_pid[start_idx] ]));
-    vec3<Scalar> lower = aabb.getLower();
-    vec3<Scalar> upper = aabb.getUpper();
-
-    for (unsigned int cur_p=start_idx+1; cur_p < end_idx; ++cur_p)
-        {
-        aabb = shape.getAABB(vec3<Scalar>(postype[ map_tree_pid[cur_p] ]));
-        vec3<Scalar> cur_lower = aabb.getLower();
-        vec3<Scalar> cur_upper = aabb.getUpper();
-
-        // merge the boxes together
-        if (cur_lower.x < lower.x) lower.x = cur_lower.x;
-        if (cur_upper.x > upper.x) upper.x = cur_upper.x;
-
-        if (cur_lower.y < lower.y) lower.y = cur_lower.y;
-        if (cur_upper.y > upper.y) upper.y = cur_upper.y;
-
-        if (cur_lower.z < lower.z) lower.z = cur_lower.z;
-        if (cur_upper.z > upper.z) upper.z = cur_upper.z;
-        }
-
-    obb.lengths = vec3<Scalar>(0.5*(upper.x-lower.x), 0.5*(upper.y-lower.y), 0.5*(upper.z-lower.z));
-    obb.center = vec3<Scalar>(0.5*(upper.x+lower.x), 0.5*(upper.y+lower.y), 0.5*(upper.z+lower.z));
-    obb.rotation = quat<OverlapReal>();
-    obb.mask = 1;
-    obb.is_sphere = 0;
+    // compute the bounding OBB
+    compute_obb_from_spheres(obb, postype, map_tree_pid, start_idx, end_idx, Scalar(0.5)*shape.getCircumsphereDiameter());
     }
 
 }; // end namespace detail
