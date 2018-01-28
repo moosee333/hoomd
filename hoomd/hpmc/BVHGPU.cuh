@@ -43,6 +43,7 @@ struct hpmc_bvh_shapes_args_t
         d_pos(_d_pos),
         d_num_per_type(_d_num_per_type),
         ntypes(_ntypes),
+        d_map_tree_pid(_d_map_tree_pid),
         d_leaf_offset(_d_leaf_offset),
         d_type_head(_d_type_head),
         Ntot(_Ntot),

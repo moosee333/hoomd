@@ -2,7 +2,7 @@
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
 
-// Maintainer: jglaser
+// Maintainer: jglaser, mphoward
 
 #ifdef ENABLE_CUDA
 #include "BVHGPU.cuh"
@@ -122,7 +122,7 @@ class BVHGPU : public Compute
 
         // some metaprogramming to not load parameters when the template argument doesn't support it
 
-        //! If IntHPMC is HPMC integrator, return it's parameters
+        //! If IntHPMC is HPMC integrator, return its parameters
         /*! \returns a pointer to the parameter data structure per type
          */
         template<typename T = IntHPMC>
