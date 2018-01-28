@@ -32,6 +32,7 @@
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
 #include "UpdaterMuVTGPU.h"
+#include "BVHGPU.h"
 #endif
 
 
@@ -69,11 +70,14 @@ void export_convex_polygon(py::module& m)
     export_ExternalCallback<ShapeConvexPolygon>(m, "ExternalCallbackConvexPolygon");
 
     #ifdef ENABLE_CUDA
+    using BVH_GPU_OBB = BVHGPU<OBBNodeGPU, ShapeConvexPolygon, IntegratorHPMCMono< ShapeConvexPolygon > >;
+    export_BVHGPU< OBBNodeGPU, ShapeConvexPolygon, IntegratorHPMCMono< ShapeConvexPolygon > >(m, "BVHGPUOBBConvexPolygon");
+
     export_IntegratorHPMCMonoGPU< ShapeConvexPolygon >(m, "IntegratorHPMCMonoGPUConvexPolygon");
     export_IntegratorHPMCMonoImplicitGPU< ShapeConvexPolygon >(m, "IntegratorHPMCMonoImplicitGPUConvexPolygon");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeConvexPolygon >(m, "IntegratorHPMCMonoImplicitNewGPUConvexPolygon");
     export_ComputeFreeVolumeGPU< ShapeConvexPolygon >(m, "ComputeFreeVolumeGPUConvexPolygon");
-    export_UpdaterClustersGPU< ShapeConvexPolygon >(m, "UpdaterClustersGPUConvexPolygon");
+    export_UpdaterClustersGPU< ShapeConvexPolygon, BVH_GPU_OBB >(m, "UpdaterClustersGPUConvexPolygonOBB");
     export_UpdaterMuVTGPU< ShapeConvexPolygon >(m, "UpdaterMuVTGPUConvexPolygon");
     #endif
     }

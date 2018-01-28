@@ -18,7 +18,7 @@
 #include "hoomd/AABBTree.h"
 #include "hoomd/ManagedArray.h"
 
-#include "GPUTree.h"
+#include "BVHGPU.cuh"
 
 #include <thrust/sort.h>
 #include <thrust/iterator/zip_iterator.h>
@@ -73,7 +73,6 @@ struct hpmc_clusters_args_t
                 unsigned int _type_B,
                 const AABBTree& _aabb_tree,
                 const ManagedArray<vec3<Scalar> >& _image_list,
-                const GPUTree& _obb_tree,
                 const ManagedArray<int3 >& _image_hkl,
                 cudaStream_t _stream,
                 const cudaDeviceProp& _devprop,
@@ -83,7 +82,12 @@ struct hpmc_clusters_args_t
                 Scalar *_d_end,
                 unsigned int *_d_aabb_idx,
                 unsigned int *_d_aabb_tag,
-                Scalar4 *_d_aabb_postype)
+                Scalar4 *_d_aabb_postype,
+                const unsigned int *_d_leaf_offset,
+                const unsigned int *_d_tree_roots,
+                const Scalar4 *_d_leaf_xyzf,
+                const unsigned int _nparticles_per_leaf
+                )
                 : N(_N),
                   ncollisions(_N),
                   d_postype(_d_postype),
@@ -117,7 +121,6 @@ struct hpmc_clusters_args_t
                   type_A(_type_A),
                   type_B(_type_B),
                   aabb_tree(_aabb_tree),
-                  obb_tree(_obb_tree),
                   image_list(_image_list),
                   image_hkl(_image_hkl),
                   stream(_stream),
@@ -128,9 +131,12 @@ struct hpmc_clusters_args_t
                   d_end(_d_end),
                   d_aabb_idx(_d_aabb_idx),
                   d_aabb_tag(_d_aabb_tag),
-                  d_aabb_postype(_d_aabb_postype)
-        {
-        };
+                  d_aabb_postype(_d_aabb_postype),
+                  d_leaf_offset(_d_leaf_offset),
+                  d_tree_roots(_d_tree_roots),
+                  d_leaf_xyzf(_d_leaf_xyzf),
+                  nparticles_per_leaf(_nparticles_per_leaf)
+        { };
 
     unsigned int N;                   //!< Number of particles to test
     unsigned int ncollisions;         //!< Number of collisions from broad phase
@@ -165,7 +171,6 @@ struct hpmc_clusters_args_t
     unsigned int type_A;              //!< Type A of swap pair
     unsigned int type_B;              //!< Type B of swap pair
     const AABBTree& aabb_tree;        //!< AABB tree data structure for overlap checks
-    const GPUTree& obb_tree;         //!< OBB tree data structure for overlap checks
     const ManagedArray<vec3<Scalar> >& image_list; //!< Image list for periodic boundary conditions
     const ManagedArray<int3 >& image_hkl; //!< Image list shifts for periodic boundary conditions
     cudaStream_t stream;               //!< Stream for kernel execution
@@ -177,10 +182,16 @@ struct hpmc_clusters_args_t
     unsigned int *d_aabb_idx;         //!< AABB indices corresponding to the (sorted) intervals
     unsigned int *d_aabb_tag;         //!< particle tags corresponding to the (sorted) intervals
     Scalar4 *d_aabb_postype;          //!< particle positions and types corresponding to the (sorted) intervals
+    const unsigned int *d_leaf_offset;  //!< Offset for reading leaf particles by type
+    const unsigned int *d_tree_roots;   //!< Index for tree root by type
+    const Scalar4 *d_leaf_xyzf;         //!< Leaf position-id array
+    const unsigned int nparticles_per_leaf; //!< Number of particles per leaf node
     };
 
-template< class Shape >
-cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t &args, const typename Shape::param_type *d_params);
+template< class Shape, class BVH_type >
+cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t &args,
+                const BVH_type *_d_tree_nodes,
+                const typename Shape::param_type *d_params);
 
 template< class Shape >
 cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t &args, const typename Shape::param_type *d_params);
@@ -207,7 +218,7 @@ static scalar4_tex_t clusters_postype_tex;
 static scalar4_tex_t clusters_orientation_tex;
 
 //! Kernel to find overlaps between different configurations
-template< class Shape >
+template< class Shape, class BVH_type >
 __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const Scalar4 *d_postype,
                                      const Scalar4 *d_orientation,
@@ -226,10 +237,15 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const unsigned int *d_tag_test,
                                      bool line,
                                      bool swap,
-                                     const GPUTree tree,
                                      const ManagedArray<vec3<Scalar> > image_list,
                                      unsigned int max_n_overlaps,
-                                     uint2 *d_conditions)
+                                     uint2 *d_conditions,
+                                     const unsigned int *d_leaf_offset,
+                                     const unsigned int *d_tree_roots,
+                                     const BVH_type *d_tree_nodes,
+                                     const Scalar4 *d_leaf_xyzf,
+                                     unsigned int nparticles_per_leaf
+                                     )
     {
     // determine particle idx
     unsigned int i = (blockIdx.z * gridDim.y + blockIdx.y)*blockDim.y + threadIdx.y;
@@ -238,6 +254,8 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
     extern __shared__ char s_data[];
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     unsigned int *s_check_overlaps = (unsigned int *) (s_params + num_types);
+    unsigned int *s_leaf_offset = s_check_overlaps + overlap_idx.getNumElements();
+
     unsigned int ntyppairs = overlap_idx.getNumElements();
 
     // copy over parameters one int per thread for fast loads
@@ -261,6 +279,15 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                 s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
                 }
             }
+
+        // load in the per type leaf offsets
+        for (unsigned int cur_offset = 0; cur_offset < num_types; cur_offset += block_size)
+            {
+            if (cur_offset + tidx < num_types)
+                {
+                s_leaf_offset[cur_offset + tidx] = d_leaf_offset[cur_offset + tidx];
+                }
+            }
         }
 
     __syncthreads();
@@ -276,77 +303,93 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
 
     Shape shape_i(quat<Scalar>(d_orientation_test[i]), s_params[type]);
 
-    unsigned int num_nodes = tree.getNumNodes();
     unsigned int n_images = image_list.size();
 
-    // obtain a pointer to the managed memory holding the AABB nodes
-    for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
+     for (unsigned int cur_pair_type=0; cur_pair_type < num_types; ++cur_pair_type)
         {
-        vec3<Scalar> pos_image = pos_i + image_list[cur_image];
-        OBB obb(pos_image, Scalar(0.5)*shape_i.getCircumsphereDiameter());
+        const unsigned int cur_tree_root = d_tree_roots[cur_pair_type];
+        // skip this type if we don't have it
+        if (cur_tree_root == BVH_GPU_INVALID_NODE)
+            continue;
 
-        unsigned int cur_node_idx = 0;
-        while (cur_node_idx < num_nodes)
+        for (unsigned int cur_image = 0; cur_image < n_images; ++cur_image)
             {
-            if (detail::overlap(tree.getOBB(cur_node_idx), obb))
+            vec3<Scalar> pos_image = pos_i + image_list[cur_image];
+
+            // construct a bounding volume from a position and a radius
+            typename BVH_type::bounding_volume_type bv(pos_image, Scalar(0.5)*shape_i.getCircumsphereDiameter());
+
+            // stackless search
+            int cur_node_idx = cur_tree_root;
+            while (cur_node_idx > -1)
                 {
-                if (tree.isLeaf(cur_node_idx))
+                const OBB& node_bv = d_tree_nodes[cur_node_idx].bounding_volume;
+                int rope = d_tree_nodes[cur_node_idx].rope;
+                int np_child_masked = d_tree_nodes[cur_node_idx].np_child_masked;
+
+                if (detail::overlap(node_bv, bv))
                     {
-                    for (unsigned int cur_p = threadIdx.x; cur_p < tree.getNumParticles(cur_node_idx); cur_p+=blockDim.x)
+                    if(!(np_child_masked & 1))
                         {
-                        unsigned int j = tree.getParticle(cur_node_idx, cur_p);
-
-                        unsigned int tag_j = d_tag[j];
-                        if (tag_j == tag)
-                            continue;
-
-                        Scalar4 postype_j = texFetchScalar4(d_postype, clusters_postype_tex, j);
-                        Scalar4 orientation_j = make_scalar4(1,0,0,0);
-                        unsigned int typ_j = __scalar_as_int(postype_j.w);
-                        Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
-                        if (shape_j.hasOrientation())
-                            shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
-
-                        vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
-
-                        // check for overlaps
-                        OverlapReal rsq = dot(r_ij,r_ij);
-                        OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
-
-                        if (rsq*OverlapReal(4.0) <= DaDb * DaDb &&
-                            s_check_overlaps[overlap_idx(typ_j,type)])
+                        // leaf node
+                        // all leaves must have at least 1 particle, so we can use this to decide
+                        const unsigned int node_head = nparticles_per_leaf*cur_node_idx - s_leaf_offset[cur_pair_type];
+                        const unsigned int n_part = np_child_masked >> 1;
+                        for (unsigned int cur_p = node_head + threadIdx.x; cur_p < node_head + n_part; cur_p += blockDim.x)
                             {
-                            // write to collision list
-                            unsigned int typ_j = __scalar_as_int(postype_j.w);
-                            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_image;
+                            // neighbor j
+                            const Scalar4 cur_xyzf = d_leaf_xyzf[cur_p];
+                            vec3<Scalar> pos_j(cur_xyzf.x, cur_xyzf.y, cur_xyzf.z);
+                            const unsigned int j = __scalar_as_int(cur_xyzf.w);
 
-                            unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
-                            if (n_overlaps >= max_n_overlaps)
-                                atomicMax(&(*d_conditions).x, n_overlaps+1);
-                            else
+                            unsigned int tag_j = d_tag[j];
+                            if (tag_j == tag)
+                                continue;
+
+                            Scalar4 orientation_j = make_scalar4(1,0,0,0);
+                            unsigned int typ_j = cur_pair_type;
+                            Shape shape_j(quat<Scalar>(orientation_j), s_params[typ_j]);
+                            if (shape_j.hasOrientation())
+                                shape_j.orientation = quat<Scalar>(texFetchScalar4(d_orientation, clusters_orientation_tex, j));
+
+                            vec3<Scalar> r_ij = pos_j - pos_image;
+
+                            // check for overlaps
+                            OverlapReal rsq = dot(r_ij,r_ij);
+                            OverlapReal DaDb = shape_i.getCircumsphereDiameter() + shape_j.getCircumsphereDiameter();
+
+                            if (rsq*OverlapReal(4.0) <= DaDb * DaDb &&
+                                s_check_overlaps[overlap_idx(typ_j,type)])
                                 {
-                                // write indices, we'll later convert to tags
-                                d_collisions[n_overlaps] = make_uint3(i,j, cur_image);
-                                }
+                                // write to collision list
+                                unsigned int n_overlaps = atomicAdd(d_n_overlaps, 1);
+                                if (n_overlaps >= max_n_overlaps)
+                                    atomicMax(&(*d_conditions).x, n_overlaps+1);
+                                else
+                                    {
+                                    // write indices, we'll later convert to tags
+                                    d_collisions[n_overlaps] = make_uint3(i,j, cur_image);
+                                    }
 
-                            } // end if circumsphere overlap
-                        } // end loop over particles in node
+                                } // end if circumsphere overlap
+                            } // end loop over particles in node
 
-                    cur_node_idx = tree.getEscapeIndex(cur_node_idx);
-                    } // end isLeaf
+                        // leaf nodes always move to their rope
+                        cur_node_idx = rope;
+                        }
+                    else
+                        {
+                        // internal node, take left child
+                        cur_node_idx = (np_child_masked >> 1);
+                        }
+                    } // end if OBB overlap
                 else
                     {
-                    cur_node_idx = tree.getLeftChild(cur_node_idx);
+                    cur_node_idx = rope; // no overlap, rope ahead
                     }
-                } // end AABB overlap
-            else
-                {
-                // skip ahead
-                cur_node_idx = tree.getEscapeIndex(cur_node_idx);
-                }
-            } // end loop over nodes
-
-        } // end loop over images
+                } // end stackless search
+            } // end loop over images
+        } // end loop over pair types
     }
 
 //! Overlap checking in separate kernel to save on registers and avoid divergences
@@ -761,8 +804,10 @@ __global__ void gpu_get_aabb_extents_kernel(
 
     \ingroup hpmc_kernels
 */
-template< class Shape >
-cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename Shape::param_type *d_params)
+template< class Shape, class BVH_type >
+cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args,
+    const BVH_type *d_tree_nodes,
+    const typename Shape::param_type *d_params)
     {
     assert(args.d_postype);
     assert(args.d_orientation);
@@ -930,7 +975,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     static cudaFuncAttributes attr_collisions;
     if (max_block_size_collisions == -1)
         {
-        cudaFuncGetAttributes(&attr_collisions, gpu_hpmc_clusters_kernel<Shape>);
+        cudaFuncGetAttributes(&attr_collisions, gpu_hpmc_clusters_kernel<Shape, BVH_type>);
         max_block_size_collisions = attr_collisions.maxThreadsPerBlock;
         }
 
@@ -951,12 +996,14 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
     else
         grid_collisions = dim3(1, n_blocks, 1);
 
-    unsigned int shared_bytes_collisions = args.num_types * sizeof(typename Shape::param_type) + args.overlap_idx.getNumElements()*sizeof(unsigned int);
+    unsigned int shared_bytes_collisions = args.num_types * sizeof(typename Shape::param_type) +
+        args.overlap_idx.getNumElements()*sizeof(unsigned int) +
+        args.num_types * sizeof(unsigned int);
 
     cudaMemsetAsync(args.d_n_overlaps, 0, sizeof(unsigned int),args.stream);
 
     // broad phase: detect collisions between circumspheres
-    gpu_hpmc_clusters_kernel<Shape><<<grid_collisions, threads_collisions, shared_bytes_collisions, args.stream>>>(
+    gpu_hpmc_clusters_kernel<Shape, BVH_type><<<grid_collisions, threads_collisions, shared_bytes_collisions, args.stream>>>(
                                                      args.N,
                                                      args.d_postype,
                                                      args.d_orientation,
@@ -975,10 +1022,15 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args, const typename S
                                                      args.d_tag_test,
                                                      args.line,
                                                      args.swap,
-                                                     args.obb_tree,
                                                      args.image_list,
                                                      args.max_n_overlaps,
-                                                     args.d_conditions);
+                                                     args.d_conditions,
+                                                     args.d_leaf_offset,
+                                                     args.d_tree_roots,
+                                                     d_tree_nodes,
+                                                     args.d_leaf_xyzf,
+                                                     args.nparticles_per_leaf
+                                                     );
     #endif
 
     return cudaSuccess;

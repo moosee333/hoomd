@@ -7,6 +7,7 @@
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
+#include "BVHGPU.cuh"
 
 #include "ShapeSpheropolygon.h"
 
@@ -19,7 +20,11 @@ namespace detail
 //! HPMC kernels for ShapeSpheropolygon
 template cudaError_t gpu_hpmc_free_volume<ShapeSpheropolygon>(const hpmc_free_volume_args_t &args,
                                                        const typename ShapeSpheropolygon::param_type *d_params);
-template cudaError_t gpu_hpmc_clusters<ShapeSpheropolygon>(const hpmc_clusters_args_t &args,
+template cudaError_t gpu_bvh_merge_shapes<ShapeSpheropolygon, OBBNodeGPU>(const hpmc_bvh_shapes_args_t& args,
+                                                       OBBNodeGPU *d_tree_nodes,
+                                                       const typename ShapeSpheropolygon::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters<ShapeSpheropolygon, OBBNodeGPU>(const hpmc_clusters_args_t &args,
+                                                       const OBBNodeGPU *d_tree_nodes,
                                                        const typename ShapeSpheropolygon::param_type *d_params);
 template cudaError_t gpu_hpmc_clusters_overlaps<ShapeSpheropolygon>(const hpmc_clusters_args_t &args,
                                                        const typename ShapeSpheropolygon::param_type *d_params);

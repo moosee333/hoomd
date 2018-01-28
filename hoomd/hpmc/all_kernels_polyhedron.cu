@@ -7,6 +7,7 @@
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
+#include "BVHGPU.cuh"
 
 #include "ShapePolyhedron.h"
 
@@ -19,7 +20,11 @@ namespace detail
 //! HPMC kernels for ShapePolyhedron
 template cudaError_t gpu_hpmc_free_volume<ShapePolyhedron>(const hpmc_free_volume_args_t &args,
                                                        const typename ShapePolyhedron::param_type *d_params);
-template cudaError_t gpu_hpmc_clusters<ShapePolyhedron>(const hpmc_clusters_args_t &args,
+template cudaError_t gpu_bvh_merge_shapes<ShapePolyhedron, OBBNodeGPU>(const hpmc_bvh_shapes_args_t& args,
+                                                       OBBNodeGPU *d_tree_nodes,
+                                                       const typename ShapePolyhedron::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters<ShapePolyhedron, OBBNodeGPU>(const hpmc_clusters_args_t &args,
+                                                       const OBBNodeGPU *d_tree_nodes,
                                                        const typename ShapePolyhedron::param_type *d_params);
 template cudaError_t gpu_hpmc_clusters_overlaps<ShapePolyhedron>(const hpmc_clusters_args_t &args,
                                                        const typename ShapePolyhedron::param_type *d_params);

@@ -32,6 +32,7 @@
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
 #include "UpdaterMuVTGPU.h"
+#include "BVHGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -66,12 +67,16 @@ void export_polyhedron(py::module& m)
     export_ExternalCallback<ShapePolyhedron>(m, "ExternalCallbackPolyhedron");
 
     #ifdef ENABLE_CUDA
+    using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapePolyhedron, IntegratorHPMCMono< ShapePolyhedron > >;
+    export_BVHGPU< OBBNodeGPU, ShapePolyhedron, IntegratorHPMCMono< ShapePolyhedron > >(m, "BVHGPUOBBPolyhedron");
+
     export_IntegratorHPMCMonoGPU< ShapePolyhedron >(m, "IntegratorHPMCMonoGPUPolyhedron");
     export_IntegratorHPMCMonoImplicitGPU< ShapePolyhedron >(m, "IntegratorHPMCMonoImplicitGPUPolyhedron");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapePolyhedron >(m, "IntegratorHPMCMonoImplicitNewGPUPolyhedron");
     export_ComputeFreeVolumeGPU< ShapePolyhedron >(m, "ComputeFreeVolumeGPUPolyhedron");
-    export_UpdaterClustersGPU< ShapePolyhedron >(m, "UpdaterClustersGPUPolyhedron");
+    export_UpdaterClustersGPU< ShapePolyhedron, BVH_GPU_OBB >(m, "UpdaterClustersGPUPolyhedronOBB");
     export_UpdaterMuVTGPU< ShapePolyhedron >(m, "UpdaterMuVTGPUPolyhedron");
+
     #endif
     }
 

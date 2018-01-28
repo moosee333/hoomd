@@ -32,6 +32,7 @@
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
 #include "UpdaterMuVTGPU.h"
+#include "BVHGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -66,11 +67,14 @@ void export_ellipsoid(py::module& m)
     export_ExternalCallback<ShapeEllipsoid>(m, "ExternalCallbackEllipsoid");
 
     #ifdef ENABLE_CUDA
+    using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeEllipsoid, IntegratorHPMCMono< ShapeEllipsoid > >;
+    export_BVHGPU< OBBNodeGPU, ShapeEllipsoid, IntegratorHPMCMono< ShapeEllipsoid > >(m, "BVHGPUOBBEllipsoid");
+
     export_IntegratorHPMCMonoGPU< ShapeEllipsoid >(m, "IntegratorHPMCMonoGPUEllipsoid");
     export_IntegratorHPMCMonoImplicitGPU< ShapeEllipsoid >(m, "IntegratorHPMCMonoImplicitGPUEllipsoid");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeEllipsoid >(m, "IntegratorHPMCMonoImplicitNewGPUEllipsoid");
     export_ComputeFreeVolumeGPU< ShapeEllipsoid >(m, "ComputeFreeVolumeGPUEllipsoid");
-    export_UpdaterClustersGPU< ShapeEllipsoid >(m, "UpdaterClustersGPUEllipsoid");
+    export_UpdaterClustersGPU< ShapeEllipsoid, BVH_GPU_OBB >(m, "UpdaterClustersGPUEllipsoidOBB");
     export_UpdaterMuVTGPU< ShapeEllipsoid >(m, "UpdaterMuVTGPUEllipsoid");
     #endif
     }

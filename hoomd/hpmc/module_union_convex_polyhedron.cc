@@ -30,6 +30,7 @@
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
 #include "UpdaterMuVTGPU.h"
+#include "BVHGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -64,12 +65,14 @@ void export_union_convex_polyhedron(py::module& m)
     export_UpdaterExternalFieldWall<ShapeUnion<ShapeConvexPolyhedron> >(m, "UpdaterExternalFieldWallConvexPolyhedronUnion");
 
     #ifdef ENABLE_CUDA
+    using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeUnion<ShapeConvexPolyhedron>, IntegratorHPMCMono< ShapeUnion<ShapeConvexPolyhedron> > >;
+    export_BVHGPU< OBBNodeGPU, ShapeUnion<ShapeConvexPolyhedron>, IntegratorHPMCMono< ShapeUnion<ShapeConvexPolyhedron> > >(m, "BVHGPUOBBConvexPolyhedronUnion");
 
     export_IntegratorHPMCMonoGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "IntegratorHPMCMonoGPUConvexPolyhedronUnion");
     export_IntegratorHPMCMonoImplicitGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "IntegratorHPMCMonoImplicitGPUConvexPolyhedronUnion");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "IntegratorHPMCMonoImplicitNewGPUConvexPolyhedronUnion");
     export_ComputeFreeVolumeGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "ComputeFreeVolumeGPUConvexPolyhedronUnion");
-    export_UpdaterClustersGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "UpdaterClustersGPUConvexPolyhedronUnion");
+    export_UpdaterClustersGPU< ShapeUnion<ShapeConvexPolyhedron>, BVH_GPU_OBB >(m, "UpdaterClustersGPUConvexPolyhedronUnionOBB");
     export_UpdaterMuVTGPU< ShapeUnion<ShapeConvexPolyhedron> >(m, "UpdaterMuVTGPUConvexPolyhedronUnion");
 
     #endif

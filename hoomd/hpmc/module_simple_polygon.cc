@@ -32,6 +32,7 @@
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
 #include "UpdaterMuVTGPU.h"
+#include "BVHGPU.h"
 #endif
 
 
@@ -69,12 +70,16 @@ void export_simple_polygon(py::module& m)
     export_ExternalCallback<ShapeSimplePolygon>(m, "ExternalCallbackSimplePolygon");
 
     #ifdef ENABLE_CUDA
+    using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeSimplePolygon, IntegratorHPMCMono< ShapeSimplePolygon > >;
+    export_BVHGPU< OBBNodeGPU, ShapeSimplePolygon, IntegratorHPMCMono< ShapeSimplePolygon > >(m, "BVHGPUOBBSimplePolygon");
+
     export_IntegratorHPMCMonoGPU< ShapeSimplePolygon >(m, "IntegratorHPMCMonoGPUSimplePolygon");
     export_IntegratorHPMCMonoImplicitGPU< ShapeSimplePolygon >(m, "IntegratorHPMCMonoImplicitGPUSimplePolygon");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSimplePolygon >(m, "IntegratorHPMCMonoImplicitNewGPUSimplePolygon");
     export_ComputeFreeVolumeGPU< ShapeSimplePolygon >(m, "ComputeFreeVolumeGPUSimplePolygon");
-    export_UpdaterClustersGPU< ShapeSimplePolygon >(m, "UpdaterClustersGPUSimplePolygon");
+    export_UpdaterClustersGPU< ShapeSimplePolygon, BVH_GPU_OBB >(m, "UpdaterClustersGPUSimplePolygonOBB");
     export_UpdaterMuVTGPU< ShapeSimplePolygon >(m, "UpdaterMuVTGPUSimplePolygon");
+
     #endif
     }
 

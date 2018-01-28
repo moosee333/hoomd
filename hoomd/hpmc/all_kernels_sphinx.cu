@@ -7,6 +7,7 @@
 #include "IntegratorHPMCMonoGPU.cuh"
 #include "IntegratorHPMCMonoImplicitGPU.cuh"
 #include "IntegratorHPMCMonoImplicitNewGPU.cuh"
+#include "BVHGPU.cuh"
 
 #include "ShapeSphinx.h"
 
@@ -19,7 +20,11 @@ namespace detail
 //! HPMC kernels for ShapeSphinx
 template cudaError_t gpu_hpmc_free_volume<ShapeSphinx>(const hpmc_free_volume_args_t &args,
                                                        const typename ShapeSphinx::param_type *d_params);
-template cudaError_t gpu_hpmc_clusters<ShapeSphinx>(const hpmc_clusters_args_t &args,
+template cudaError_t gpu_bvh_merge_shapes<ShapeSphinx, OBBNodeGPU>(const hpmc_bvh_shapes_args_t& args,
+                                                       OBBNodeGPU *d_tree_nodes,
+                                                       const typename ShapeSphinx::param_type *d_params)
+template cudaError_t gpu_hpmc_clusters<ShapeSphinx, OBBNodeGPU>(const hpmc_clusters_args_t &args,
+                                                       const OBBNodeGPU *d_tree_nodes,
                                                        const typename ShapeSphinx::param_type *d_params);
 template cudaError_t gpu_hpmc_clusters_overlaps<ShapeSphinx>(const hpmc_clusters_args_t &args,
                                                        const typename ShapeSphinx::param_type *d_params);

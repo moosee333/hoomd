@@ -31,6 +31,7 @@
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
 #include "UpdaterMuVTGPU.h"
+#include "BVHGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -67,11 +68,14 @@ void export_union_sphere(py::module& m)
 
     #ifdef ENABLE_CUDA
 
+    using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeUnion<ShapeSphere>, IntegratorHPMCMono< ShapeUnion<ShapeSphere> > >;
+    export_BVHGPU< OBBNodeGPU, ShapeUnion<ShapeSphere>, IntegratorHPMCMono< ShapeUnion<ShapeSphere> > >(m, "BVHGPUOBBSphereUnion");
+
     export_IntegratorHPMCMonoGPU< ShapeUnion<ShapeSphere> >(m, "IntegratorHPMCMonoGPUSphereUnion");
     export_IntegratorHPMCMonoImplicitGPU< ShapeUnion<ShapeSphere> >(m, "IntegratorHPMCMonoImplicitGPUSphereUnion");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeUnion<ShapeSphere> >(m, "IntegratorHPMCMonoImplicitNewGPUSphereUnion");
     export_ComputeFreeVolumeGPU< ShapeUnion<ShapeSphere> >(m, "ComputeFreeVolumeGPUSphereUnion");
-    export_UpdaterClustersGPU< ShapeUnion<ShapeSphere> >(m, "UpdaterClustersGPUSphereUnion");
+    export_UpdaterClustersGPU< ShapeUnion<ShapeSphere>, BVH_GPU_OBB >(m, "UpdaterClustersGPUSphereUnionOBB");
     export_UpdaterMuVTGPU< ShapeUnion<ShapeSphere> >(m, "UpdaterMuVTGPUSphereUnion");
 
     #endif

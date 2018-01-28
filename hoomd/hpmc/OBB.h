@@ -104,6 +104,7 @@ struct OBB
         return is_sphere;
         }
 
+    #ifndef NVCC
     //! Get list of OBB corners
     std::vector<vec3<OverlapReal> > getCorners() const
         {
@@ -120,6 +121,7 @@ struct OBB
         corners[7] = center - r.row0*lengths.x - r.row1*lengths.y - r.row2*lengths.z;
         return corners;
         }
+    #endif
 
     //! Rotate OBB, then translate the given vector
     DEVICE void affineTransform(const quat<OverlapReal>& q, const vec3<OverlapReal>& v)
@@ -769,7 +771,116 @@ DEVICE inline OBB compute_obb(const std::vector< vec3<OverlapReal> >& pts, const
 
     return res;
     }
-#endif
+#endif // NVCC
+
+//! Merge two OBBs
+DEVICE inline OBB merge(const OBB& a, const OBB& b)
+    {
+    // for now, merge as AABBs
+    OBB new_obb;
+
+    vec3<Scalar> lower_a = a.center - a.lengths;
+    vec3<Scalar> lower_b = b.center - b.lengths;
+    vec3<Scalar> upper_a = a.center + a.lengths;
+    vec3<Scalar> upper_b = b.center + b.lengths;
+
+    vec3<Scalar> new_lower, new_upper;
+    new_lower.x = detail::min(lower_a.x, lower_b.x);
+    new_lower.y = detail::min(lower_a.y, lower_b.y);
+    new_lower.z = detail::min(lower_a.z, lower_b.z);
+    new_upper.x = detail::max(upper_a.x, upper_b.x);
+    new_upper.y = detail::max(upper_a.y, upper_b.y);
+    new_upper.z = detail::max(upper_a.z, upper_b.z);
+
+    new_obb.lengths = vec3<Scalar>(0.5*(new_upper.x-new_lower.x), 0.5*(new_upper.y-new_lower.y), 0.5*(new_upper.z-new_lower.z));
+    new_obb.center = vec3<Scalar>(0.5*(new_upper.x+new_lower.x), 0.5*(new_upper.y+new_lower.y), 0.5*(new_upper.z+new_lower.z));
+    new_obb.rotation = quat<OverlapReal>();
+    new_obb.mask = 1;
+    new_obb.is_sphere = 0;
+
+    return new_obb;
+    }
+
+//! A 'point' shape, just to get BVH working with point particles (doesn't provide overlap testing ..)
+struct EmptyShape
+    {
+    typedef unsigned int param_type;
+
+    //! Constructor
+    DEVICE EmptyShape(quat<Scalar> orientation, const param_type& param)
+        {}
+
+    //! Returns the circumsphere diameter for a point
+    DEVICE Scalar getCircumsphereDiameter() const
+        {
+        return 0;
+        }
+
+    //! Return the bounding box of the shape in world coordinates
+    DEVICE detail::AABB getAABB(const vec3<Scalar>& pos) const
+        {
+        return detail::AABB(pos, 0.5*getCircumsphereDiameter());
+        }
+
+    };
+
+//! Function template to compute the bounding OBB for a list of shapes
+/*! \param postype Positions and types of particles
+    \param map Map into d_pos
+    \param start_idx Starting index in map
+    \param end_idx End index in map (one past the last element)
+ */
+template<class Shape>
+DEVICE inline void computeBoundingVolume(
+    OBB& obb,
+    const Scalar4 *postype,
+    const unsigned int *map_tree_pid,
+    unsigned int start_idx,
+    unsigned int end_idx,
+    const typename Shape::param_type& param);
+
+template<class Shape>
+DEVICE inline void computeBoundingVolume(
+    OBB& obb,
+    const Scalar4 *postype,
+    const unsigned int *map_tree_pid,
+    unsigned int start_idx,
+    unsigned int end_idx,
+    const typename Shape::param_type& param)
+    {
+    //for now, compute an AABB
+
+    // construct a shape with given parameters
+    Shape shape(quat<Scalar>(), param);
+
+    AABB aabb = shape.getAABB(vec3<Scalar>(postype[ map_tree_pid[start_idx] ]));
+    vec3<Scalar> lower = aabb.getLower();
+    vec3<Scalar> upper = aabb.getUpper();
+
+    for (unsigned int cur_p=start_idx+1; cur_p < end_idx; ++cur_p)
+        {
+        aabb = shape.getAABB(vec3<Scalar>(postype[ map_tree_pid[cur_p] ]));
+        vec3<Scalar> cur_lower = aabb.getLower();
+        vec3<Scalar> cur_upper = aabb.getUpper();
+
+        // merge the boxes together
+        if (cur_lower.x < lower.x) lower.x = cur_lower.x;
+        if (cur_upper.x > upper.x) upper.x = cur_upper.x;
+
+        if (cur_lower.y < lower.y) lower.y = cur_lower.y;
+        if (cur_upper.y > upper.y) upper.y = cur_upper.y;
+
+        if (cur_lower.z < lower.z) lower.z = cur_lower.z;
+        if (cur_upper.z > upper.z) upper.z = cur_upper.z;
+        }
+
+    obb.lengths = vec3<Scalar>(0.5*(upper.x-lower.x), 0.5*(upper.y-lower.y), 0.5*(upper.z-lower.z));
+    obb.center = vec3<Scalar>(0.5*(upper.x+lower.x), 0.5*(upper.y+lower.y), 0.5*(upper.z+lower.z));
+    obb.rotation = quat<OverlapReal>();
+    obb.mask = 1;
+    obb.is_sphere = 0;
+    }
+
 }; // end namespace detail
 
 }; // end namespace hpmc

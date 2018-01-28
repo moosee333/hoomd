@@ -14,7 +14,7 @@
 #include "UpdaterClusters.h"
 #include "UpdaterClustersGPU.cuh"
 #include "hoomd/AABBTree.h"
-#include "OBBTree.h"
+#include "BVHGPU.h"
 
 #include <cuda_runtime.h>
 
@@ -25,7 +25,7 @@ namespace hpmc
    Implementation of UpdaterClusters on the GPU
 */
 
-template< class Shape >
+template< class Shape, class BVH >
 class UpdaterClustersGPU : public UpdaterClusters<Shape>
     {
     public:
@@ -36,7 +36,8 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         */
         UpdaterClustersGPU(std::shared_ptr<SystemDefinition> sysdef,
                         std::shared_ptr<IntegratorHPMCMono<Shape> > mc,
-                        unsigned int seed);
+                        unsigned int seed,
+                        std::shared_ptr<BVH> bvh);
 
         //! Destructor
         virtual ~UpdaterClustersGPU();
@@ -81,6 +82,8 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         GPUVector<unsigned int> m_aabb_tag;  //!< Sorted list of AABB tags
         GPUVector<Scalar4> m_aabb_postype;   //!< Sorted list of positions and types corresponding to the AABBs
 
+        std::shared_ptr<BVH> m_bvh_gpu;     //!< Bounding volume hierarchy for locality search
+
         #ifdef NVGRAPH_AVAILABLE
         GPUVector<unsigned int> m_components;  //!< The connected component labels per particle
         #endif
@@ -113,11 +116,12 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
         #endif
     };
 
-template< class Shape >
-UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> sysdef,
+template< class Shape, class BVH >
+UpdaterClustersGPU<Shape, BVH>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> sysdef,
                                  std::shared_ptr<IntegratorHPMCMono<Shape> > mc,
-                                 unsigned int seed)
-        : UpdaterClusters<Shape>(sysdef, mc, seed), m_conditions(this->m_exec_conf)
+                                 unsigned int seed,
+                                 std::shared_ptr< BVH > bvh)
+        : UpdaterClusters<Shape>(sysdef, mc, seed), m_conditions(this->m_exec_conf), m_bvh_gpu(bvh)
     {
     this->m_exec_conf->msg->notice(5) << "Constructing UpdaterClustersGPU" << std::endl;
 
@@ -172,8 +176,8 @@ UpdaterClustersGPU<Shape>::UpdaterClustersGPU(std::shared_ptr<SystemDefinition> 
     CHECK_CUDA_ERROR();
     }
 
-template< class Shape >
-UpdaterClustersGPU<Shape>::~UpdaterClustersGPU()
+template< class Shape, class BVH >
+UpdaterClustersGPU<Shape, BVH>::~UpdaterClustersGPU()
     {
     cudaStreamDestroy(m_stream);
     CHECK_CUDA_ERROR();
@@ -181,8 +185,8 @@ UpdaterClustersGPU<Shape>::~UpdaterClustersGPU()
     this->m_exec_conf->msg->notice(5) << "Destroying UpdaterClustersGPU" << std::endl;
     }
 
-template< class Shape >
-void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Scalar> pivot, quat<Scalar> q, bool swap,
+template< class Shape, class BVH >
+void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec3<Scalar> pivot, quat<Scalar> q, bool swap,
     bool line, const std::map<unsigned int, unsigned int>& map)
     {
     if (this->m_prof)
@@ -223,31 +227,10 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
     auto &image_list = this->m_mc->updateImageList();
     auto &image_hkl = this->m_mc->getImageHKL();
 
-    // build the OBB tree
-    detail::OBBTree obb_tree;
-
     if (this->m_prof)
-        this->m_prof->push("build OBB tree");
+        this->m_prof->push("BVH construction");
 
-        {
-        ArrayHandle<Scalar4> h_postype(this->m_pdata->getPositions(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar4> h_orientation(this->m_pdata->getOrientationArray(), access_location::host, access_mode::read);
-
-        // grow the OBB list to the needed size
-        unsigned int n_obb = this->m_pdata->getN()+this->m_pdata->getNGhosts();
-        std::vector<detail::OBB> obbs(n_obb);
-        if (n_obb > 0)
-            {
-            for (unsigned int cur_particle = 0; cur_particle < n_obb; cur_particle++)
-                {
-                unsigned int i = cur_particle;
-                Shape shape(quat<Scalar>(h_orientation.data[i]), params[__scalar_as_int(h_postype.data[i].w)]);
-                obbs[i] = detail::OBB(vec3<Scalar>(h_postype.data[i]),Scalar(0.5)*shape.getCircumsphereDiameter());
-                }
-            obb_tree.buildTree(&obbs.front(), n_obb, 16, false);
-            }
-        }
-    detail::GPUTree gpu_tree(obb_tree, true);
+    m_bvh_gpu->compute(timestep);
 
     if (this->m_prof)
         this->m_prof->pop();
@@ -279,6 +262,12 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<unsigned int> d_aabb_idx(m_aabb_idx, access_location::device, access_mode::overwrite);
         ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
         ArrayHandle<Scalar4> d_aabb_postype(m_aabb_postype, access_location::device, access_mode::overwrite);
+
+        // access BVH
+        ArrayHandle<unsigned int> d_leaf_offset(m_bvh_gpu->getLeafOffsets(), access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_tree_roots(m_bvh_gpu->getTreeRoots(), access_location::device, access_mode::read);
+        ArrayHandle<typename BVH::node_type> d_tree_nodes(m_bvh_gpu->getTreeNodes(), access_location::device, access_mode::read);
+        ArrayHandle<Scalar4> d_tree_xyzf(m_bvh_gpu->getLeafXYZF(), access_location::device, access_mode::read);
 
         detail::hpmc_clusters_args_t clusters_args(this->m_n_particles_old,
                                            0, // ncollisions
@@ -314,7 +303,6 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            swap ? this->m_ab_types[1] : 0,
                                            aabb_tree,
                                            image_list,
-                                           gpu_tree,
                                            image_hkl,
                                            m_stream,
                                            this->m_exec_conf->dev_prop,
@@ -324,7 +312,11 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            d_end.data,
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
-                                           d_aabb_postype.data
+                                           d_aabb_postype.data,
+                                           d_leaf_offset.data,
+                                           d_tree_roots.data,
+                                           d_tree_xyzf.data,
+                                           m_bvh_gpu->getParticlesPerLeaf()
                                            );
 
         do
@@ -348,7 +340,9 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 clusters_args.d_conditions = m_conditions.getDeviceFlags();
 
                 // invoke kernel for checking collisions between circumspheres
-                detail::gpu_hpmc_clusters<Shape>(clusters_args, params.data());
+                detail::gpu_hpmc_clusters<Shape, typename BVH::node_type>(clusters_args,
+                    d_tree_nodes.data,
+                    params.data());
 
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
@@ -458,6 +452,12 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         ArrayHandle<unsigned int> d_aabb_tag(m_aabb_tag, access_location::device, access_mode::overwrite);
         ArrayHandle<Scalar4> d_aabb_postype(m_aabb_postype, access_location::device, access_mode::overwrite);
 
+        // access BVH
+        ArrayHandle<unsigned int> d_leaf_offset(m_bvh_gpu->getLeafOffsets(), access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_tree_roots(m_bvh_gpu->getTreeRoots(), access_location::device, access_mode::read);
+        ArrayHandle<typename BVH::node_type> d_tree_nodes(m_bvh_gpu->getTreeNodes(), access_location::device, access_mode::read);
+        ArrayHandle<Scalar4> d_tree_xyzf(m_bvh_gpu->getLeafXYZF(), access_location::device, access_mode::read);
+
         detail::hpmc_clusters_args_t clusters_args(this->m_pdata->getN(),
                                            0, // ncollisions
                                            d_postype.data,
@@ -492,7 +492,6 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            swap ? this->m_ab_types[1] : 0,
                                            aabb_tree,
                                            image_list,
-                                           gpu_tree,
                                            image_hkl,
                                            m_stream,
                                            this->m_exec_conf->dev_prop,
@@ -502,7 +501,11 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                                            d_end.data,
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
-                                           d_aabb_postype.data
+                                           d_aabb_postype.data,
+                                           d_leaf_offset.data,
+                                           d_tree_roots.data,
+                                           d_tree_xyzf.data,
+                                           m_bvh_gpu->getParticlesPerLeaf()
                                            );
 
 
@@ -528,7 +531,9 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
                 clusters_args.group_size = param % 1000000;
 
                 // invoke kernel for checking circumsphere overlaps (broad phase)
-                detail::gpu_hpmc_clusters<Shape>(clusters_args, params.data());
+                detail::gpu_hpmc_clusters<Shape, typename BVH::node_type>(clusters_args,
+                                           d_tree_nodes.data,
+                                           params.data());
 
                 if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
                     CHECK_CUDA_ERROR();
@@ -588,11 +593,11 @@ void UpdaterClustersGPU<Shape>::findInteractions(unsigned int timestep, vec3<Sca
         this->m_prof->pop(this->m_exec_conf);
     }
 
-template<class Shape>
+template<class Shape, class BVH>
 #ifdef ENABLE_TBB
-void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
+void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
 #else
-void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters)
+void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters)
 #endif
     {
     // collect interactions on rank 0
@@ -790,12 +795,15 @@ void UpdaterClustersGPU<Shape>::findConnectedComponents(unsigned int timestep, u
     }
 
 
-template < class Shape> void export_UpdaterClustersGPU(pybind11::module& m, const std::string& name)
+template < class Shape, class BVH>
+void export_UpdaterClustersGPU(pybind11::module& m, const std::string& name)
     {
-    pybind11::class_< UpdaterClustersGPU<Shape>, std::shared_ptr< UpdaterClustersGPU<Shape> > >(m, name.c_str(), pybind11::base<UpdaterClusters<Shape> >())
-          .def( pybind11::init< std::shared_ptr<SystemDefinition>,
+    pybind11::class_< UpdaterClustersGPU<Shape, BVH>,
+        std::shared_ptr< UpdaterClustersGPU<Shape, BVH> > >(m, name.c_str(), pybind11::base<UpdaterClusters<Shape> >())
+        .def( pybind11::init< std::shared_ptr<SystemDefinition>,
                          std::shared_ptr< IntegratorHPMCMono<Shape> >,
-                         unsigned int >())
+                         unsigned int,
+                         std::shared_ptr< BVH > >())
     ;
     }
 

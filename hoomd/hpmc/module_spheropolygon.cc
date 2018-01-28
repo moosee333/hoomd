@@ -32,6 +32,7 @@
 #include "ComputeFreeVolumeGPU.h"
 #include "UpdaterClustersGPU.h"
 #include "UpdaterMuVTGPU.h"
+#include "BVHGPU.h"
 #endif
 
 namespace py = pybind11;
@@ -66,12 +67,17 @@ void export_spheropolygon(py::module& m)
     export_ExternalCallback<ShapeSpheropolygon>(m, "ExternalCallbackSpheropolygon");
 
     #ifdef ENABLE_CUDA
+
+    using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeSpheropolygon, IntegratorHPMCMono< ShapeSpheropolygon > >;
+    export_BVHGPU< OBBNodeGPU, ShapeSpheropolygon, IntegratorHPMCMono< ShapeSpheropolygon > >(m, "BVHGPUOBBSpheropolygon");
+
     export_IntegratorHPMCMonoGPU< ShapeSpheropolygon >(m, "IntegratorHPMCMonoGPUSpheropolygon");
     export_IntegratorHPMCMonoImplicitGPU< ShapeSpheropolygon >(m, "IntegratorHPMCMonoImplicitGPUSpheropolygon");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSpheropolygon >(m, "IntegratorHPMCMonoImplicitNewGPUSpheropolygon");
     export_ComputeFreeVolumeGPU< ShapeSpheropolygon >(m, "ComputeFreeVolumeGPUSpheropolygon");
-    export_UpdaterClustersGPU< ShapeSpheropolygon >(m, "UpdaterClustersGPUSpheropolygon");
+    export_UpdaterClustersGPU< ShapeSpheropolygon, BVH_GPU_OBB >(m, "UpdaterClustersGPUSpheropolygonOBB");
     export_UpdaterMuVTGPU< ShapeSpheropolygon >(m, "UpdaterMuVTGPUSpheropolygon");
+
     #endif
     }
 
