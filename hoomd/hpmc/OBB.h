@@ -881,28 +881,28 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
             }
         }
 
+    rotmat3<OverlapReal> r;
+
     // compute normalized eigenvectors
     Eigen::SelfAdjointEigenSolver<matrix_t> es;
-    es.compute(m);
-
-    rotmat3<OverlapReal> r;
+    es.computeDirect(m);
 
     if (es.info() != Eigen::Success)
         {
         // numerical issue, set r to identity matrix
-        printf("Here\n");
         r.row0 = vec3<Scalar>(1,0,0);
         r.row1 = vec3<Scalar>(0,1,0);
         r.row2 = vec3<Scalar>(0,0,1);
         }
     else
         {
-        Eigen::Matrix<std::complex<Scalar>, 3, 3> eigen_vec = es.eigenvectors();
-        r.row0 = vec3<Scalar>(Eigen::numext::real(eigen_vec(0,0)),Eigen::numext::real(eigen_vec(0,1)),Eigen::numext::real(eigen_vec(0,2)));
-        r.row1 = vec3<Scalar>(Eigen::numext::real(eigen_vec(1,0)),Eigen::numext::real(eigen_vec(1,1)),Eigen::numext::real(eigen_vec(1,2)));
-        r.row2 = vec3<Scalar>(Eigen::numext::real(eigen_vec(2,0)),Eigen::numext::real(eigen_vec(2,1)),Eigen::numext::real(eigen_vec(2,2)));
+        auto eigen_vec = es.eigenvectors();
+        r.row0 = vec3<Scalar>(eigen_vec(0,0),eigen_vec(0,1),eigen_vec(0,2));
+        r.row1 = vec3<Scalar>(eigen_vec(1,0),eigen_vec(1,1),eigen_vec(1,2));
+        r.row2 = vec3<Scalar>(eigen_vec(2,0),eigen_vec(2,1),eigen_vec(2,2));
         }
 
+    #if 0
     if (n)
         {
         vec2<Scalar> *proj_2d = (vec2<Scalar> *) malloc(n*sizeof(vec2<Scalar>));
@@ -1008,6 +1008,7 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
 
         free(proj_2d);
         }
+    #endif
 
     // final axes
     vec3<Scalar> axis[3];
@@ -1017,8 +1018,6 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
 
     vec3<Scalar> proj_min = vec3<Scalar>(FLT_MAX,FLT_MAX,FLT_MAX);
     vec3<Scalar> proj_max = vec3<Scalar>(-FLT_MAX,-FLT_MAX,-FLT_MAX);
-
-    Scalar max_r = -FLT_MAX;
 
     // project points onto axes
     for (unsigned int i = start_idx; i < end_idx; ++i)
