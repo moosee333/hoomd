@@ -22,7 +22,7 @@
 #endif
 
 //! A relative convergence criterion for iteratively optimizing tight fitting OBBs
-// smaller eps_rel will lead to tighter OBB's at the expense of increased
+// smaller epsilon will lead to tighter OBB's at the expense of increased
 // tree building time
 #define GPU_EPS_CONVERGENCE Scalar(1e-6)
 
