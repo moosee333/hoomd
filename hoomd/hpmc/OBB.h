@@ -21,6 +21,11 @@
 #include "hoomd/extern/quickhull/QuickHull.hpp"
 #endif
 
+//! A relative convergence criterion for iteratively optimizing tight fitting OBBs
+// smaller eps_rel will lead to tighter OBB's at the expense of increased
+// tree building time
+#define GPU_EPS_CONVERGENCE Scalar(1e-6)
+
 /*! \file OBB.h
     \brief Basic OBB routines
 */
@@ -413,7 +418,7 @@ DEVICE inline bool IntersectRayOBB(const vec3<OverlapReal>& p, const vec3<Overla
 template<class Real>
 DEVICE inline Real MinAreaRect(vec2<Real> pt[], int numPts, vec2<Real> &c, vec2<Real> u[2])
     {
-    Real minArea = DBL_MAX;
+    Real minArea = FLT_MAX;
 
     // initialize to some default unit vectors
     u[0] = vec2<Real>(1,0);
@@ -459,6 +464,108 @@ DEVICE inline Real MinAreaRect(vec2<Real> pt[], int numPts, vec2<Real> &c, vec2<
         }
     return minArea;
     }
+
+
+//! Project a 3d vector onto a plane normal to cur_axis[test_axis]
+/*! \param v the input vector
+    \param cur_axis a coordinate frame, set of three axes
+    \param test_axis the index of the axis normal to the projection plane
+ */
+template<class Real>
+DEVICE vec2<Real> inline project(const vec3<Real> v, const vec3<Real> cur_axis[3], unsigned int test_axis)
+    {
+    vec2<Real> p;
+
+    if (test_axis == 0)
+        {
+        p.x = dot(cur_axis[1], v);
+        p.y = dot(cur_axis[2], v);
+        }
+    else if (test_axis == 1)
+        {
+        p.x = dot(cur_axis[0], v);
+        p.y = dot(cur_axis[2], v);
+        }
+    else if (test_axis == 2)
+        {
+        p.x = dot(cur_axis[0], v);
+        p.y = dot(cur_axis[1], v);
+        }
+
+    return p;
+    }
+
+//! Compute minimum area bounding rectangle, and project 3D coordinates normal to test_axis in-place
+/*! \param pos the list of input positions
+    \param cur_axis a coordinate frame, set of three axes
+    \param test_axis the index of the axis normal to the projection plane
+    \param map Index map from start_idx to end_idx into pos
+    \param start_idx first index in map
+    \param end_idx last index in map (one past end)
+    \param c (return value) Center of rectangle
+    \param u (return value) the new set of 2D axes
+ */
+template<class Vector, class Real>
+DEVICE inline Real MinAreaRect(
+    const Vector *pos,
+    const vec3<Real> cur_axis[3],
+    const unsigned int test_axis,
+    const unsigned int *map,
+    const unsigned int start_idx,
+    const unsigned int end_idx,
+    vec2<Real>& c,
+    vec2<Real> u[2])
+    {
+    Real minArea = FLT_MAX;
+
+    // initialize to some default unit vectors
+    u[0] = vec2<Real>(1,0);
+    u[1] = vec2<Real>(0,1);
+
+    unsigned int numPts = end_idx - start_idx;
+
+    // Loop through all edges; j trails i by 1, modulo numPts
+    for (unsigned int i = 0, j = numPts - 1; i < numPts; j = i, i++)
+        {
+        // Get current edge e0 (e0x,e0y), normalized
+        vec2<Real> e0 = project(pos[map[start_idx+i]]-pos[map[start_idx+j]],cur_axis,test_axis);
+
+        const Real eps_abs(1e-12); // if edge is too short, do not consider
+        if (dot(e0,e0) < eps_abs) continue;
+        e0 = e0/sqrt(dot(e0,e0));
+
+        // Get an axis e1 orthogonal to edge e0
+        vec2<Real> e1 = vec2<Real>(-e0.y, e0.x); // = Perp2D(e0)
+
+        // Loop through all points to get maximum extents
+        Real min0 = 0.0, min1 = 0.0, max0 = 0.0, max1 = 0.0;
+
+        for (unsigned int k = 0; k < numPts; k++)
+            {
+            // Project points onto axes e0 and e1 and keep track
+            // of minimum and maximum values along both axes
+            vec2<Real> d = project(pos[map[start_idx+k]]-pos[map[start_idx+j]], cur_axis, test_axis);
+
+            Real dotp = dot(d, e0);
+            if (dotp < min0) min0 = dotp;
+            if (dotp > max0) max0 = dotp;
+            dotp = dot(d, e1);
+            if (dotp < min1) min1 = dotp;
+            if (dotp > max1) max1 = dotp;
+            }
+        Real area = (max0 - min0) * (max1 - min1);
+
+        // If best so far, remember area, center, and axes
+        if (area < minArea)
+            {
+            minArea = area;
+            c = project(pos[map[start_idx+j]], cur_axis, test_axis) + 0.5 * ((min0 + max0) * e0 + (min1 + max1) * e1);
+            u[0] = e0; u[1] = e1;
+            }
+        }
+    return minArea;
+    }
+
 
 #ifndef NVCC
 DEVICE inline OBB compute_obb(const std::vector< vec3<OverlapReal> >& pts, const std::vector<OverlapReal>& vertex_radii,
@@ -902,18 +1009,15 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
         r.row2 = vec3<Scalar>(eigen_vec(2,0),eigen_vec(2,1),eigen_vec(2,2));
         }
 
-    #if 0
     if (n)
         {
-        vec2<Scalar> *proj_2d = (vec2<Scalar> *) malloc(n*sizeof(vec2<Scalar>));
-
         bool done = false;
         vec3<Scalar> cur_axis[3];
         cur_axis[0] = vec3<Scalar>(r.row0.x, r.row1.x, r.row2.x);
         cur_axis[1] = vec3<Scalar>(r.row0.y, r.row1.y, r.row2.y);
         cur_axis[2] = vec3<Scalar>(r.row0.z, r.row1.z, r.row2.z);
 
-        Scalar min_V = DBL_MAX;
+        Scalar min_V = FLT_MAX;
         unsigned int min_axis = 0;
         vec2<Scalar> min_axes_2d[2];
 
@@ -925,43 +1029,31 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
             // test if a projection normal to any axis reduces the volume of the bounding box
             for (unsigned int test_axis = 0; test_axis < 3; ++test_axis)
                 {
-                // project normal to test_axis
-                for (unsigned int i = start_idx; i < end_idx; ++i)
-                    {
-                    unsigned k = 0;
-                    for (unsigned int j = 0 ; j < 3; j++)
-                        {
-                        if (j != test_axis)
-                            {
-                            if (k++ == 0)
-                                proj_2d[i].x = dot(cur_axis[j], vec3<Scalar>(d_pos[d_map[i]]));
-                            else
-                                proj_2d[i].y = dot(cur_axis[j], vec3<Scalar>(d_pos[d_map[i]]));
-                            }
-                        }
-                    }
-
                 vec2<Scalar> new_axes_2d[2];
                 vec2<Scalar> c;
-                Scalar area = MinAreaRect(&proj_2d[0],n,c,new_axes_2d);
+                Scalar area = MinAreaRect(d_pos, cur_axis, test_axis, d_map, start_idx, end_idx, c, new_axes_2d);
 
                 // find extent along test_axis
-                Scalar proj_min = DBL_MAX;
-                Scalar proj_max = -DBL_MAX;
+                Scalar proj_min = FLT_MAX;
+                Scalar proj_max = -FLT_MAX;
                 for (unsigned int i = start_idx; i < end_idx; ++i)
                     {
                     Scalar proj = dot(vec3<Scalar>(d_pos[d_map[i]]), cur_axis[test_axis]);
 
-                    if (proj > proj_max) proj_max = proj;
-                    if (proj < proj_min) proj_min = proj;
+                    if (proj + radius > proj_max) proj_max = proj + radius;
+                    if (proj - radius < proj_min) proj_min = proj - radius;
                     }
                 Scalar extent = proj_max - proj_min;
 
                 // bounding box volume
                 Scalar V = extent*area;
-                Scalar eps_rel(1e-6); // convergence criterion
-                if (V < min_V && (min_V-V) > eps_rel*min_V)
+
+                Scalar eps_rel(GPU_EPS_CONVERGENCE); // convergence criterion
+                if (V < min_V)
                     {
+                    if (min_V-V < eps_rel*min_V)
+                        done = true;
+
                     min_V = V;
                     min_axes_2d[0] = new_axes_2d[0];
                     min_axes_2d[1] = new_axes_2d[1];
@@ -997,7 +1089,7 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
                 }
             else
                 {
-                // local minimum reached
+                // no direction leads to an improvement, we are done
                 done = true;
                 }
             }
@@ -1005,10 +1097,7 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
         // update rotation matrix
         r.row0 = cur_axis[0]; r.row1 = cur_axis[1]; r.row2 = cur_axis[2];
         r = transpose(r);
-
-        free(proj_2d);
         }
-    #endif
 
     // final axes
     vec3<Scalar> axis[3];
@@ -1065,30 +1154,6 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
 //! Merge two OBBs
 DEVICE inline OBB merge(const OBB& a, const OBB& b)
     {
-    #if 0
-    // for now, merge as AABBs
-    OBB new_obb;
-
-    vec3<Scalar> lower_a = a.center - a.lengths;
-    vec3<Scalar> lower_b = b.center - b.lengths;
-    vec3<Scalar> upper_a = a.center + a.lengths;
-    vec3<Scalar> upper_b = b.center + b.lengths;
-
-    vec3<Scalar> new_lower, new_upper;
-    new_lower.x = detail::min(lower_a.x, lower_b.x);
-    new_lower.y = detail::min(lower_a.y, lower_b.y);
-    new_lower.z = detail::min(lower_a.z, lower_b.z);
-    new_upper.x = detail::max(upper_a.x, upper_b.x);
-    new_upper.y = detail::max(upper_a.y, upper_b.y);
-    new_upper.z = detail::max(upper_a.z, upper_b.z);
-
-    new_obb.lengths = vec3<Scalar>(0.5*(new_upper.x-new_lower.x), 0.5*(new_upper.y-new_lower.y), 0.5*(new_upper.z-new_lower.z));
-    new_obb.center = vec3<Scalar>(0.5*(new_upper.x+new_lower.x), 0.5*(new_upper.y+new_lower.y), 0.5*(new_upper.z+new_lower.z));
-    new_obb.rotation = quat<OverlapReal>();
-    new_obb.mask = 1;
-    new_obb.is_sphere = 0;
-    #endif
-
     // set up identity permutation
     unsigned int map[16];
     for (unsigned int i = 0; i < 16; ++i)
@@ -1210,4 +1275,5 @@ DEVICE inline void computeBoundingVolume(
 }; // end namespace hpmc
 
 #undef DEVICE
+#undef GPU_EPS_CONVERGENCE
 #endif //__OBB_H__
