@@ -617,6 +617,9 @@ void BVHGPU<BVNode, Shape, IntHPMC>::buildTree()
     // step six: bubble up the bounding volumes
     bubbleBoundingVolumes();
 
+    // step seven: move particle information into leaf nodes
+    moveLeafParticles();
+
     if (m_prof) m_prof->pop(m_exec_conf);
     }
 
