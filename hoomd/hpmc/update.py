@@ -955,7 +955,8 @@ class clusters(_updater):
             cls = getattr(_hpmc, "UpdaterClustersGPU"+shape+bvh_type)
 
             bvh_cls = getattr(_hpmc,"BVHGPU"+bvh_type+shape)
-            bvh = bvh_cls(hoomd.context.current.system_definition,mc.cpp_integrator)
+            leaf_capacity=4
+            bvh = bvh_cls(hoomd.context.current.system_definition,leaf_capacity, mc.cpp_integrator)
             hoomd.context.current.system.overwriteCompute(bvh, "auto_bvh_OBB")
 
             self.cpp_updater = cls(hoomd.context.current.system_definition, mc.cpp_integrator, int(seed), bvh)

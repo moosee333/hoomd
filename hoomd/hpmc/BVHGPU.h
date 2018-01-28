@@ -57,7 +57,8 @@ class BVHGPU : public Compute
             Therefore, the class can also be used in an MD setting with a point shape.
         */
         BVHGPU(std::shared_ptr<SystemDefinition> sysdef,
-               std::shared_ptr<IntHPMC> mc = std::shared_ptr<IntHPMC>() );
+               unsigned int leaf_capacity,
+               std::shared_ptr<IntHPMC> mc = std::shared_ptr<IntHPMC>());
 
         //! Destructor
         virtual ~BVHGPU();
@@ -253,10 +254,11 @@ class BVHGPU : public Compute
 
 template<class BVNode, class Shape, class IntHPMC>
 BVHGPU<BVNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef,
+    unsigned int leaf_capacity,
     std::shared_ptr<IntHPMC> mc)
     : Compute(sysdef), m_mc(mc), m_type_changed(false),
       m_max_num_changed(false), m_n_leaf(0), m_n_internal(0), m_n_node(0),
-      m_particles_per_leaf(4)
+      m_particles_per_leaf(leaf_capacity)
     {
     m_exec_conf->msg->notice(5) << "Constructing BVHGPU" << std::endl;
 
@@ -921,8 +923,8 @@ void export_BVHGPU(pybind11::module& m, const std::string& name)
     {
     pybind11::class_< BVHGPU<BVNode, Shape, IntHPMC>, std::shared_ptr< BVHGPU<BVNode, Shape, IntHPMC> > >(
         m, name.c_str(), pybind11::base<Compute>())
-        .def( pybind11::init< std::shared_ptr<SystemDefinition>, std::shared_ptr<IntHPMC> >())
-        .def( pybind11::init< std::shared_ptr<SystemDefinition> >())
+        .def( pybind11::init< std::shared_ptr<SystemDefinition>, unsigned int, std::shared_ptr<IntHPMC> >())
+        .def( pybind11::init< std::shared_ptr<SystemDefinition>, unsigned int >())
     ;
     }
 
