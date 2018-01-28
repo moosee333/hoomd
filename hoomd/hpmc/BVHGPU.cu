@@ -679,7 +679,17 @@ cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
     {
     cudaMemset(d_node_locks, 0, sizeof(unsigned int)*ninternal);
 
-    gpu_bvh_bubble_bounding_volumes_kernel<BVNode><<<nleafs/block_size + 1, block_size>>>(d_node_locks,
+    static unsigned int max_block_size = UINT_MAX;
+    if (max_block_size == UINT_MAX)
+        {
+        cudaFuncAttributes attr;
+        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_bubble_bounding_volumes_kernel<BVNode>);
+        max_block_size = attr.maxThreadsPerBlock;
+        }
+
+    int run_block_size = min(block_size,max_block_size);
+
+    gpu_bvh_bubble_bounding_volumes_kernel<BVNode><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
                                                                          d_tree_nodes,
                                                                          d_tree_parent_sib,
                                                                          ntypes,
