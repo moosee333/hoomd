@@ -71,7 +71,6 @@ struct hpmc_clusters_args_t
                 bool _swap,
                 unsigned int _type_A,
                 unsigned int _type_B,
-                const AABBTree& _aabb_tree,
                 const ManagedArray<vec3<Scalar> >& _image_list,
                 const ManagedArray<int3 >& _image_hkl,
                 cudaStream_t _stream,
@@ -120,7 +119,6 @@ struct hpmc_clusters_args_t
                   swap(_swap),
                   type_A(_type_A),
                   type_B(_type_B),
-                  aabb_tree(_aabb_tree),
                   image_list(_image_list),
                   image_hkl(_image_hkl),
                   stream(_stream),
@@ -170,7 +168,6 @@ struct hpmc_clusters_args_t
     bool swap;                        //!< If true, swap move
     unsigned int type_A;              //!< Type A of swap pair
     unsigned int type_B;              //!< Type B of swap pair
-    const AABBTree& aabb_tree;        //!< AABB tree data structure for overlap checks
     const ManagedArray<vec3<Scalar> >& image_list; //!< Image list for periodic boundary conditions
     const ManagedArray<int3 >& image_hkl; //!< Image list shifts for periodic boundary conditions
     cudaStream_t stream;               //!< Stream for kernel execution

@@ -223,7 +223,6 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
 
     auto &params = this->m_mc->getParams();
 
-    auto &aabb_tree = this->m_mc->buildAABBTree();
     auto &image_list = this->m_mc->updateImageList();
     auto &image_hkl = this->m_mc->getImageHKL();
 
@@ -301,7 +300,6 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
                                            swap,
                                            swap ? this->m_ab_types[0] : 0,
                                            swap ? this->m_ab_types[1] : 0,
-                                           aabb_tree,
                                            image_list,
                                            image_hkl,
                                            m_stream,
@@ -490,7 +488,6 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
                                            swap,
                                            swap ? this->m_ab_types[0] : 0,
                                            swap ? this->m_ab_types[1] : 0,
-                                           aabb_tree,
                                            image_list,
                                            image_hkl,
                                            m_stream,
