@@ -258,7 +258,7 @@ __global__ void gpu_bvh_merge_shapes_kernel(BVNode *d_tree_nodes,
     node.rope = 0; // we have no idea what the skip value is right now
 
     // compute the bounding valume of type BVNode for these shapes
-    computeBoundingVolume<Shape>(node.bounding_volume, d_pos, d_map_tree_pid, start_idx, end_idx, s_params[leaf_type]);
+    computeBoundingVolume<Scalar4, Shape>(node.bounding_volume, d_pos, d_map_tree_pid, start_idx, end_idx, s_params[leaf_type]);
 
     // store BVH node in global memory
     d_tree_nodes[idx] = node;

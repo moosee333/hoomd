@@ -14,10 +14,10 @@
 #ifndef __OBB_H__
 #define __OBB_H__
 
-#ifndef NVCC
 #include "hoomd/extern/Eigen/Eigen/Dense"
 #include "hoomd/extern/Eigen/Eigen/Eigenvalues"
 
+#ifndef NVCC
 #include "hoomd/extern/quickhull/QuickHull.hpp"
 #endif
 
@@ -406,48 +406,48 @@ DEVICE inline bool IntersectRayOBB(const vec3<OverlapReal>& p, const vec3<Overla
     return true;
     }
 
-#ifndef NVCC
 // Ericson, Christer (2013-05-02). Real-Time Collision Detection (Page 111). Taylor and Francis CRC
 
 // Compute the center point, ’c’, and axis orientation, u[0] and u[1], of
 // the minimum area rectangle in the xy plane containing the points pt[].
-inline double MinAreaRect(vec2<double> pt[], int numPts, vec2<double> &c, vec2<double> u[2])
+template<class Real>
+DEVICE inline Real MinAreaRect(vec2<Real> pt[], int numPts, vec2<Real> &c, vec2<Real> u[2])
     {
-    double minArea = DBL_MAX;
+    Real minArea = DBL_MAX;
 
     // initialize to some default unit vectors
-    u[0] = vec2<double>(1,0);
-    u[1] = vec2<double>(0,1);
+    u[0] = vec2<Real>(1,0);
+    u[1] = vec2<Real>(0,1);
 
     // Loop through all edges; j trails i by 1, modulo numPts
     for (int i = 0, j = numPts - 1; i < numPts; j = i, i++)
         {
         // Get current edge e0 (e0x,e0y), normalized
-        vec2<double> e0 = pt[i] - pt[j];
+        vec2<Real> e0 = pt[i] - pt[j];
 
-        const double eps_abs(1e-12); // if edge is too short, do not consider
+        const Real eps_abs(1e-12); // if edge is too short, do not consider
         if (dot(e0,e0) < eps_abs) continue;
         e0 = e0/sqrt(dot(e0,e0));
 
         // Get an axis e1 orthogonal to edge e0
-        vec2<double> e1 = vec2<double>(-e0.y, e0.x); // = Perp2D(e0)
+        vec2<Real> e1 = vec2<Real>(-e0.y, e0.x); // = Perp2D(e0)
 
         // Loop through all points to get maximum extents
-        double min0 = 0.0, min1 = 0.0, max0 = 0.0, max1 = 0.0;
+        Real min0 = 0.0, min1 = 0.0, max0 = 0.0, max1 = 0.0;
 
         for (int k = 0; k < numPts; k++)
             {
             // Project points onto axes e0 and e1 and keep track
             // of minimum and maximum values along both axes
-            vec2<double> d = pt[k] - pt[j];
-            double dotp = dot(d, e0);
+            vec2<Real> d = pt[k] - pt[j];
+            Real dotp = dot(d, e0);
             if (dotp < min0) min0 = dotp;
             if (dotp > max0) max0 = dotp;
             dotp = dot(d, e1);
             if (dotp < min1) min1 = dotp;
             if (dotp > max1) max1 = dotp;
             }
-        double area = (max0 - min0) * (max1 - min1);
+        Real area = (max0 - min0) * (max1 - min1);
 
         // If best so far, remember area, center, and axes
         if (area < minArea)
@@ -460,6 +460,7 @@ inline double MinAreaRect(vec2<double> pt[], int numPts, vec2<double> &c, vec2<d
     return minArea;
     }
 
+#ifndef NVCC
 DEVICE inline OBB compute_obb(const std::vector< vec3<OverlapReal> >& pts, const std::vector<OverlapReal>& vertex_radii,
     bool make_sphere)
     {
@@ -773,9 +774,299 @@ DEVICE inline OBB compute_obb(const std::vector< vec3<OverlapReal> >& pts, const
     }
 #endif // NVCC
 
+//! Function template to compute the bounding OBB for a list of shapes
+/*! \param postype Positions (and types) of particles
+    \param map Map into d_pos
+    \param start_idx Starting index in map
+    \param end_idx End index in map (one past the last element)
+    \param radius the radius of every particle sphere
+ */
+template<class Vector>
+DEVICE inline void compute_obb_from_spheres(OBB& obb,
+    const Vector *d_pos,
+    const unsigned int *d_map,
+    const unsigned int start_idx,
+    const unsigned int end_idx,
+    const Scalar radius)
+    {
+    // compute mean
+    vec3<Scalar> mean = vec3<Scalar>(0,0,0);
+
+    unsigned int n = end_idx - start_idx;
+    for (unsigned int i = start_idx; i < end_idx; ++i)
+        {
+        mean += vec3<Scalar>(d_pos[d_map[i]])/(Scalar)n;
+        }
+
+    // compute covariance matrix
+    typedef Eigen::Matrix<Scalar, 3, 3> matrix_t;
+    matrix_t m;
+    m(0,0) = m(0,1) = m(0,2) = m(1,0) = m(1,1) = m(1,2) = m(2,0) = m(2,1) = m(2,2) = 0.0;
+
+    #if 0
+    if (pts.size() >= 3)
+        {
+        // compute convex hull
+        typedef quickhull::Vector3<OverlapReal> vec;
+
+        quickhull::QuickHull<OverlapReal> qh;
+        std::vector<vec> qh_pts;
+        for (auto it = pts.begin(); it != pts.end(); ++it)
+            qh_pts.push_back(vec(it->x,it->y,it->z));
+        auto hull = qh.getConvexHull(qh_pts, true, false);
+        auto indexBuffer = hull.getIndexBuffer();
+        auto vertexBuffer = hull.getVertexBuffer();
+
+        OverlapReal hull_area(0.0);
+        vec hull_centroid(0.0,0.0,0.0);
+
+        for (unsigned int i = 0; i < vertexBuffer.size(); ++i)
+            hull_pts.push_back(vec3<double>(vertexBuffer[i].x,vertexBuffer[i].y,vertexBuffer[i].z));
+
+        for (unsigned int i = 0; i < indexBuffer.size(); i+=3)
+            {
+            // triangle vertices
+            vec p = vertexBuffer[indexBuffer[i]];
+            vec q = vertexBuffer[indexBuffer[i+1]];
+            vec r = vertexBuffer[indexBuffer[i+2]];
+
+            vec centroid = OverlapReal(1./3.)*(p+q+r);
+            vec cross = (q-p).crossProduct(r-p);
+            OverlapReal area = OverlapReal(0.5)*sqrt(cross.dotProduct(cross));
+            hull_area += area;
+            hull_centroid += area*centroid;
+
+            OverlapReal fac = area/12.0;
+            m(0,0) += fac*(9.0*centroid.x*centroid.x + p.x*p.x + q.x*q.x + r.x*r.x);
+            m(0,1) += fac*(9.0*centroid.x*centroid.y + p.x*p.y + q.x*q.y + r.x*r.y);
+            m(0,2) += fac*(9.0*centroid.x*centroid.z + p.x*p.z + q.x*q.z + r.x*r.z);
+            m(1,0) += fac*(9.0*centroid.y*centroid.x + p.y*p.x + q.y*q.x + r.y*r.x);
+            m(1,1) += fac*(9.0*centroid.y*centroid.y + p.y*p.y + q.y*q.y + r.y*r.y);
+            m(1,2) += fac*(9.0*centroid.y*centroid.z + p.y*p.z + q.y*q.z + r.y*r.z);
+            m(2,0) += fac*(9.0*centroid.z*centroid.x + p.z*p.x + q.z*q.x + r.z*r.x);
+            m(2,1) += fac*(9.0*centroid.z*centroid.y + p.z*p.y + q.z*q.y + r.z*r.y);
+            m(2,2) += fac*(9.0*centroid.z*centroid.z + p.z*p.z + q.z*q.z + r.z*r.z);
+            }
+
+        hull_centroid /= hull_area;
+        m(0,0) = m(0,0)/hull_area - hull_centroid.x*hull_centroid.x;
+        m(0,1) = m(0,1)/hull_area - hull_centroid.x*hull_centroid.y;
+        m(0,2) = m(0,2)/hull_area - hull_centroid.x*hull_centroid.z;
+        m(1,0) = m(1,0)/hull_area - hull_centroid.y*hull_centroid.x;
+        m(1,1) = m(1,1)/hull_area - hull_centroid.y*hull_centroid.y;
+        m(1,2) = m(1,2)/hull_area - hull_centroid.y*hull_centroid.z;
+        m(2,0) = m(2,0)/hull_area - hull_centroid.z*hull_centroid.x;
+        m(2,1) = m(2,1)/hull_area - hull_centroid.z*hull_centroid.y;
+        m(2,2) = m(2,2)/hull_area - hull_centroid.z*hull_centroid.z;
+        }
+    else
+    #endif
+        {
+        // degenerate case
+        for (unsigned int i = start_idx; i < end_idx; ++i)
+            {
+            vec3<Scalar> dr = vec3<Scalar>(d_pos[d_map[i]]) - mean;
+
+            m(0,0) += dr.x * dr.x/(Scalar)n;
+            m(1,0) += dr.y * dr.x/(Scalar)n;
+            m(2,0) += dr.z * dr.x/(Scalar)n;
+
+            m(0,1) += dr.x * dr.y/(Scalar)n;
+            m(1,1) += dr.y * dr.y/(Scalar)n;
+            m(2,1) += dr.z * dr.y/(Scalar)n;
+
+            m(0,2) += dr.x * dr.z/(Scalar)n;
+            m(1,2) += dr.y * dr.z/(Scalar)n;
+            m(2,2) += dr.z * dr.z/(Scalar)n;
+            }
+        }
+
+    // compute normalized eigenvectors
+    Eigen::SelfAdjointEigenSolver<matrix_t> es;
+    es.compute(m);
+
+    rotmat3<OverlapReal> r;
+
+    if (es.info() != Eigen::Success)
+        {
+        // numerical issue, set r to identity matrix
+        printf("Here\n");
+        r.row0 = vec3<Scalar>(1,0,0);
+        r.row1 = vec3<Scalar>(0,1,0);
+        r.row2 = vec3<Scalar>(0,0,1);
+        }
+    else
+        {
+        Eigen::Matrix<std::complex<Scalar>, 3, 3> eigen_vec = es.eigenvectors();
+        r.row0 = vec3<Scalar>(Eigen::numext::real(eigen_vec(0,0)),Eigen::numext::real(eigen_vec(0,1)),Eigen::numext::real(eigen_vec(0,2)));
+        r.row1 = vec3<Scalar>(Eigen::numext::real(eigen_vec(1,0)),Eigen::numext::real(eigen_vec(1,1)),Eigen::numext::real(eigen_vec(1,2)));
+        r.row2 = vec3<Scalar>(Eigen::numext::real(eigen_vec(2,0)),Eigen::numext::real(eigen_vec(2,1)),Eigen::numext::real(eigen_vec(2,2)));
+        }
+
+    if (n)
+        {
+        vec2<Scalar> *proj_2d = (vec2<Scalar> *) malloc(n*sizeof(vec2<Scalar>));
+
+        bool done = false;
+        vec3<Scalar> cur_axis[3];
+        cur_axis[0] = vec3<Scalar>(r.row0.x, r.row1.x, r.row2.x);
+        cur_axis[1] = vec3<Scalar>(r.row0.y, r.row1.y, r.row2.y);
+        cur_axis[2] = vec3<Scalar>(r.row0.z, r.row1.z, r.row2.z);
+
+        Scalar min_V = DBL_MAX;
+        unsigned int min_axis = 0;
+        vec2<Scalar> min_axes_2d[2];
+
+        // iteratively improve OBB
+        while (! done)
+            {
+            bool updated_axes = false;
+
+            // test if a projection normal to any axis reduces the volume of the bounding box
+            for (unsigned int test_axis = 0; test_axis < 3; ++test_axis)
+                {
+                // project normal to test_axis
+                for (unsigned int i = start_idx; i < end_idx; ++i)
+                    {
+                    unsigned k = 0;
+                    for (unsigned int j = 0 ; j < 3; j++)
+                        {
+                        if (j != test_axis)
+                            {
+                            if (k++ == 0)
+                                proj_2d[i].x = dot(cur_axis[j], vec3<Scalar>(d_pos[d_map[i]]));
+                            else
+                                proj_2d[i].y = dot(cur_axis[j], vec3<Scalar>(d_pos[d_map[i]]));
+                            }
+                        }
+                    }
+
+                vec2<Scalar> new_axes_2d[2];
+                vec2<Scalar> c;
+                Scalar area = MinAreaRect(&proj_2d[0],n,c,new_axes_2d);
+
+                // find extent along test_axis
+                Scalar proj_min = DBL_MAX;
+                Scalar proj_max = -DBL_MAX;
+                for (unsigned int i = start_idx; i < end_idx; ++i)
+                    {
+                    Scalar proj = dot(vec3<Scalar>(d_pos[d_map[i]]), cur_axis[test_axis]);
+
+                    if (proj > proj_max) proj_max = proj;
+                    if (proj < proj_min) proj_min = proj;
+                    }
+                Scalar extent = proj_max - proj_min;
+
+                // bounding box volume
+                Scalar V = extent*area;
+                Scalar eps_rel(1e-6); // convergence criterion
+                if (V < min_V && (min_V-V) > eps_rel*min_V)
+                    {
+                    min_V = V;
+                    min_axes_2d[0] = new_axes_2d[0];
+                    min_axes_2d[1] = new_axes_2d[1];
+                    min_axis = test_axis;
+                    updated_axes = true;
+                    }
+                } // end loop over test axis
+
+            if (updated_axes)
+                {
+                vec3<Scalar> new_axis[3];
+
+                // test axis stays the same
+                new_axis[min_axis] = cur_axis[min_axis];
+
+                // rotate axes
+                for (unsigned int j = 0 ; j < 3; j++)
+                    {
+                    if (j != min_axis)
+                        {
+                        for (unsigned int l = j+1; l < 3; l++)
+                            if (l != min_axis)
+                                {
+                                new_axis[l] = min_axes_2d[0].x*cur_axis[j]+min_axes_2d[0].y*cur_axis[l];
+                                new_axis[j] = min_axes_2d[1].x*cur_axis[j]+min_axes_2d[1].y*cur_axis[l];
+                                }
+                        }
+                    }
+
+                // update axes
+                for (unsigned int j = 0; j < 3; j++)
+                    cur_axis[j] = new_axis[j];
+                }
+            else
+                {
+                // local minimum reached
+                done = true;
+                }
+            }
+
+        // update rotation matrix
+        r.row0 = cur_axis[0]; r.row1 = cur_axis[1]; r.row2 = cur_axis[2];
+        r = transpose(r);
+
+        free(proj_2d);
+        }
+
+    // final axes
+    vec3<Scalar> axis[3];
+    axis[0] = vec3<Scalar>(r.row0.x, r.row1.x, r.row2.x);
+    axis[1] = vec3<Scalar>(r.row0.y, r.row1.y, r.row2.y);
+    axis[2] = vec3<Scalar>(r.row0.z, r.row1.z, r.row2.z);
+
+    vec3<Scalar> proj_min = vec3<Scalar>(FLT_MAX,FLT_MAX,FLT_MAX);
+    vec3<Scalar> proj_max = vec3<Scalar>(-FLT_MAX,-FLT_MAX,-FLT_MAX);
+
+    Scalar max_r = -FLT_MAX;
+
+    // project points onto axes
+    for (unsigned int i = start_idx; i < end_idx; ++i)
+        {
+        vec3<Scalar> proj;
+        vec3<Scalar> dr = vec3<Scalar>(d_pos[d_map[i]]) - mean;
+        proj.x = dot(dr, axis[0]);
+        proj.y = dot(dr, axis[1]);
+        proj.z = dot(dr, axis[2]);
+
+        if (proj.x+radius > proj_max.x) proj_max.x = proj.x+radius;
+        if (proj.y+radius > proj_max.y) proj_max.y = proj.y+radius;
+        if (proj.z+radius > proj_max.z) proj_max.z = proj.z+radius;
+
+        if (proj.x-radius < proj_min.x) proj_min.x = proj.x-radius;
+        if (proj.y-radius < proj_min.y) proj_min.y = proj.y-radius;
+        if (proj.z-radius < proj_min.z) proj_min.z = proj.z-radius;
+        }
+
+    vec3<Scalar> center = mean;
+
+    center += Scalar(0.5)*(proj_max.x + proj_min.x)*axis[0];
+    center += Scalar(0.5)*(proj_max.y + proj_min.y)*axis[1];
+    center += Scalar(0.5)*(proj_max.z + proj_min.z)*axis[2];
+
+    vec3<Scalar> lengths = Scalar(0.5)*(proj_max - proj_min);
+
+    // make sure coordinate system is proper
+    if (r.det() < Scalar(0.0))
+        {
+        // swap column two and three
+        detail::swap(r.row0.y,r.row0.z);
+        detail::swap(r.row1.y,r.row1.z);
+        detail::swap(r.row2.y,r.row2.z);
+        detail::swap(lengths.y,lengths.z);
+        }
+
+    obb.center = center;
+    obb.lengths = lengths;
+    obb.is_sphere = 0;
+    obb.mask = 1;
+    obb.rotation = quat<Scalar>(r);
+    }
+
 //! Merge two OBBs
 DEVICE inline OBB merge(const OBB& a, const OBB& b)
     {
+    #if 0
     // for now, merge as AABBs
     OBB new_obb;
 
@@ -797,8 +1088,42 @@ DEVICE inline OBB merge(const OBB& a, const OBB& b)
     new_obb.rotation = quat<OverlapReal>();
     new_obb.mask = 1;
     new_obb.is_sphere = 0;
+    #endif
 
-    return new_obb;
+    // set up identity permutation
+    unsigned int map[16];
+    for (unsigned int i = 0; i < 16; ++i)
+        map[i] = i;
+
+    // corners of the two OBBs
+    vec3<Scalar> corners[16];
+
+    rotmat3<OverlapReal> ra(conj(a.rotation));
+    corners[0] = a.center + ra.row0*a.lengths.x + ra.row1*a.lengths.y + ra.row2*a.lengths.z;
+    corners[1] = a.center - ra.row0*a.lengths.x + ra.row1*a.lengths.y + ra.row2*a.lengths.z;
+    corners[2] = a.center + ra.row0*a.lengths.x - ra.row1*a.lengths.y + ra.row2*a.lengths.z;
+    corners[3] = a.center - ra.row0*a.lengths.x - ra.row1*a.lengths.y + ra.row2*a.lengths.z;
+    corners[4] = a.center + ra.row0*a.lengths.x + ra.row1*a.lengths.y - ra.row2*a.lengths.z;
+    corners[5] = a.center - ra.row0*a.lengths.x + ra.row1*a.lengths.y - ra.row2*a.lengths.z;
+    corners[6] = a.center + ra.row0*a.lengths.x - ra.row1*a.lengths.y - ra.row2*a.lengths.z;
+    corners[7] = a.center - ra.row0*a.lengths.x - ra.row1*a.lengths.y - ra.row2*a.lengths.z;
+
+    rotmat3<OverlapReal> rb(conj(b.rotation));
+    corners[8] = b.center + rb.row0*b.lengths.x + rb.row1*b.lengths.y + rb.row2*b.lengths.z;
+    corners[9] = b.center - rb.row0*b.lengths.x + rb.row1*b.lengths.y + rb.row2*b.lengths.z;
+    corners[10] = b.center + rb.row0*b.lengths.x - rb.row1*b.lengths.y + rb.row2*b.lengths.z;
+    corners[11] = b.center - rb.row0*b.lengths.x - rb.row1*b.lengths.y + rb.row2*b.lengths.z;
+    corners[12] = b.center + rb.row0*b.lengths.x + rb.row1*b.lengths.y - rb.row2*b.lengths.z;
+    corners[13] = b.center - rb.row0*b.lengths.x + rb.row1*b.lengths.y - rb.row2*b.lengths.z;
+    corners[14] = b.center + rb.row0*b.lengths.x - rb.row1*b.lengths.y - rb.row2*b.lengths.z;
+    corners[15] = b.center - rb.row0*b.lengths.x - rb.row1*b.lengths.y - rb.row2*b.lengths.z;
+
+    OBB result;
+
+    // compute an OBB given the corners of the two OBBs as points
+    compute_obb_from_spheres(result, &corners[0], map, 0, 16, 0.0);
+
+    return result;
     }
 
 //! A 'point' shape, just to get BVH working with point particles (doesn't provide overlap testing ..)
@@ -830,19 +1155,19 @@ struct EmptyShape
     \param start_idx Starting index in map
     \param end_idx End index in map (one past the last element)
  */
-template<class Shape>
+template<class Vector, class Shape>
 DEVICE inline void computeBoundingVolume(
     OBB& obb,
-    const Scalar4 *postype,
+    const Vector *postype,
     const unsigned int *map_tree_pid,
     unsigned int start_idx,
     unsigned int end_idx,
     const typename Shape::param_type& param);
 
-template<class Shape>
+template<class Vector, class Shape>
 DEVICE inline void computeBoundingVolume(
     OBB& obb,
-    const Scalar4 *postype,
+    const Vector *postype,
     const unsigned int *map_tree_pid,
     unsigned int start_idx,
     unsigned int end_idx,
