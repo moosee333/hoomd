@@ -505,12 +505,12 @@ DEVICE vec2<Real> inline project(const vec3<Real> v, const vec3<Real> cur_axis[3
     \param c (return value) Center of rectangle
     \param u (return value) the new set of 2D axes
  */
-template<class Vector, class Real>
+template<class Vector, class Real, class MapType>
 DEVICE inline Real MinAreaRect(
     const Vector *pos,
     const vec3<Real> cur_axis[3],
     const unsigned int test_axis,
-    const unsigned int *map,
+    MapType map,
     const unsigned int start_idx,
     const unsigned int end_idx,
     vec2<Real>& c,
@@ -528,7 +528,8 @@ DEVICE inline Real MinAreaRect(
     for (unsigned int i = 0, j = numPts - 1; i < numPts; j = i, i++)
         {
         // Get current edge e0 (e0x,e0y), normalized
-        vec2<Real> e0 = project(pos[map[start_idx+i]]-pos[map[start_idx+j]],cur_axis,test_axis);
+        vec3<Scalar> pos_j = pos[map[start_idx+j]];
+        vec2<Real> e0 = project(pos[map[start_idx+i]]-pos_j,cur_axis,test_axis);
 
         const Real eps_abs(1e-12); // if edge is too short, do not consider
         if (dot(e0,e0) < eps_abs) continue;
@@ -544,7 +545,7 @@ DEVICE inline Real MinAreaRect(
             {
             // Project points onto axes e0 and e1 and keep track
             // of minimum and maximum values along both axes
-            vec2<Real> d = project(pos[map[start_idx+k]]-pos[map[start_idx+j]], cur_axis, test_axis);
+            vec2<Real> d = project(pos[map[start_idx+k]]-pos_j, cur_axis, test_axis);
 
             Real dotp = dot(d, e0);
             if (dotp < min0) min0 = dotp;
@@ -888,10 +889,10 @@ DEVICE inline OBB compute_obb(const std::vector< vec3<OverlapReal> >& pts, const
     \param end_idx End index in map (one past the last element)
     \param radius the radius of every particle sphere
  */
-template<class Vector>
+template<class Vector, class MapType>
 DEVICE inline void compute_obb_from_spheres(OBB& obb,
     const Vector *d_pos,
-    const unsigned int *d_map,
+    MapType map,
     const unsigned int start_idx,
     const unsigned int end_idx,
     const Scalar radius)
@@ -902,7 +903,7 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     unsigned int n = end_idx - start_idx;
     for (unsigned int i = start_idx; i < end_idx; ++i)
         {
-        mean += vec3<Scalar>(d_pos[d_map[i]])/(Scalar)n;
+        mean += vec3<Scalar>(d_pos[map[i]])/(Scalar)n;
         }
 
     // compute covariance matrix
@@ -972,7 +973,7 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
         // degenerate case
         for (unsigned int i = start_idx; i < end_idx; ++i)
             {
-            vec3<Scalar> dr = vec3<Scalar>(d_pos[d_map[i]]) - mean;
+            vec3<Scalar> dr = vec3<Scalar>(d_pos[map[i]]) - mean;
 
             m(0,0) += dr.x * dr.x/(Scalar)n;
             m(1,0) += dr.y * dr.x/(Scalar)n;
@@ -1031,14 +1032,14 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
                 {
                 vec2<Scalar> new_axes_2d[2];
                 vec2<Scalar> c;
-                Scalar area = MinAreaRect(d_pos, cur_axis, test_axis, d_map, start_idx, end_idx, c, new_axes_2d);
+                Scalar area = MinAreaRect(d_pos, cur_axis, test_axis, map, start_idx, end_idx, c, new_axes_2d);
 
                 // find extent along test_axis
                 Scalar proj_min = FLT_MAX;
                 Scalar proj_max = -FLT_MAX;
                 for (unsigned int i = start_idx; i < end_idx; ++i)
                     {
-                    Scalar proj = dot(vec3<Scalar>(d_pos[d_map[i]]), cur_axis[test_axis]);
+                    Scalar proj = dot(vec3<Scalar>(d_pos[map[i]]), cur_axis[test_axis]);
 
                     if (proj + radius > proj_max) proj_max = proj + radius;
                     if (proj - radius < proj_min) proj_min = proj - radius;
@@ -1112,7 +1113,7 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     for (unsigned int i = start_idx; i < end_idx; ++i)
         {
         vec3<Scalar> proj;
-        vec3<Scalar> dr = vec3<Scalar>(d_pos[d_map[i]]) - mean;
+        vec3<Scalar> dr = vec3<Scalar>(d_pos[map[i]]) - mean;
         proj.x = dot(dr, axis[0]);
         proj.y = dot(dr, axis[1]);
         proj.z = dot(dr, axis[2]);
@@ -1151,13 +1152,21 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     obb.rotation = quat<Scalar>(r);
     }
 
+//! An identity mapping
+template<class T>
+struct IdentityMap
+    {
+    DEVICE inline T operator [](const T& i) const
+        {
+        return i;
+        }
+    };
+
 //! Merge two OBBs
 DEVICE inline OBB merge(const OBB& a, const OBB& b)
     {
     // set up identity permutation
-    unsigned int map[16];
-    for (unsigned int i = 0; i < 16; ++i)
-        map[i] = i;
+    IdentityMap<unsigned int> map;
 
     // corners of the two OBBs
     vec3<Scalar> corners[16];
