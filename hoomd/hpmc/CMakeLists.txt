@@ -27,6 +27,7 @@ set(_hpmc_headers
     AnalyzerSDF.h
     ComputeFreeVolumeGPU.h
     ComputeFreeVolume.h
+    ConvexHull3D.h
     ExternalFieldComposite.h
     ExternalField.h
     ExternalFieldLattice.h

@@ -21,10 +21,15 @@
 #include "hoomd/extern/quickhull/QuickHull.hpp"
 #endif
 
+#include "ConvexHull3D.h"
+
 //! A relative convergence criterion for iteratively optimizing tight fitting OBBs
 // smaller epsilon will lead to tighter OBB's at the expense of increased
 // tree building time
 #define GPU_EPS_CONVERGENCE Scalar(1e-6)
+
+//! Currently a compile time constant
+const unsigned int GPU_MAX_OBB_VERTS = 16;
 
 /*! \file OBB.h
     \brief Basic OBB routines
@@ -499,20 +504,17 @@ DEVICE vec2<Real> inline project(const vec3<Real> v, const vec3<Real> cur_axis[3
 /*! \param pos the list of input positions
     \param cur_axis a coordinate frame, set of three axes
     \param test_axis the index of the axis normal to the projection plane
-    \param map Index map from start_idx to end_idx into pos
-    \param start_idx first index in map
-    \param end_idx last index in map (one past end)
+    \param map Index map
+    \param numPts Number of vertices
     \param c (return value) Center of rectangle
     \param u (return value) the new set of 2D axes
  */
-template<class Vector, class Real, class MapType>
+template<class Vector, class Real, class VectorIt = const Vector *>
 DEVICE inline Real MinAreaRect(
-    const Vector *pos,
+    VectorIt pos,
     const vec3<Real> cur_axis[3],
     const unsigned int test_axis,
-    MapType map,
-    const unsigned int start_idx,
-    const unsigned int end_idx,
+    const unsigned int numPts,
     vec2<Real>& c,
     vec2<Real> u[2])
     {
@@ -522,14 +524,12 @@ DEVICE inline Real MinAreaRect(
     u[0] = vec2<Real>(1,0);
     u[1] = vec2<Real>(0,1);
 
-    unsigned int numPts = end_idx - start_idx;
-
     // Loop through all edges; j trails i by 1, modulo numPts
     for (unsigned int i = 0, j = numPts - 1; i < numPts; j = i, i++)
         {
         // Get current edge e0 (e0x,e0y), normalized
-        vec3<Scalar> pos_j(pos[map[start_idx+j]]);
-        vec2<Real> e0 = project(vec3<Scalar>(pos[map[start_idx+i]])-pos_j,cur_axis,test_axis);
+        vec3<Scalar> pos_j(pos[j]);
+        vec2<Real> e0 = project(vec3<Scalar>(pos[i])-pos_j,cur_axis,test_axis);
 
         const Real eps_abs(1e-12); // if edge is too short, do not consider
         if (dot(e0,e0) < eps_abs) continue;
@@ -545,7 +545,7 @@ DEVICE inline Real MinAreaRect(
             {
             // Project points onto axes e0 and e1 and keep track
             // of minimum and maximum values along both axes
-            vec2<Real> d = project(vec3<Scalar>(pos[map[start_idx+k]])-pos_j, cur_axis, test_axis);
+            vec2<Real> d = project(vec3<Scalar>(pos[k])-pos_j, cur_axis, test_axis);
 
             Real dotp = dot(d, e0);
             if (dotp < min0) min0 = dotp;
@@ -560,7 +560,7 @@ DEVICE inline Real MinAreaRect(
         if (area < minArea)
             {
             minArea = area;
-            c = project(vec3<Scalar>(pos[map[start_idx+j]]), cur_axis, test_axis) + 0.5 * ((min0 + max0) * e0 + (min1 + max1) * e1);
+            c = project(vec3<Scalar>(pos[j]), cur_axis, test_axis) + 0.5 * ((min0 + max0) * e0 + (min1 + max1) * e1);
             u[0] = e0; u[1] = e1;
             }
         }
@@ -882,28 +882,41 @@ DEVICE inline OBB compute_obb(const std::vector< vec3<OverlapReal> >& pts, const
     }
 #endif // NVCC
 
+//! A permutation map
+template<class T, class MapType>
+struct PermutationMap
+    {
+    DEVICE PermutationMap(const T* _values, const MapType _map)
+        : values(_values), map(_map)
+    { }
+
+    DEVICE inline const T operator [](const unsigned int & i) const
+        {
+        return values[map[i]];
+        }
+
+    const T *values;
+    const MapType map;
+    };
+
 //! Function template to compute the bounding OBB for a list of shapes
 /*! \param postype Positions (and types) of particles
     \param map Map into d_pos
-    \param start_idx Starting index in map
-    \param end_idx End index in map (one past the last element)
+    \param n Number of spheres
     \param radius the radius of every particle sphere
  */
-template<class Vector, class MapType>
+template<unsigned int Nvert, class Vector, class VectorIt = const Vector *>
 DEVICE inline void compute_obb_from_spheres(OBB& obb,
-    const Vector *d_pos,
-    MapType map,
-    const unsigned int start_idx,
-    const unsigned int end_idx,
+    VectorIt pos,
+    unsigned int n,
     const Scalar radius)
     {
     // compute mean
     vec3<Scalar> mean = vec3<Scalar>(0,0,0);
 
-    unsigned int n = end_idx - start_idx;
-    for (unsigned int i = start_idx; i < end_idx; ++i)
+    for (unsigned int i = 0; i < n; ++i)
         {
-        mean += vec3<Scalar>(d_pos[map[i]])/(Scalar)n;
+        mean += vec3<Scalar>(pos[i])/(Scalar)n;
         }
 
     // compute covariance matrix
@@ -911,40 +924,36 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     matrix_t m;
     m(0,0) = m(0,1) = m(0,2) = m(1,0) = m(1,1) = m(1,2) = m(2,0) = m(2,1) = m(2,2) = 0.0;
 
-    #if 0
-    if (pts.size() >= 3)
+    if (n >= 3 && n <= Nvert)
         {
         // compute convex hull
-        typedef quickhull::Vector3<OverlapReal> vec;
+        ConvexHull3D<Nvert,Vector, decltype(pos)> ch(pos, n);
 
-        quickhull::QuickHull<OverlapReal> qh;
-        std::vector<vec> qh_pts;
-        for (auto it = pts.begin(); it != pts.end(); ++it)
-            qh_pts.push_back(vec(it->x,it->y,it->z));
-        auto hull = qh.getConvexHull(qh_pts, true, false);
-        auto indexBuffer = hull.getIndexBuffer();
-        auto vertexBuffer = hull.getVertexBuffer();
+        const unsigned int nhull = ch.getVertexStorageSize();
+        unsigned int I[nhull];
+        unsigned int J[nhull];
+        unsigned int K[nhull];
 
-        OverlapReal hull_area(0.0);
-        vec hull_centroid(0.0,0.0,0.0);
+        ch.compute(I,J,K);
+        unsigned int nfacets = ch.getNumFacets();
 
-        for (unsigned int i = 0; i < vertexBuffer.size(); ++i)
-            hull_pts.push_back(vec3<double>(vertexBuffer[i].x,vertexBuffer[i].y,vertexBuffer[i].z));
+        Scalar hull_area(0.0);
+        vec3<Scalar> hull_centroid(0.0,0.0,0.0);
 
-        for (unsigned int i = 0; i < indexBuffer.size(); i+=3)
+        for (unsigned int i = 0; i < nfacets; i++)
             {
             // triangle vertices
-            vec p = vertexBuffer[indexBuffer[i]];
-            vec q = vertexBuffer[indexBuffer[i+1]];
-            vec r = vertexBuffer[indexBuffer[i+2]];
+            vec3<Scalar> p(pos[I[i]]);
+            vec3<Scalar> q(pos[J[i]]);
+            vec3<Scalar> r(pos[K[i]]);
 
-            vec centroid = OverlapReal(1./3.)*(p+q+r);
-            vec cross = (q-p).crossProduct(r-p);
-            OverlapReal area = OverlapReal(0.5)*sqrt(cross.dotProduct(cross));
+            vec3<Scalar> centroid = Scalar(1./3.)*(p+q+r);
+            vec3<Scalar> crossp = cross(q-p,r-p);
+            Scalar area = Scalar(0.5)*fast::sqrt(dot(crossp,crossp));
             hull_area += area;
             hull_centroid += area*centroid;
 
-            OverlapReal fac = area/12.0;
+            Scalar fac = area/12.0;
             m(0,0) += fac*(9.0*centroid.x*centroid.x + p.x*p.x + q.x*q.x + r.x*r.x);
             m(0,1) += fac*(9.0*centroid.x*centroid.y + p.x*p.y + q.x*q.y + r.x*r.y);
             m(0,2) += fac*(9.0*centroid.x*centroid.z + p.x*p.z + q.x*q.z + r.x*r.z);
@@ -968,12 +977,11 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
         m(2,2) = m(2,2)/hull_area - hull_centroid.z*hull_centroid.z;
         }
     else
-    #endif
         {
         // degenerate case
-        for (unsigned int i = start_idx; i < end_idx; ++i)
+        for (unsigned int i = 0; i < n; ++i)
             {
-            vec3<Scalar> dr = vec3<Scalar>(d_pos[map[i]]) - mean;
+            vec3<Scalar> dr = vec3<Scalar>(pos[i]) - mean;
 
             m(0,0) += dr.x * dr.x/(Scalar)n;
             m(1,0) += dr.y * dr.x/(Scalar)n;
@@ -1032,14 +1040,15 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
                 {
                 vec2<Scalar> new_axes_2d[2];
                 vec2<Scalar> c;
-                Scalar area = MinAreaRect(d_pos, cur_axis, test_axis, map, start_idx, end_idx, c, new_axes_2d);
+
+                Scalar area = MinAreaRect<Vector>(pos, cur_axis, test_axis, n, c, new_axes_2d);
 
                 // find extent along test_axis
                 Scalar proj_min = FLT_MAX;
                 Scalar proj_max = -FLT_MAX;
-                for (unsigned int i = start_idx; i < end_idx; ++i)
+                for (unsigned int i = 0; i < n; ++i)
                     {
-                    Scalar proj = dot(vec3<Scalar>(d_pos[map[i]]), cur_axis[test_axis]);
+                    Scalar proj = dot(vec3<Scalar>(pos[i]), cur_axis[test_axis]);
 
                     if (proj + radius > proj_max) proj_max = proj + radius;
                     if (proj - radius < proj_min) proj_min = proj - radius;
@@ -1110,10 +1119,10 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     vec3<Scalar> proj_max = vec3<Scalar>(-FLT_MAX,-FLT_MAX,-FLT_MAX);
 
     // project points onto axes
-    for (unsigned int i = start_idx; i < end_idx; ++i)
+    for (unsigned int i = 0; i < n; ++i)
         {
         vec3<Scalar> proj;
-        vec3<Scalar> dr = vec3<Scalar>(d_pos[map[i]]) - mean;
+        vec3<Scalar> dr = vec3<Scalar>(pos[i]) - mean;
         proj.x = dot(dr, axis[0]);
         proj.y = dot(dr, axis[1]);
         proj.z = dot(dr, axis[2]);
@@ -1152,22 +1161,9 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     obb.rotation = quat<Scalar>(r);
     }
 
-//! An identity mapping
-template<class T>
-struct IdentityMap
-    {
-    DEVICE inline T operator [](const T& i) const
-        {
-        return i;
-        }
-    };
-
 //! Merge two OBBs
 DEVICE inline OBB merge(const OBB& a, const OBB& b)
     {
-    // set up identity permutation
-    IdentityMap<unsigned int> map;
-
     // corners of the two OBBs
     vec3<Scalar> corners[16];
 
@@ -1194,7 +1190,7 @@ DEVICE inline OBB merge(const OBB& a, const OBB& b)
     OBB result;
 
     // compute an OBB given the corners of the two OBBs as points
-    compute_obb_from_spheres(result, &corners[0], map, 0, 16, 0.0);
+    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, vec3<Scalar> >(result, &corners[0], 16, 0.0);
 
     return result;
     }
@@ -1250,7 +1246,11 @@ DEVICE inline void computeBoundingVolume(
     Shape shape(quat<Scalar>(), param);
 
     // compute the bounding OBB
-    compute_obb_from_spheres(obb, postype, map_tree_pid, start_idx, end_idx, Scalar(0.5)*shape.getCircumsphereDiameter());
+    unsigned int n = end_idx - start_idx;
+
+    auto verts = PermutationMap<Vector, const unsigned int *>(postype, map_tree_pid+start_idx);
+
+    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, Vector>(obb, verts, n, Scalar(0.5)*shape.getCircumsphereDiameter());
     }
 
 }; // end namespace detail
