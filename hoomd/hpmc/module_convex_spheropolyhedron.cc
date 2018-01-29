@@ -70,6 +70,9 @@ void export_convex_spheropolyhedron(py::module& m)
     export_ExternalCallback<ShapeSpheropolyhedron>(m, "ExternalCallbackSpheropolyhedron");
 
     #ifdef ENABLE_CUDA
+    using BVH_GPU_AABB = BVHGPU< AABBNodeGPU, ShapeSpheropolyhedron, IntegratorHPMCMono< ShapeSpheropolyhedron > >;
+    export_BVHGPU< AABBNodeGPU, ShapeSpheropolyhedron, IntegratorHPMCMono< ShapeSpheropolyhedron > >(m, "BVHGPUAABBSpheropolyhedron");
+
     using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeSpheropolyhedron, IntegratorHPMCMono< ShapeSpheropolyhedron > >;
     export_BVHGPU< OBBNodeGPU, ShapeSpheropolyhedron, IntegratorHPMCMono< ShapeSpheropolyhedron > >(m, "BVHGPUOBBSpheropolyhedron");
 
@@ -77,6 +80,7 @@ void export_convex_spheropolyhedron(py::module& m)
     export_IntegratorHPMCMonoImplicitGPU< ShapeSpheropolyhedron >(m, "IntegratorHPMCMonoImplicitGPUSpheropolyhedron");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSpheropolyhedron >(m, "IntegratorHPMCMonoImplicitNewGPUSpheropolyhedron");
     export_ComputeFreeVolumeGPU< ShapeSpheropolyhedron >(m, "ComputeFreeVolumeGPUSpheropolyhedron");
+    export_UpdaterClustersGPU< ShapeSpheropolyhedron, BVH_GPU_AABB >(m, "UpdaterClustersGPUSpheropolyhedronAABB");
     export_UpdaterClustersGPU< ShapeSpheropolyhedron, BVH_GPU_OBB >(m, "UpdaterClustersGPUSpheropolyhedronOBB");
     export_UpdaterMuVTGPU< ShapeSpheropolyhedron >(m, "UpdaterMuVTGPUSpheropolyhedron");
 

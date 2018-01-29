@@ -70,6 +70,9 @@ void export_faceted_sphere(py::module& m)
     export_ExternalCallback<ShapeFacetedSphere>(m, "ExternalCallbackFacetedSphere");
 
     #ifdef ENABLE_CUDA
+    using BVH_GPU_AABB = BVHGPU< AABBNodeGPU, ShapeFacetedSphere, IntegratorHPMCMono< ShapeFacetedSphere > >;
+    export_BVHGPU< AABBNodeGPU, ShapeFacetedSphere, IntegratorHPMCMono< ShapeFacetedSphere > >(m, "BVHGPUAABBFacetedSphere");
+
     using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeFacetedSphere, IntegratorHPMCMono< ShapeFacetedSphere > >;
     export_BVHGPU< OBBNodeGPU, ShapeFacetedSphere, IntegratorHPMCMono< ShapeFacetedSphere > >(m, "BVHGPUOBBFacetedSphere");
 
@@ -77,6 +80,7 @@ void export_faceted_sphere(py::module& m)
     export_IntegratorHPMCMonoImplicitGPU< ShapeFacetedSphere >(m, "IntegratorHPMCMonoImplicitGPUFacetedSphere");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeFacetedSphere >(m, "IntegratorHPMCMonoImplicitNewGPUFacetedSphere");
     export_ComputeFreeVolumeGPU< ShapeFacetedSphere >(m, "ComputeFreeVolumeGPUFacetedSphere");
+    export_UpdaterClustersGPU< ShapeFacetedSphere, BVH_GPU_AABB >(m, "UpdaterClustersGPUFacetedSphereAABB");
     export_UpdaterClustersGPU< ShapeFacetedSphere, BVH_GPU_OBB >(m, "UpdaterClustersGPUFacetedSphereOBB");
     export_UpdaterMuVTGPU< ShapeFacetedSphere >(m, "UpdaterMuVTGPUFacetedSphere");
 

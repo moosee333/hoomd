@@ -20,6 +20,12 @@ namespace detail
 //! HPMC kernels for ShapeUnion<ShapeSphere>
 template cudaError_t gpu_hpmc_free_volume<ShapeUnion<ShapeSphere> >(const hpmc_free_volume_args_t &args,
                                                        const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
+template cudaError_t gpu_bvh_merge_shapes<ShapeUnion<ShapeSphere>, AABBNodeGPU>(const hpmc_bvh_shapes_args_t& args,
+                                                       AABBNodeGPU *d_tree_nodes,
+                                                       const typename ShapeUnion<ShapeSphere>::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters<ShapeUnion<ShapeSphere>, AABBNodeGPU >(const hpmc_clusters_args_t &args,
+                                                       const AABBNodeGPU *d_tree_nodes,
+                                                       const typename ShapeUnion<ShapeSphere> ::param_type *d_params);
 template cudaError_t gpu_bvh_merge_shapes<ShapeUnion<ShapeSphere>, OBBNodeGPU>(const hpmc_bvh_shapes_args_t& args,
                                                        OBBNodeGPU *d_tree_nodes,
                                                        const typename ShapeUnion<ShapeSphere>::param_type *d_params);

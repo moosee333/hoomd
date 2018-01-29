@@ -69,6 +69,9 @@ void export_sphinx(py::module& m)
     #ifdef ENABLE_CUDA
     #ifdef ENABLE_SPHINX_GPU
 
+    using BVH_GPU_AABB = BVHGPU< AABBNodeGPU, ShapeSphinx, IntegratorHPMCMono< ShapeSphinx > >;
+    export_BVHGPU< AABBNodeGPU, ShapeSphinx, IntegratorHPMCMono< ShapeSphinx > >(m, "BVHGPUAABBSphinx");
+
     using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeSphinx, IntegratorHPMCMono< ShapeSphinx > >;
     export_BVHGPU< OBBNodeGPU, ShapeSphinx, IntegratorHPMCMono< ShapeSphinx > >(m, "BVHGPUOBBSphinx");
 
@@ -76,6 +79,7 @@ void export_sphinx(py::module& m)
     export_IntegratorHPMCMonoImplicitGPU< ShapeSphinx >(m, "IntegratorHPMCMonoImplicitGPUSphinx");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSphinx >(m, "IntegratorHPMCMonoImplicitNewGPUSphinx");
     export_ComputeFreeVolumeGPU< ShapeSphinx >(m, "ComputeFreeVolumeGPUSphinx");
+    export_UpdaterClustersGPU< ShapeSphinx, BVH_GPU_AABB >(m, "UpdaterClustersGPUSphinxAABB");
     export_UpdaterClustersGPU< ShapeSphinx, BVH_GPU_OBB >(m, "UpdaterClustersGPUSphinxOBB");
     export_UpdaterMuVTGPU< ShapeSphinx >(m, "UpdaterMuVTGPUSphinx");
 

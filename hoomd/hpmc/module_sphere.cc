@@ -68,6 +68,9 @@ void export_sphere(py::module& m)
 
     #ifdef ENABLE_CUDA
 
+    using BVH_GPU_AABB = BVHGPU< AABBNodeGPU, ShapeSphere, IntegratorHPMCMono< ShapeSphere > >;
+    export_BVHGPU< AABBNodeGPU, ShapeSphere, IntegratorHPMCMono< ShapeSphere > >(m, "BVHGPUAABBSphere");
+
     using BVH_GPU_OBB = BVHGPU< OBBNodeGPU, ShapeSphere, IntegratorHPMCMono< ShapeSphere > >;
     export_BVHGPU< OBBNodeGPU, ShapeSphere, IntegratorHPMCMono< ShapeSphere > >(m, "BVHGPUOBBSphere");
 
@@ -75,6 +78,7 @@ void export_sphere(py::module& m)
     export_IntegratorHPMCMonoImplicitGPU< ShapeSphere >(m, "IntegratorHPMCMonoImplicitGPUSphere");
     export_IntegratorHPMCMonoImplicitNewGPU< ShapeSphere >(m, "IntegratorHPMCMonoImplicitNewGPUSphere");
     export_ComputeFreeVolumeGPU< ShapeSphere >(m, "ComputeFreeVolumeGPUSphere");
+    export_UpdaterClustersGPU< ShapeSphere, BVH_GPU_AABB >(m, "UpdaterClustersGPUSphereAABB");
     export_UpdaterClustersGPU< ShapeSphere, BVH_GPU_OBB >(m, "UpdaterClustersGPUSphereOBB");
     export_UpdaterMuVTGPU< ShapeSphere >(m, "UpdaterMuVTGPUSphere");
     #endif

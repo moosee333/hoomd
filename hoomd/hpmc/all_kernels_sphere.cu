@@ -20,6 +20,12 @@ namespace detail
 //! HPMC kernels for ShapeSphere
 template cudaError_t gpu_hpmc_free_volume<ShapeSphere>(const hpmc_free_volume_args_t &args,
                                                        const typename ShapeSphere::param_type *d_params);
+template cudaError_t gpu_bvh_merge_shapes<ShapeSphere, AABBNodeGPU>(const hpmc_bvh_shapes_args_t& args,
+                                                       AABBNodeGPU *d_tree_nodes,
+                                                       const typename ShapeSphere::param_type *d_params);
+template cudaError_t gpu_hpmc_clusters<ShapeSphere, AABBNodeGPU>(const hpmc_clusters_args_t &args,
+                                                       const AABBNodeGPU *d_tree_nodes,
+                                                       const typename ShapeSphere::param_type *d_params);
 template cudaError_t gpu_bvh_merge_shapes<ShapeSphere, OBBNodeGPU>(const hpmc_bvh_shapes_args_t& args,
                                                        OBBNodeGPU *d_tree_nodes,
                                                        const typename ShapeSphere::param_type *d_params);

@@ -868,7 +868,21 @@ cudaError_t gpu_bvh_move_particles(Scalar4 *d_leaf_xyzf,
  * Template instantiations for various bounding volume types
  */
 
-// Instantiate template for OBBs
+// AABB
+template cudaError_t gpu_bvh_bubble_bounding_volumes<AABBNodeGPU>(unsigned int *d_node_locks,
+                                   AABBNodeGPU *d_tree_nodes,
+                                   const uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const unsigned int block_size);
+
+template cudaError_t gpu_bvh_merge_shapes<EmptyShape, AABBNodeGPU> (const hpmc_bvh_shapes_args_t& args,
+                                 AABBNodeGPU *d_tree_nodes,
+                                 const typename EmptyShape::param_type *d_params);
+
+
+// OBB
 template cudaError_t gpu_bvh_bubble_bounding_volumes<OBBNodeGPU>(unsigned int *d_node_locks,
                                    OBBNodeGPU *d_tree_nodes,
                                    const uint2 *d_tree_parent_sib,

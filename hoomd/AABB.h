@@ -348,6 +348,13 @@ HOSTDEVICE inline AABB merge(const AABB& a, const AABB& b)
     new_aabb.upper.x = std::max(a.upper.x, b.upper.x);
     new_aabb.upper.y = std::max(a.upper.y, b.upper.y);
     new_aabb.upper.z = std::max(a.upper.z, b.upper.z);
+    #else
+    new_aabb.lower.x = a.lower.x < b.lower.x ? a.lower.x : b.lower.x;
+    new_aabb.lower.y = a.lower.y < b.lower.y ? a.lower.y : b.lower.y;
+    new_aabb.lower.z = a.lower.z < b.lower.z ? a.lower.z : b.lower.z;
+    new_aabb.upper.x = a.upper.x > b.upper.x ? a.upper.x : b.upper.x;
+    new_aabb.upper.y = a.upper.y > b.upper.y ? a.upper.y : b.upper.y;
+    new_aabb.upper.z = a.upper.z > b.upper.z ? a.upper.z : b.upper.z;
     #endif
 
     #endif
@@ -474,6 +481,44 @@ HOSTDEVICE inline void atomicMerge(AABB& aabb, const AABB& a, const AABB& b)
     AtomicMax(&aabb.upper.z, b.upper.z);
     }
 #endif // __CUDA_ARCH__
+
+template<class Vector, class Shape>
+HOSTDEVICE inline void computeBoundingVolume(
+     AABB& aabb,
+     const Vector *postype,
+     const unsigned int *map_tree_pid,
+     unsigned int start_idx,
+     unsigned int end_idx,
+     const typename Shape::param_type& param,
+     const unsigned int dim)
+     {
+     // construct a shape with given parameters
+     Shape shape(quat<Scalar>(), param);
+
+     AABB cur_aabb = shape.getAABB(vec3<Scalar>(postype[ map_tree_pid[start_idx] ]));
+     vec3<Scalar> lower = cur_aabb.getLower();
+     vec3<Scalar> upper = cur_aabb.getUpper();
+
+     for (unsigned int cur_p=start_idx+1; cur_p < end_idx; ++cur_p)
+         {
+         cur_aabb = shape.getAABB(vec3<Scalar>(postype[ map_tree_pid[cur_p] ]));
+         vec3<Scalar> cur_lower = cur_aabb.getLower();
+         vec3<Scalar> cur_upper = cur_aabb.getUpper();
+
+         // merge the boxes together
+         if (cur_lower.x < lower.x) lower.x = cur_lower.x;
+         if (cur_upper.x > upper.x) upper.x = cur_upper.x;
+
+         if (cur_lower.y < lower.y) lower.y = cur_lower.y;
+         if (cur_upper.y > upper.y) upper.y = cur_upper.y;
+
+         if (cur_lower.z < lower.z) lower.z = cur_lower.z;
+         if (cur_upper.z > upper.z) upper.z = cur_upper.z;
+         }
+
+     aabb.lower = lower;
+     aabb.upper = upper;
+     }
 
 // end group overlap
 /*! @}*/

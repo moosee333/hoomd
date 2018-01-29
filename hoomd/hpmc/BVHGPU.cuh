@@ -6,6 +6,7 @@
     \brief Defines GPU kernel functions for BVH generation on the GPU
 */
 
+#include "hoomd/AABB.h"
 #include "OBB.h"
 
 #pragma once
@@ -73,6 +74,16 @@ struct hpmc_bvh_shapes_args_t
     };
 
 //! Definition of bounding volume hierarchies (BVHs)
+
+//! AABBs
+struct AABBNodeGPU
+    {
+    typedef AABB bounding_volume_type;
+
+    AABB bounding_volume;//!< The bounding volume
+    int rope;  //!< The 'rope' to the next node on the right
+    int np_child_masked; //!< Either left child/sibling, or number of particles (for leaf nodes)
+    };
 
 //! OBBs
 struct OBBNodeGPU
