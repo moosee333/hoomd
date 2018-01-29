@@ -36,7 +36,8 @@ struct hpmc_bvh_shapes_args_t
         const unsigned int _nleafs,
         const unsigned int _nparticles_per_leaf,
         const unsigned int _block_size,
-        const cudaStream_t _stream) :
+        const cudaStream_t _stream,
+        const unsigned int _ndim) :
         d_morton_codes_red(_d_morton_codes_red),
         d_tree_parent_sib(_d_tree_parent_sib),
         d_morton_types(_d_morton_types),
@@ -50,7 +51,8 @@ struct hpmc_bvh_shapes_args_t
         nleafs(_nleafs),
         nparticles_per_leaf(_nparticles_per_leaf),
         block_size(_block_size),
-        stream(_stream)
+        stream(_stream),
+        ndim(_ndim)
         { }
 
     uint32_t *d_morton_codes_red;            //!< The Morton codes corresponding to the merged leafs
@@ -67,6 +69,7 @@ struct hpmc_bvh_shapes_args_t
     const unsigned int nparticles_per_leaf;  //!< Number of partices per leaf node
     const unsigned int block_size;           //!< Block size for kernel launch
     const cudaStream_t stream;               //!< The CUDA stream
+    const unsigned int ndim;                 //!< Dimensionality of the system
     };
 
 //! Definition of bounding volume hierarchies (BVHs)
@@ -195,7 +198,8 @@ __global__ void gpu_bvh_merge_shapes_kernel(BVNode *d_tree_nodes,
                                              const unsigned int Ntot,
                                              const unsigned int nleafs,
                                              const unsigned int nparticles_per_leaf,
-                                             const typename Shape::param_type *d_params)
+                                             const typename Shape::param_type *d_params,
+                                             const unsigned int ndim)
     {
     extern __shared__ char s_data[];
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
@@ -258,7 +262,7 @@ __global__ void gpu_bvh_merge_shapes_kernel(BVNode *d_tree_nodes,
     node.rope = 0; // we have no idea what the skip value is right now
 
     // compute the bounding valume of type BVNode for these shapes
-    computeBoundingVolume<Scalar4, Shape>(node.bounding_volume, d_pos, d_map_tree_pid, start_idx, end_idx, s_params[leaf_type]);
+    computeBoundingVolume<Scalar4, Shape>(node.bounding_volume, d_pos, d_map_tree_pid, start_idx, end_idx, s_params[leaf_type], ndim);
 
     // store BVH node in global memory
     d_tree_nodes[idx] = node;
@@ -311,7 +315,8 @@ cudaError_t gpu_bvh_merge_shapes(const hpmc_bvh_shapes_args_t& args,
                                                                                 args.Ntot,
                                                                                 args.nleafs,
                                                                                 args.nparticles_per_leaf,
-                                                                                d_params);
+                                                                                d_params,
+                                                                                args.ndim);
     return cudaSuccess;
     }
 #undef MORTON_TYPE_MASK_64

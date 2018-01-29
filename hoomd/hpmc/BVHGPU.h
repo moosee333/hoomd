@@ -810,7 +810,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::mergeLeafParticles()
                               m_n_leaf,
                               m_particles_per_leaf,
                               m_tuner_merge->getParam(),
-                              m_stream);
+                              m_stream,
+                              this->m_sysdef->getNDimensions());
 
     m_tuner_merge->begin();
     detail::gpu_bvh_merge_shapes<Shape, BVNode>(args,

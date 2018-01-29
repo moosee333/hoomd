@@ -5,8 +5,11 @@
 
 #include "hoomd/HOOMDMath.h"
 
-/*! \file ConvexHull.h
-    \brief A minimalist implementation of the 3D convex hull for use in device code
+/*! \file ConvexHull3D.h
+    \brief A straight-forward (but neither particularly robust, time- nor space efficient) implementation of the 3D convex hull
+           using the gift wrapping algorithm, for use in device code.
+
+           This algorithm uses fixed-size device storage in local memory.
 */
 
 // need to declare these class methods with __device__ qualifiers when building in nvcc
@@ -27,7 +30,7 @@ namespace detail
 
 // Maintainer: jglaser
 
-/* Adaption from http://tmc.web.engr.illinois.edu/pub.html
+/* Adaptation from http://tmc.web.engr.illinois.edu/pub.html
 
    Original comments:
 
@@ -48,13 +51,13 @@ class ConvexHull3D
             \param _n Number of points
          */
         DEVICE ConvexHull3D(VectorIt points, unsigned int n)
-            : m_points(points), m_n(n), m_h(0)
+            : m_points(points), m_n(n), m_nfacet(0), m_lower(1.0)
             { }
 
-        //! Return maximum number of triangle vertices needed
-        DEVICE static constexpr inline unsigned int getVertexStorageSize()
+        //! Return maximum number of triangles needed
+        DEVICE static constexpr inline unsigned int getStorageSize()
             {
-            return 2*Nvert;
+            return 4*Nvert; // worst case edges (lower + upper)
             }
 
         /*! \param gift-wrap the points and return triangle indices in
@@ -67,23 +70,39 @@ class ConvexHull3D
          */
         DEVICE inline void compute(unsigned int *I, unsigned int *J, unsigned int *K)
             {
+            m_I = I; m_J = J; m_K = K;
+            m_nfacet = 0; // output size
+
+            // lower convex hull
+            m_lower = 1.0;
+
             // find initial edge ij
             unsigned int i, j, l;
             for (i = 0, l = 1; l < m_n; l++)
-                if (m_points[i].x > m_points[l].x) i = l;
+                if (m_points[i].x > m_points[l].x)
+                    i = l;
             for (j = i, l = 0; l < m_n; l++)
                 if (i != l && turn(m_points[i],m_points[j],m_points[l]) >= 0)
                     j = l;
 
-            m_I = I; m_J = J; m_K = K;
-            m_h = 0;
+            wrap(i,j);
+
+            // upper hull
+            m_I = I+m_nfacet; m_J = J+m_nfacet; m_K = K+m_nfacet;
+            m_lower = -1;
+            for (i = 0, l = 1; l < m_n; l++)
+                if (m_points[i].x < m_points[l].x)
+                    i = l;
+            for (j = i, l = 0; l < m_n; l++)
+                if (i != l && turn(m_points[i],m_points[j],m_points[l]) >= 0)
+                    j = l;
             wrap(i,j);
             }
 
         //! \returns the number of generated facets
         DEVICE inline unsigned int getNumFacets() const
             {
-            return m_h;
+            return m_nfacet;
             }
 
     private:
@@ -93,24 +112,65 @@ class ConvexHull3D
         unsigned int *m_I;
         unsigned int *m_J;
         unsigned int *m_K;
-        unsigned int m_h;
+        unsigned int m_nfacet;
+        Scalar m_lower;
 
-        //! Recursive gift wrapping algorithm
-        DEVICE void wrap(unsigned int i, unsigned int j)
+        //! Iterative gift wrapping algorithm
+        DEVICE void wrap(unsigned int i0, unsigned int j0)
             {
-            unsigned int k, l, m;
-            for (m = 0; m < m_h; m++)  // check if facet hasn't been explored
-                if ((m_I[m] == i && m_J[m] == j) || (m_J[m] == i && m_K[m] == j) ||
-                    (m_K[m] == i && m_I[m] == j))
-                    return;
-             for (k = i, l = 0; l < m_n; l++)  // wrap from edge ij to find facet ijk
-                if (turn(m_points[i],m_points[j],m_points[l]) < 0 && orient(m_points[i],m_points[j],m_points[k],m_points[l]) >= 0)
-                    k = l;
+            // a priority queue using a ring buffer
+            const unsigned int capacity = Nvert*Nvert+1; // worst case + 1
+            unsigned int queue_i[capacity];
+            unsigned int queue_j[capacity];
+            unsigned int head = 0;
+            unsigned int tail = 0;
 
-            if (turn(m_points[i],m_points[j],m_points[k]) >= 0) return;
-            m_I[m_h] = i;  m_J[m_h] = j;  m_K[m_h++] = k;
-            wrap(k,j);  // explore adjacent facets
-            wrap(i,k);
+            unsigned int h = 0;
+
+            queue_i[tail] = i0;
+            queue_j[tail] = j0;
+
+            tail = (tail + 1) % capacity;
+
+            do
+                {
+                unsigned int k, l, m;
+
+                // pop from queue
+                unsigned int i = queue_i[head];
+                unsigned int j = queue_j[head];
+                head = (head + 1) % capacity;
+
+                bool visited = false;
+                for (m = 0; m < h; m++)  // check if facet hasn't been explored
+                    if ((m_I[m] == i && m_J[m] == j) || (m_J[m] == i && m_K[m] == j) || (m_K[m] == i && m_I[m] == j))
+                        {
+                        visited = true;
+                        break;
+                        }
+                if (visited)
+                    continue;
+
+                for (k = i, l = 0; l < m_n; l++)  // wrap from edge ij to find facet ijk
+                    if (turn(m_points[i],m_points[j],m_points[l]) < 0 &&
+                        m_lower*orient(m_points[i],m_points[j],m_points[k],m_points[l]) >= 0)
+                        k = l;
+
+                if (turn(m_points[i],m_points[j],m_points[k]) >= 0)
+                    continue;
+
+                m_I[h] = i;  m_J[h] = j;  m_K[h++] = k;
+
+                queue_i[tail]= k;
+                queue_j[tail] = j; // push edge k,j
+                tail = (tail + 1) % capacity;
+
+                queue_i[tail] = i;
+                queue_j[tail] = k; // push edge i,k
+                tail = (tail + 1) % capacity;
+                } while (head != tail);
+
+            m_nfacet += h;
             }
 
         DEVICE inline Real turn(Vector p, Vector q, Vector r)

@@ -899,138 +899,157 @@ struct PermutationMap
     const MapType map;
     };
 
+template<class Vector>
+DEVICE inline Scalar turn(Vector p, Vector q, Vector r)
+    {  // <0 iff cw
+    return (q.x-p.x)*(r.y-p.y) - (r.x-p.x)*(q.y-p.y);
+    }
+
+template<class Vector>
+DEVICE inline Scalar orient(Vector p, Vector q, Vector r, Vector s)
+    {
+    // <0 iff s is above pqr, assuming pqr is cw
+    return (q.z-p.z)*turn(p,r,s) - (r.z-p.z)*turn(p,q,s) + (s.z-p.z)*turn(p,q,r);
+    }
+
 //! Function template to compute the bounding OBB for a list of shapes
 /*! \param postype Positions (and types) of particles
     \param map Map into d_pos
     \param n Number of spheres
     \param radius the radius of every particle sphere
+    \param dim Dimensionality of the system
  */
 template<unsigned int Nvert, class Vector, class VectorIt = const Vector *>
 DEVICE inline void compute_obb_from_spheres(OBB& obb,
     VectorIt pos,
     unsigned int n,
-    const Scalar radius)
+    const Scalar radius,
+    const unsigned dim)
     {
     // compute mean
     vec3<Scalar> mean = vec3<Scalar>(0,0,0);
 
-    for (unsigned int i = 0; i < n; ++i)
-        {
-        mean += vec3<Scalar>(pos[i])/(Scalar)n;
-        }
-
-    // compute covariance matrix
-    typedef Eigen::Matrix<Scalar, 3, 3> matrix_t;
-    matrix_t m;
-    m(0,0) = m(0,1) = m(0,2) = m(1,0) = m(1,1) = m(1,2) = m(2,0) = m(2,1) = m(2,2) = 0.0;
-
-    if (n >= 3 && n <= Nvert)
-        {
-        // compute convex hull
-        ConvexHull3D<Nvert,Vector, decltype(pos)> ch(pos, n);
-
-        const unsigned int nhull = ch.getVertexStorageSize();
-        unsigned int I[nhull];
-        unsigned int J[nhull];
-        unsigned int K[nhull];
-
-        ch.compute(I,J,K);
-        unsigned int nfacets = ch.getNumFacets();
-
-        Scalar hull_area(0.0);
-        vec3<Scalar> hull_centroid(0.0,0.0,0.0);
-
-        for (unsigned int i = 0; i < nfacets; i++)
-            {
-            // triangle vertices
-            vec3<Scalar> p(pos[I[i]]);
-            vec3<Scalar> q(pos[J[i]]);
-            vec3<Scalar> r(pos[K[i]]);
-
-            vec3<Scalar> centroid = Scalar(1./3.)*(p+q+r);
-            vec3<Scalar> crossp = cross(q-p,r-p);
-            Scalar area = Scalar(0.5)*fast::sqrt(dot(crossp,crossp));
-            hull_area += area;
-            hull_centroid += area*centroid;
-
-            Scalar fac = area/12.0;
-            m(0,0) += fac*(9.0*centroid.x*centroid.x + p.x*p.x + q.x*q.x + r.x*r.x);
-            m(0,1) += fac*(9.0*centroid.x*centroid.y + p.x*p.y + q.x*q.y + r.x*r.y);
-            m(0,2) += fac*(9.0*centroid.x*centroid.z + p.x*p.z + q.x*q.z + r.x*r.z);
-            m(1,0) += fac*(9.0*centroid.y*centroid.x + p.y*p.x + q.y*q.x + r.y*r.x);
-            m(1,1) += fac*(9.0*centroid.y*centroid.y + p.y*p.y + q.y*q.y + r.y*r.y);
-            m(1,2) += fac*(9.0*centroid.y*centroid.z + p.y*p.z + q.y*q.z + r.y*r.z);
-            m(2,0) += fac*(9.0*centroid.z*centroid.x + p.z*p.x + q.z*q.x + r.z*r.x);
-            m(2,1) += fac*(9.0*centroid.z*centroid.y + p.z*p.y + q.z*q.y + r.z*r.y);
-            m(2,2) += fac*(9.0*centroid.z*centroid.z + p.z*p.z + q.z*q.z + r.z*r.z);
-            }
-
-        hull_centroid /= hull_area;
-        m(0,0) = m(0,0)/hull_area - hull_centroid.x*hull_centroid.x;
-        m(0,1) = m(0,1)/hull_area - hull_centroid.x*hull_centroid.y;
-        m(0,2) = m(0,2)/hull_area - hull_centroid.x*hull_centroid.z;
-        m(1,0) = m(1,0)/hull_area - hull_centroid.y*hull_centroid.x;
-        m(1,1) = m(1,1)/hull_area - hull_centroid.y*hull_centroid.y;
-        m(1,2) = m(1,2)/hull_area - hull_centroid.y*hull_centroid.z;
-        m(2,0) = m(2,0)/hull_area - hull_centroid.z*hull_centroid.x;
-        m(2,1) = m(2,1)/hull_area - hull_centroid.z*hull_centroid.y;
-        m(2,2) = m(2,2)/hull_area - hull_centroid.z*hull_centroid.z;
-        }
-    else
-        {
-        // degenerate case
-        for (unsigned int i = 0; i < n; ++i)
-            {
-            vec3<Scalar> dr = vec3<Scalar>(pos[i]) - mean;
-
-            m(0,0) += dr.x * dr.x/(Scalar)n;
-            m(1,0) += dr.y * dr.x/(Scalar)n;
-            m(2,0) += dr.z * dr.x/(Scalar)n;
-
-            m(0,1) += dr.x * dr.y/(Scalar)n;
-            m(1,1) += dr.y * dr.y/(Scalar)n;
-            m(2,1) += dr.z * dr.y/(Scalar)n;
-
-            m(0,2) += dr.x * dr.z/(Scalar)n;
-            m(1,2) += dr.y * dr.z/(Scalar)n;
-            m(2,2) += dr.z * dr.z/(Scalar)n;
-            }
-        }
-
     rotmat3<OverlapReal> r;
 
-    // compute normalized eigenvectors
-    Eigen::SelfAdjointEigenSolver<matrix_t> es;
-    es.computeDirect(m);
+    vec3<Scalar> axis[3];
 
-    if (es.info() != Eigen::Success)
+    if (dim == 3)
         {
-        // numerical issue, set r to identity matrix
-        r.row0 = vec3<Scalar>(1,0,0);
-        r.row1 = vec3<Scalar>(0,1,0);
-        r.row2 = vec3<Scalar>(0,0,1);
-        }
-    else
-        {
-        auto eigen_vec = es.eigenvectors();
-        r.row0 = vec3<Scalar>(eigen_vec(0,0),eigen_vec(0,1),eigen_vec(0,2));
-        r.row1 = vec3<Scalar>(eigen_vec(1,0),eigen_vec(1,1),eigen_vec(1,2));
-        r.row2 = vec3<Scalar>(eigen_vec(2,0),eigen_vec(2,1),eigen_vec(2,2));
-        }
+        // compute covariance matrix
+        typedef Eigen::Matrix<Scalar, 3, 3> matrix_t;
+        matrix_t m;
+        m(0,0) = m(0,1) = m(0,2) = m(1,0) = m(1,1) = m(1,2) = m(2,0) = m(2,1) = m(2,2) = 0.0;
 
-    if (n)
-        {
-        bool done = false;
+        if (n >= 3 && n <= Nvert)
+            {
+            // compute the convex hull
+            ConvexHull3D<Nvert,Vector, decltype(pos)> ch(pos, n);
+            const unsigned int nhull = ch.getStorageSize();
+            unsigned int I[nhull];
+            unsigned int J[nhull];
+            unsigned int K[nhull];
+
+            ch.compute(I,J,K);
+            unsigned int nfacets = ch.getNumFacets();
+
+            Scalar hull_area(0.0);
+            vec3<Scalar> hull_centroid(0.0,0.0,0.0);
+
+            for (unsigned int i = 0; i < nfacets; ++i)
+                {
+                // triangle vertices
+                vec3<Scalar> p(pos[I[i]]);
+                vec3<Scalar> q(pos[J[i]]);
+                vec3<Scalar> r(pos[K[i]]);
+
+                vec3<Scalar> centroid = Scalar(1./3.)*(p+q+r);
+                vec3<Scalar> crossp = cross(q-p,r-p);
+                Scalar area = Scalar(0.5)*fast::sqrt(dot(crossp,crossp));
+                hull_area += area;
+                hull_centroid += area*centroid;
+
+                Scalar fac = area/12.0;
+                m(0,0) += fac*(9.0*centroid.x*centroid.x + p.x*p.x + q.x*q.x + r.x*r.x);
+                m(0,1) += fac*(9.0*centroid.x*centroid.y + p.x*p.y + q.x*q.y + r.x*r.y);
+                m(0,2) += fac*(9.0*centroid.x*centroid.z + p.x*p.z + q.x*q.z + r.x*r.z);
+                m(1,0) += fac*(9.0*centroid.y*centroid.x + p.y*p.x + q.y*q.x + r.y*r.x);
+                m(1,1) += fac*(9.0*centroid.y*centroid.y + p.y*p.y + q.y*q.y + r.y*r.y);
+                m(1,2) += fac*(9.0*centroid.y*centroid.z + p.y*p.z + q.y*q.z + r.y*r.z);
+                m(2,0) += fac*(9.0*centroid.z*centroid.x + p.z*p.x + q.z*q.x + r.z*r.x);
+                m(2,1) += fac*(9.0*centroid.z*centroid.y + p.z*p.y + q.z*q.y + r.z*r.y);
+                m(2,2) += fac*(9.0*centroid.z*centroid.z + p.z*p.z + q.z*q.z + r.z*r.z);
+                }
+
+            hull_centroid /= hull_area;
+            m(0,0) = m(0,0)/hull_area - hull_centroid.x*hull_centroid.x;
+            m(0,1) = m(0,1)/hull_area - hull_centroid.x*hull_centroid.y;
+            m(0,2) = m(0,2)/hull_area - hull_centroid.x*hull_centroid.z;
+            m(1,0) = m(1,0)/hull_area - hull_centroid.y*hull_centroid.x;
+            m(1,1) = m(1,1)/hull_area - hull_centroid.y*hull_centroid.y;
+            m(1,2) = m(1,2)/hull_area - hull_centroid.y*hull_centroid.z;
+            m(2,0) = m(2,0)/hull_area - hull_centroid.z*hull_centroid.x;
+            m(2,1) = m(2,1)/hull_area - hull_centroid.z*hull_centroid.y;
+            m(2,2) = m(2,2)/hull_area - hull_centroid.z*hull_centroid.z;
+
+            mean = hull_centroid;
+            }
+        else
+            {
+            for (unsigned int i = 0; i < n; ++i)
+                {
+                mean += vec3<Scalar>(pos[i])/(Scalar)n;
+                }
+
+            // degenerate case
+            for (unsigned int i = 0; i < n; ++i)
+                {
+                vec3<Scalar> dr = vec3<Scalar>(pos[i]) - mean;
+
+                m(0,0) += dr.x * dr.x/(Scalar)n;
+                m(1,0) += dr.y * dr.x/(Scalar)n;
+                m(2,0) += dr.z * dr.x/(Scalar)n;
+
+                m(0,1) += dr.x * dr.y/(Scalar)n;
+                m(1,1) += dr.y * dr.y/(Scalar)n;
+                m(2,1) += dr.z * dr.y/(Scalar)n;
+
+                m(0,2) += dr.x * dr.z/(Scalar)n;
+                m(1,2) += dr.y * dr.z/(Scalar)n;
+                m(2,2) += dr.z * dr.z/(Scalar)n;
+                }
+            }
+
+        // compute normalized eigenvectors
+        Eigen::SelfAdjointEigenSolver<matrix_t> es;
+        es.computeDirect(m);
+
+        if (es.info() != Eigen::Success)
+            {
+            // numerical issue, set r to identity matrix
+            r.row0 = vec3<Scalar>(1,0,0);
+            r.row1 = vec3<Scalar>(0,1,0);
+            r.row2 = vec3<Scalar>(0,0,1);
+            }
+        else
+            {
+            auto eigen_vec = es.eigenvectors();
+            r.row0 = vec3<Scalar>(eigen_vec(0,0),eigen_vec(0,1),eigen_vec(0,2));
+            r.row1 = vec3<Scalar>(eigen_vec(1,0),eigen_vec(1,1),eigen_vec(1,2));
+            r.row2 = vec3<Scalar>(eigen_vec(2,0),eigen_vec(2,1),eigen_vec(2,2));
+            }
+
         vec3<Scalar> cur_axis[3];
+
         cur_axis[0] = vec3<Scalar>(r.row0.x, r.row1.x, r.row2.x);
         cur_axis[1] = vec3<Scalar>(r.row0.y, r.row1.y, r.row2.y);
         cur_axis[2] = vec3<Scalar>(r.row0.z, r.row1.z, r.row2.z);
 
+        // iteratively improve OBB
+        bool done = false;
         Scalar min_V = FLT_MAX;
         unsigned int min_axis = 0;
         vec2<Scalar> min_axes_2d[2];
 
-        // iteratively improve OBB
         while (! done)
             {
             bool updated_axes = false;
@@ -1043,6 +1062,10 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
 
                 Scalar area = MinAreaRect<Vector>(pos, cur_axis, test_axis, n, c, new_axes_2d);
 
+                // handle special case, in 2D an axis in the plane should not be minimizing
+                if (area == 0.0)
+                    continue;
+
                 // find extent along test_axis
                 Scalar proj_min = FLT_MAX;
                 Scalar proj_max = -FLT_MAX;
@@ -1050,8 +1073,8 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
                     {
                     Scalar proj = dot(vec3<Scalar>(pos[i]), cur_axis[test_axis]);
 
-                    if (proj + radius > proj_max) proj_max = proj + radius;
-                    if (proj - radius < proj_min) proj_min = proj - radius;
+                    if (proj > proj_max) proj_max = proj;
+                    if (proj < proj_min) proj_min = proj;
                     }
                 Scalar extent = proj_max - proj_min;
 
@@ -1108,9 +1131,34 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
         r.row0 = cur_axis[0]; r.row1 = cur_axis[1]; r.row2 = cur_axis[2];
         r = transpose(r);
         }
+    else
+        {
+        // in 2 dimensions, directly minimize the rectangle area
+        vec2<Scalar> new_axes_2d[2];
+        vec2<Scalar> c;
 
-    // final axes
-    vec3<Scalar> axis[3];
+        vec3<Scalar> cur_axis[3];
+        cur_axis[0] = vec3<Scalar>(1,0,0);
+        cur_axis[1] = vec3<Scalar>(0,1,0);
+        cur_axis[2] = vec3<Scalar>(0,0,1);
+        unsigned int test_axis = 2; // z axis
+
+        MinAreaRect<Vector>(pos, cur_axis, test_axis, n, c, new_axes_2d);
+        r.row0 = vec3<Scalar>(new_axes_2d[0].x,new_axes_2d[0].y,0);
+        r.row1 = vec3<Scalar>(new_axes_2d[1].x,new_axes_2d[1].y,0);
+        r.row2 = vec3<Scalar>(0,0,1);
+        r = transpose(r);
+        }
+
+    // make sure that the coordinate system is proper
+    if (r.det() < Scalar(0.0))
+        {
+        // swap column two and three
+        detail::swap(r.row0.y,r.row0.z);
+        detail::swap(r.row1.y,r.row1.z);
+        detail::swap(r.row2.y,r.row2.z);
+        }
+
     axis[0] = vec3<Scalar>(r.row0.x, r.row1.x, r.row2.x);
     axis[1] = vec3<Scalar>(r.row0.y, r.row1.y, r.row2.y);
     axis[2] = vec3<Scalar>(r.row0.z, r.row1.z, r.row2.z);
@@ -1143,16 +1191,6 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     center += Scalar(0.5)*(proj_max.z + proj_min.z)*axis[2];
 
     vec3<Scalar> lengths = Scalar(0.5)*(proj_max - proj_min);
-
-    // make sure coordinate system is proper
-    if (r.det() < Scalar(0.0))
-        {
-        // swap column two and three
-        detail::swap(r.row0.y,r.row0.z);
-        detail::swap(r.row1.y,r.row1.z);
-        detail::swap(r.row2.y,r.row2.z);
-        detail::swap(lengths.y,lengths.z);
-        }
 
     obb.center = center;
     obb.lengths = lengths;
@@ -1190,7 +1228,8 @@ DEVICE inline OBB merge(const OBB& a, const OBB& b)
     OBB result;
 
     // compute an OBB given the corners of the two OBBs as points
-    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, vec3<Scalar> >(result, &corners[0], 16, 0.0);
+    unsigned int dim = 3;
+    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, vec3<Scalar> >(result, &corners[0], 16, 0.0, dim);
 
     return result;
     }
@@ -1223,6 +1262,8 @@ struct EmptyShape
     \param map Map into d_pos
     \param start_idx Starting index in map
     \param end_idx End index in map (one past the last element)
+    \param param parameters common to all shapes
+    \param dim Dimensionality of the system
  */
 template<class Vector, class Shape>
 DEVICE inline void computeBoundingVolume(
@@ -1231,7 +1272,8 @@ DEVICE inline void computeBoundingVolume(
     const unsigned int *map_tree_pid,
     unsigned int start_idx,
     unsigned int end_idx,
-    const typename Shape::param_type& param);
+    const typename Shape::param_type& param,
+    const unsigned int dim);
 
 template<class Vector, class Shape>
 DEVICE inline void computeBoundingVolume(
@@ -1240,7 +1282,8 @@ DEVICE inline void computeBoundingVolume(
     const unsigned int *map_tree_pid,
     unsigned int start_idx,
     unsigned int end_idx,
-    const typename Shape::param_type& param)
+    const typename Shape::param_type& param,
+    const unsigned int dim)
     {
     // construct a shape with given parameters
     Shape shape(quat<Scalar>(), param);
@@ -1250,7 +1293,7 @@ DEVICE inline void computeBoundingVolume(
 
     auto verts = PermutationMap<Vector, const unsigned int *>(postype, map_tree_pid+start_idx);
 
-    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, Vector>(obb, verts, n, Scalar(0.5)*shape.getCircumsphereDiameter());
+    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, Vector>(obb, verts, n, Scalar(0.5)*shape.getCircumsphereDiameter(), dim);
     }
 
 }; // end namespace detail

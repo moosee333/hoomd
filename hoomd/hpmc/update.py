@@ -911,32 +911,31 @@ class clusters(_updater):
         shape = None
 
         if isinstance(mc, integrate.sphere):
-            if isinstance(mc, integrate.sphere):
-                shape = "Sphere"
-            elif isinstance(mc, integrate.convex_polygon):
-                shape = "ConvexPolygon"
-            elif isinstance(mc, integrate.simple_polygon):
-                shape = "SimplePolygon"
-            elif isinstance(mc, integrate.convex_polyhedron):
-                shape = "ConvexPolyhedron"
-            elif isinstance(mc, integrate.convex_spheropolyhedron):
-                shape =  "Spheropolyhedron"
-            elif isinstance(mc, integrate.ellipsoid):
-                shape = "Ellipsoid"
-            elif isinstance(mc, integrate.convex_spheropolygon):
-                shape = "Spheropolygon"
-            elif isinstance(mc, integrate.faceted_sphere):
-                shape = "FacetedSphere"
-            elif isinstance(mc, integrate.sphere_union):
-                shape = "SphereUnion"
-            elif isinstance(mc, integrate.convex_polyhedron_union):
-                shape = "ConvexPolyhedronUnion"
-            elif isinstance(mc, integrate.polyhedron):
-                shape = "Polyhedron"
-            elif isinstance(mc, integrate.sphinx):
-                shape = "Sphinx"
-            else:
-                raise RuntimeError("Unsupported integrator.\n");
+            shape = "Sphere"
+        elif isinstance(mc, integrate.convex_polygon):
+            shape = "ConvexPolygon"
+        elif isinstance(mc, integrate.simple_polygon):
+            shape = "SimplePolygon"
+        elif isinstance(mc, integrate.convex_polyhedron):
+            shape = "ConvexPolyhedron"
+        elif isinstance(mc, integrate.convex_spheropolyhedron):
+            shape =  "Spheropolyhedron"
+        elif isinstance(mc, integrate.ellipsoid):
+            shape = "Ellipsoid"
+        elif isinstance(mc, integrate.convex_spheropolygon):
+            shape = "Spheropolygon"
+        elif isinstance(mc, integrate.faceted_sphere):
+            shape = "FacetedSphere"
+        elif isinstance(mc, integrate.sphere_union):
+            shape = "SphereUnion"
+        elif isinstance(mc, integrate.convex_polyhedron_union):
+            shape = "ConvexPolyhedronUnion"
+        elif isinstance(mc, integrate.polyhedron):
+            shape = "Polyhedron"
+        elif isinstance(mc, integrate.sphinx):
+            shape = "Sphinx"
+        else:
+            raise RuntimeError("Unsupported integrator.\n");
 
         if not hoomd.context.exec_conf.isCUDAEnabled():
             if not mc.implicit:
