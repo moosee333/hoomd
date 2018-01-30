@@ -145,6 +145,11 @@ struct OBB
         return OverlapReal(8.0)*lengths.x*lengths.y*lengths.z;
         }
 
+    //! Get the surface area of this OBB
+    HOSTDEVICE Scalar getSurfaceArea() const
+        {
+        return 4.0*(lengths.x*lengths.y +  lengths.x*lengths.z + lengths.y*lengths.z);
+        }
     };
 
 //! Closest point on OBB

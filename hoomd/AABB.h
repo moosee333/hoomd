@@ -266,6 +266,14 @@ struct AABB
 
         #endif
         }
+
+    //! Get the surface area of this AABB
+    HOSTDEVICE Scalar getSurfaceArea() const
+        {
+        vec3<Scalar> extent = getUpper()-getLower();
+        return 2.0*(extent.x*extent.y +  extent.x*extent.z + extent.y*extent.z);
+        }
+
     } __attribute__((aligned(32)));
 
 //! Check if two AABBs overlap

@@ -123,18 +123,31 @@ cudaError_t gpu_bvh_morton_sort(uint64_t *d_morton_types,
                                   const unsigned int n_type_bits);
 
 //! Kernel driver functions
-template<class Shape, class BVNode>
+template<class Shape, class BVHNode>
 cudaError_t gpu_bvh_merge_shapes(const hpmc_bvh_shapes_args_t& args,
-                                 BVNode *d_tree_nodes,
+                                 BVHNode *d_tree_nodes,
                                  const typename Shape::param_type *d_params);
 
-template<class BVNode>
+template<class BVHNode>
 cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
-                                   BVNode *d_tree_nodes,
+                                   BVHNode *d_tree_nodes,
                                    const uint2 *d_tree_parent_sib,
                                    const unsigned int ntypes,
                                    const unsigned int nleafs,
                                    const unsigned int ninternal,
+                                   const unsigned int block_size);
+
+template<class BVHNode>
+cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
+                                   BVHNode *d_tree_nodes,
+                                   uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const Scalar C_i,
+                                   const Scalar C_l,
+                                   const Scalar C_t,
+                                   const unsigned int n,
                                    const unsigned int block_size);
 
 cudaError_t gpu_bvh_gen_hierarchy(uint2 *d_tree_parent_sib,
@@ -195,8 +208,8 @@ cudaError_t gpu_bvh_init_count(unsigned int *d_type_head,
  * gpu_nlist_bubble_aabbs_kernel), while the last value of the lower AABB holds the number of particles for a leaf node,
  * or the left child for an internal node. This is determined by setting a bit to mark this value as a rope or as child.
  */
-template<class BVNode, class Shape>
-__global__ void gpu_bvh_merge_shapes_kernel(BVNode *d_tree_nodes,
+template<class BVHNode, class Shape>
+__global__ void gpu_bvh_merge_shapes_kernel(BVHNode *d_tree_nodes,
                                              uint32_t *d_morton_codes_red,
                                              uint2 *d_tree_parent_sib,
                                              const uint64_t *d_morton_types,
@@ -267,12 +280,12 @@ __global__ void gpu_bvh_merge_shapes_kernel(BVNode *d_tree_nodes,
     unsigned int start_idx = idx*nparticles_per_leaf - d_leaf_offset[leaf_type];
     unsigned int end_idx = (max_idx - start_idx > nparticles_per_leaf) ? start_idx + nparticles_per_leaf : max_idx;
 
-    BVNode node;
+    BVHNode node;
     unsigned int npart = end_idx - start_idx;
     node.np_child_masked = npart << 1;
     node.rope = 0; // we have no idea what the skip value is right now
 
-    // compute the bounding valume of type BVNode for these shapes
+    // compute the bounding valume of type BVHNode for these shapes
     computeBoundingVolume<Scalar4, Shape>(node.bounding_volume, d_pos, d_map_tree_pid, start_idx, end_idx, s_params[leaf_type], ndim);
 
     // store BVH node in global memory
@@ -293,16 +306,16 @@ __global__ void gpu_bvh_merge_shapes_kernel(BVNode *d_tree_nodes,
  * \param d_params Shape parameter array
  * \returns cudaSuccess on completion
  */
-template<class Shape, class BVNode>
+template<class Shape, class BVHNode>
 cudaError_t gpu_bvh_merge_shapes(const hpmc_bvh_shapes_args_t& args,
-                                 BVNode *d_tree_nodes,
+                                 BVHNode *d_tree_nodes,
                                  const typename Shape::param_type *d_params)
     {
     static unsigned int max_block_size = UINT_MAX;
     if (max_block_size == UINT_MAX)
         {
         cudaFuncAttributes attr;
-        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_merge_shapes_kernel<BVNode, Shape>);
+        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_merge_shapes_kernel<BVHNode, Shape>);
         max_block_size = attr.maxThreadsPerBlock;
         }
 
@@ -312,7 +325,7 @@ cudaError_t gpu_bvh_merge_shapes(const hpmc_bvh_shapes_args_t& args,
         cudaStreamAttachMemAsync(args.stream, d_params, 0, cudaMemAttachSingle);
 
     unsigned int shared_bytes = sizeof(typename Shape::param_type)*args.ntypes;
-    gpu_bvh_merge_shapes_kernel<BVNode, Shape><<<args.nleafs/run_block_size + 1, run_block_size, shared_bytes, args.stream>>>(
+    gpu_bvh_merge_shapes_kernel<BVHNode, Shape><<<args.nleafs/run_block_size + 1, run_block_size, shared_bytes, args.stream>>>(
                                                                                 d_tree_nodes,
                                                                                 args.d_morton_codes_red,
                                                                                 args.d_tree_parent_sib,

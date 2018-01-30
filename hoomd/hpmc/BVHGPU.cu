@@ -580,12 +580,25 @@ cudaError_t gpu_bvh_gen_hierarchy(uint2 *d_tree_parent_sib,
  * \param nleafs Number of leaf nodes
  *
  * \b Implementation
- * see the comments in NeigbhorListGPUTree.cu, this is just a generalized function for arbitrary BVH types
- * (AABB, OBB, ..)
+ * One thread is called per leaf node. The second thread to reach an internal node processes its two children,
+ * which guarantees that no node AABB is prematurely processed. The arrival order at a node is controlled by an atomic
+ * thread lock in global memory. This locking could be accelerated by using shared memory whenever a node is being
+ * processed by threads in the same block.
+ *
+ * When processing the node, the thread also walks up the tree to find the "rope" that tells a traverser
+ * how to navigate the tree. If a query AABB intersects the current node, then the traverser always moves the the left
+ * child of the current node. If the AABB does not intersect, it moves along the "rope" to the next portion of the tree.
+ * The "rope" is calculated by walking back up the tree to find the earliest ancestor that is a left child of its
+ * parent. The rope then goes to that ancestor's sibling. If the root node is reached, then the rope is set to -1 to
+ * indicate traversal should be aborted.
+ *
+ * This kernel also encodes the left child of a node into the AABB for internal nodes. The thread processing the node
+ * checks if it arrived from a left child or right child of the node it is processing, and sets the left child of that
+ * parent accordingly. A child is indicated by bit shifting, and setting the first bit to 1.
  */
-template<class BVNode>
+template<class BVHNode>
 __global__ void gpu_bvh_bubble_bounding_volumes_kernel(unsigned int *d_node_locks,
-                                              BVNode *d_tree_nodes,
+                                              BVHNode *d_tree_nodes,
                                               const uint2 *d_tree_parent_sib,
                                               const unsigned int ntypes,
                                               const unsigned int nleafs)
@@ -668,9 +681,9 @@ __global__ void gpu_bvh_bubble_bounding_volumes_kernel(unsigned int *d_node_lock
  *
  * \returns cudaSuccess on completion
  */
-template<class BVNode>
+template<class BVHNode>
 cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
-                                   BVNode *d_tree_nodes,
+                                   BVHNode *d_tree_nodes,
                                    const uint2 *d_tree_parent_sib,
                                    const unsigned int ntypes,
                                    const unsigned int nleafs,
@@ -683,13 +696,13 @@ cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
     if (max_block_size == UINT_MAX)
         {
         cudaFuncAttributes attr;
-        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_bubble_bounding_volumes_kernel<BVNode>);
+        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_bubble_bounding_volumes_kernel<BVHNode>);
         max_block_size = attr.maxThreadsPerBlock;
         }
 
     int run_block_size = min(block_size,max_block_size);
 
-    gpu_bvh_bubble_bounding_volumes_kernel<BVNode><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
+    gpu_bvh_bubble_bounding_volumes_kernel<BVHNode><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
                                                                          d_tree_nodes,
                                                                          d_tree_parent_sib,
                                                                          ntypes,
@@ -697,6 +710,480 @@ cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
 
     return cudaSuccess;
     }
+
+/*!
+ * Construct an initial treelet of n leaves, with given root
+ * \param root the index of the root node
+ * \param leaves The array which will hold nleaves consecutive leaves
+ * \param internal_nodes The array which will hold nleaves-1 internal nodes
+ * \param d_tree_noes The node array in global memory
+ *
+ * \tparam n The maximum number treelet leaves
+ *
+ * \post leaves contains the leaf node indices, internal_nodes the internal nodes
+ *
+ * \returns the number of actual treelet leaves added
+ */
+template<unsigned int n, class BVHNode>
+__device__ unsigned int formTreelet(unsigned int root,
+    unsigned int *leaves,
+    unsigned int *internal_nodes,
+    const BVHNode *d_tree_nodes)
+    {
+    unsigned int leaves_tmp[n];
+    unsigned int holes[n];
+
+    // we assume we start with an internal node, which has two children
+    unsigned int left_child = d_tree_nodes[root].np_child_masked >> 1;
+    unsigned int right_child = d_tree_nodes[left_child].rope;
+
+    // store in array of internal nodes
+    internal_nodes[0] = root;
+
+    // keep track of holes in the set of n levaes
+    for (unsigned int i = 0; i < n; ++i)
+        holes[i] = 1;
+
+    leaves_tmp[0] = left_child; holes[0] = 0;
+    leaves_tmp[1] = right_child; holes[1] = 0;
+
+    // current number of treelet leaves
+    unsigned int nleaves = 2;
+
+    // the first empty slot in the leaves array
+    unsigned int insert_pos = 2;
+
+    // iterate over treelet levels, converting the leaves with the largest surface area into internal nodes
+    while (nleaves < n)
+        {
+        // find leaf with largest surface area
+        Scalar max_area(-FLT_MAX);
+        unsigned int imax;
+        for (unsigned int i = 0; i < n; ++i)
+            {
+            // skip holes in the set
+            if (holes[i])
+                {
+                insert_pos = i;
+                continue;
+                }
+
+            Scalar area = d_tree_nodes[leaves_tmp[i]].bounding_volume.getSurfaceArea();
+            if (area > max_area)
+                {
+                max_area = area;
+                imax = i;
+                }
+            }
+
+        // are we a leaf node already?
+        unsigned int cur_node_idx = leaves_tmp[imax];
+
+        if (!(d_tree_nodes[cur_node_idx].np_child_masked & 1))
+            break;
+
+        // remove the node from the set of leaves, and add its two children as new leaves
+
+        // store it for later reuse
+        internal_nodes[nleaves-1] = cur_node_idx;
+
+        left_child = d_tree_nodes[leaves_tmp[imax]].np_child_masked >> 1;
+        right_child = d_tree_nodes[left_child].rope;
+
+        // first replace the current node
+        leaves_tmp[imax] = left_child;
+
+        // then insert at the next free position
+        leaves_tmp[insert_pos] = right_child;
+        holes[insert_pos] = 0;
+        nleaves++;
+        }
+
+    // write to final output array in compact form
+    nleaves = 0;
+    for (unsigned int i = 0; i < n; ++i)
+        if (!holes[i])
+            leaves[nleaves++] = leaves_tmp[i];
+
+    return nleaves;
+    }
+
+/*!
+ * Reconstruct the tree using the optimal treelet, given a partition of the its nodes into left and right subtree
+ *
+ * \param root the index of the treelet root
+ * \param nleaves The size of the treelet
+ * \param leaves The array that holds nleaves consecutive leaves
+ * \param internal_nodes The array that holds nleaves-1 internal nodes
+ * \param p_opt_bar The optimal partition as a bitset
+ * \param c_opt The optimal subset costs
+ * \param d_tree_parent_sib the parent sibling relationship array
+ *
+ * \tparam n The maximum number treelet leaves
+ *
+ * \post d_tree_parent_sib will contain the right parent-sibling information, and bounding volumes still need to be updated
+ *
+ */
+template<unsigned int n>
+__device__ void reconstructTree(
+    const unsigned int root,
+    const unsigned int nleaves,
+    const unsigned int *leaves,
+    const unsigned int *internal_nodes,
+    const int p_opt_bar,
+    const Scalar *c_opt,
+    uint2 *d_tree_parent_sib)
+    {
+    // keep track of which leaves have been processed
+    unsigned int leaves_processed[n];
+    for (unsigned int i = 0; i < n; ++i)
+        leaves_processed[i] = 0;
+
+    unsigned int n_leaves_processed = 0;
+    unsigned int n_internal_nodes_used = 0;
+
+    unsigned int cur_parent = root;
+    unsigned int cur_sibling = 0;
+
+    // attach leaves level by level, the one with the largest SAH cost first
+    while (n_leaves_processed < nleaves)
+        {
+        // find leaf with largest surface area
+        Scalar max_area(-FLT_MAX);
+        unsigned int imax;
+        for (unsigned int i = 0; i < nleaves; ++i)
+            {
+            if (leaves_processed[i])
+                continue;
+
+            // use previously calculated area
+            Scalar area = c_opt[1 << i];
+            if (area > max_area)
+                {
+                max_area = area;
+                imax = i;
+                }
+            }
+
+        n_leaves_processed++;
+        leaves_processed[imax] = 1;
+
+        unsigned int cur_node_idx = leaves[imax];
+
+        // point the leaf to the current parent
+        uint2 cur_parent_sib;
+        cur_parent_sib.x = cur_parent;
+
+        unsigned int sibling = UINT_MAX;
+        if (n_internal_nodes_used == nleaves -1)
+            {
+            // we will use a treelet leaf as sibling, it must be the last unprocessed one then
+            unsigned int i;
+            for (i = 0; i < nleaves; ++i)
+                {
+                if (!leaves_processed[i])
+                    {
+                    sibling = leaves[i];
+                    break;
+                    }
+                }
+            n_leaves_processed++;
+            // don't bother to set leaves_processed[i]
+            }
+        else
+            {
+            // reuse one of the internal nodes as sibling
+            sibling = internal_nodes[n_internal_nodes_used++];
+            }
+
+        // update the parent-sibling fields for both children, first for the treelet leaf
+        cur_parent_sib.y = sibling << 1;
+
+        // is this leaf node supposed to be a left sibling? (we know from the optimal partition)
+        bool is_left = p_opt_bar & (1 << imax);
+
+        if (is_left)
+            cur_parent_sib.y &= 1;
+
+        d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
+
+        // update the parent-sibling field for the other node
+        cur_parent_sib.y = cur_node_idx;
+        if (!is_left)
+            cur_parent_sib.y &= 1;
+
+        d_tree_parent_sib[sibling] = cur_parent_sib;
+        }
+    }
+
+
+/*!
+ * Computes the Hamming weight, i.e. the number of bits set to one
+ *
+ *https://stackoverflow.com/questions/109023/how-to-count-the-number-of-set-bits-in-a-32-bit-integer
+ */
+__device__ int numberOfSetBits(int i)
+    {
+    i = i - ((i >> 1) & 0x55555555);
+    i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
+    return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+    }
+
+//! Kernel to optimize subtrees (treelets), employing a bottom-up traversal
+/*!
+ * \param d_node_locks Atomic flags identifying when node has been visited
+ * \param d_bv_nodes Bounding volume array for all tree nodes
+ * \param d_tree_parent_sib Parent and sibling indexes of each node
+ * \param ntypes Number of particle types
+ * \param nleafs Number of leaf nodes
+ * \param C_i cost of traversing an internal node, per unit area of the bounding volume divided by root node area
+ * \param C_l cost of traversing a leaf node, per unit area of the bounding volume divided by root node area
+ * \param C_t cost of checking a primitive or particle contained in the leaf node, per primitive and unit area over root node area
+ *
+ * \tparam n the maximum treelet size (number of leaves)
+ *
+ * \b Implementation
+ *
+ * During the bottom-up traversal, which proceeds using atomic lock similar to the gpu_bvh_bubble_bounding_volumes_kernel(),
+ * we first construct treelets up to n leaves and n-1 internal nodes. The construction is done iteratively by starting from
+ * visited node and descending n-2 times. Then we do a brute-force search over all possible rearrangements of the treelet,
+ * using some bitwise arithmetics and dynamic programming, to find the optimal arrangment that minimizes the surface area heuristic.
+ * Finally we reconnect the nodes of the treelet.
+ */
+template<class BVHNode, unsigned int n>
+__global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
+                                              BVHNode *d_tree_nodes,
+                                              uint2 *d_tree_parent_sib,
+                                              const unsigned int ntypes,
+                                              const unsigned int nleafs,
+                                              const Scalar C_i,
+                                              const Scalar C_l,
+                                              const Scalar C_t)
+    {
+    const unsigned int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (idx >= nleafs)
+        return;
+
+    // bottom-up traversal in analogy to the gpu_bvh_bubble_bounding_volumes_kernel()
+
+    unsigned int cur_node_idx = idx;
+    unsigned int lock_key = 0;
+    do
+        {
+        uint2 cur_parent_sib = d_tree_parent_sib[cur_node_idx];
+        unsigned int cur_parent = cur_parent_sib.x;
+
+        // then, we do an atomicAdd on the lock to see if we need to process the parent AABBs
+        // check to make sure the parent is bigger than nleafs, or else the node lock always fails
+        // so that we terminate the thread
+        lock_key = (cur_parent >= nleafs) ? atomicAdd(d_node_locks + cur_parent - nleafs, 1) : 0;
+
+        // process the node
+        if (lock_key == 1)
+            {
+            // now we wish to find the optimal arrangment of the subtree formed by this node
+            // and its immediate descendants, which we will search by brute-force
+
+            // leaves of the initial treelet
+            unsigned int leaves[n];
+
+            // and its internal nodes
+            unsigned int internal_nodes[n];
+
+            // construct the initial treelet, computing the surface area of leaf nodes to be addded
+            unsigned int nleaves = formTreelet<n>(cur_node_idx, leaves, internal_nodes, d_tree_nodes);
+
+            // now we have nleaves consecutive leaves stored in the leaves array
+            // find the optimal partitioning according to the surface area heuristic
+
+            // the maximum number of possible sets of leaves
+            const unsigned int max_size = 1 << n;
+
+            // the actual number of subsets
+            unsigned int size = 1 << nleaves;
+
+            // the area of the union of bounding volumes
+            Scalar areas[max_size];
+
+            // the optimal query cost
+            Scalar c_opt[max_size];
+
+            // the optimal partitioning, a bit indicates if the corresponding
+            // leaf is part of the left subtree
+            int p_opt_bar[max_size];
+
+            // iterate over subsets of leaves
+            // _bar indicates bitset
+            for (int s_bar = 1; s_bar < size; ++s_bar)
+                {
+                typename BVHNode::bounding_volume_type bv;
+                bool init = true;
+                for (unsigned int i = 0; i < nleaves; ++i)
+                    {
+                    unsigned int cur_leaf = leaves[i];
+                    // if this leaf is in the subset
+                    if (s_bar & (1 << i))
+                        {
+                        if (init)
+                            {
+                            // initialize with leave bounding volume
+                            bv = d_tree_nodes[cur_leaf].bounding_volume;
+                            init = false;
+                            }
+                        else
+                            {
+                            // merge with current bounding volume
+                            bv = merge(bv, d_tree_nodes[cur_leaf].bounding_volume);
+                            }
+                        }
+                    }
+
+                // store the area of the union in local memory
+                areas[s_bar] = bv.getSurfaceArea();
+                }
+
+            // initialize leaf node costs
+            for (unsigned int i = 0; i < nleaves; ++i)
+                {
+                // is this treelet leaf an actual leaf node?
+                unsigned int leaf = leaves[i];
+                unsigned int np_child_masked = d_tree_nodes[leaf].np_child_masked;
+                bool is_leaf = ! (np_child_masked & 1);
+                unsigned int npart = 0;
+                if (is_leaf)
+                    npart = np_child_masked >> 1;
+                Scalar area = d_tree_nodes[leaf].bounding_volume.getSurfaceArea();
+
+                // compute cost metric and store in local memory
+                c_opt[1 << i] = area*(C_l + npart*C_t);
+                }
+
+            // iterate over size of subset
+            for (unsigned int k = 2; k <= nleaves; ++k)
+                {
+                // iterate over subsets of size k
+                for (int s_bar = 1; s_bar < size; ++s_bar)
+                    {
+                    if (numberOfSetBits(s_bar) != k)
+                        continue;
+
+                    // Try each way of partitioning the leaves using bit-shuffling arithmetics
+
+                    // initialize the optimal cost for the current subset
+                    Scalar c(FLT_MAX);
+
+                    // initialize the bitset for the current partition
+                    int p_bar = 0;
+
+                    // Auxillary variables of Algorithm 3 in Karras and Alia 2013
+                    int delta_bar = (s_bar - 1) & s_bar;
+                    int cur_p_bar = (-delta_bar) & s_bar;
+
+                    do {
+                        Scalar cur_c = c_opt[cur_p_bar] + c_opt[s_bar^cur_p_bar];
+                        if (cur_c < c)
+                            {
+                            c = cur_c;
+                            p_bar = cur_p_bar;
+                            }
+                        cur_p_bar = (cur_p_bar - delta_bar) & s_bar;
+                        } while (cur_p_bar);
+
+                    // get number of particles stored in the leaf nodes of this subset
+                    unsigned int total_num_particles = 0;
+                    for (unsigned int i = 0; i < nleaves; ++i)
+                        {
+                        if (s_bar & (1 << i))
+                            {
+                            // is this treelet leaf an actual leaf node?
+                            unsigned int leaf = leaves[i];
+                            unsigned int np_child_masked = d_tree_nodes[leaf].np_child_masked;
+                            bool is_leaf = ! (np_child_masked & 1);
+                            unsigned int npart = 0;
+                            if (is_leaf)
+                                total_num_particles += np_child_masked >> 1;
+                            }
+                        }
+
+                    // compute the final surface area heuristic
+                    c_opt[s_bar] = min(C_i*areas[s_bar] + c,C_t*areas[s_bar]*total_num_particles);
+                    p_opt_bar[s_bar] = p_bar;
+                    } // end loop over subsets
+                } // end loop over size of subset
+
+            // p_opt[size-1] contains the optimal partition of all nleaves leaves,
+            // and c_opt[size-1] the associated cost
+
+            // update d_tree_parent_sib for the optimal treelet
+            reconstructTree<n>(cur_node_idx, nleaves, leaves, internal_nodes, p_opt_bar[size-1], c_opt, d_tree_parent_sib);
+
+            // bump the current node one level
+            cur_node_idx = cur_parent;
+            }
+        }
+    while (lock_key == 1);
+
+    }
+
+/*!
+ * \param d_node_locks Atomic flags identifying when node has been visited
+ * \param d_bounding_volumes AABB array for all tree nodes
+ * \param d_tree_parent_sib Parent and sibling indexes of each node
+ * \param ntypes Number of particle types
+ * \param nleafs Number of leaf nodes
+ * \param n Treelet size (Number of leaves)
+ * \param C_i cost of traversing an internal node, per unit area of the bounding volume divided by root node area
+ * \param C_l cost of traversing a leaf node, per unit area of the bounding volume divided by root node area
+ * \param C_t cost of checking a primitive or particle contained in the leaf node, per primitive and unit area over root node area
+ * \param block_size Requested thread block size
+ *
+ * \returns cudaSuccess on completion
+ */
+template<class BVHNode>
+cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
+                                   BVHNode *d_tree_nodes,
+                                   uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const Scalar C_i,
+                                   const Scalar C_l,
+                                   const Scalar C_t,
+                                   const unsigned int n,
+                                   const unsigned int block_size)
+    {
+    cudaMemset(d_node_locks, 0, sizeof(unsigned int)*ninternal);
+
+    if (n == 7)
+        {
+        static unsigned int max_block_size = UINT_MAX;
+        if (max_block_size == UINT_MAX)
+            {
+            cudaFuncAttributes attr;
+            cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_optimize_treelets_kernel<BVHNode,7>);
+            max_block_size = attr.maxThreadsPerBlock;
+            }
+
+        int run_block_size = min(block_size,max_block_size);
+
+        gpu_bvh_optimize_treelets_kernel<BVHNode,7><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
+                                                                             d_tree_nodes,
+                                                                             d_tree_parent_sib,
+                                                                             ntypes,
+                                                                             nleafs,
+                                                                             C_i,
+                                                                             C_l,
+                                                                             C_t);
+        }
+    else
+        {
+        throw std::runtime_error("Treelet size unsupported for optimization.");
+        }
+
+    return cudaSuccess;
+    }
+
 
 //! Kernel to find divisons between particle types in sorted order
 /*!
@@ -881,6 +1368,17 @@ template cudaError_t gpu_bvh_merge_shapes<EmptyShape, AABBNodeGPU> (const hpmc_b
                                  AABBNodeGPU *d_tree_nodes,
                                  const typename EmptyShape::param_type *d_params);
 
+template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
+                                   AABBNodeGPU *d_tree_nodes,
+                                   uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const Scalar C_i,
+                                   const Scalar C_l,
+                                   const Scalar C_t,
+                                   const unsigned int n,
+                                   const unsigned int block_size);
 
 // OBB
 template cudaError_t gpu_bvh_bubble_bounding_volumes<OBBNodeGPU>(unsigned int *d_node_locks,
@@ -894,6 +1392,18 @@ template cudaError_t gpu_bvh_bubble_bounding_volumes<OBBNodeGPU>(unsigned int *d
 template cudaError_t gpu_bvh_merge_shapes<EmptyShape, OBBNodeGPU> (const hpmc_bvh_shapes_args_t& args,
                                  OBBNodeGPU *d_tree_nodes,
                                  const typename EmptyShape::param_type *d_params);
+
+template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
+                                   OBBNodeGPU *d_tree_nodes,
+                                   uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const Scalar C_i,
+                                   const Scalar C_l,
+                                   const Scalar C_t,
+                                   const unsigned int n,
+                                   const unsigned int block_size);
 
 } // namespace detail
 } // namespace hpmc

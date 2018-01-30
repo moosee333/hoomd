@@ -39,7 +39,18 @@ namespace hpmc
 //! Template class for efficient BVH construction on the GPU, supporting general bounding volumes
 /*!
  * Templated GPU kernel methods are defined in BVHGPU.cuh and implemented in BVHGPU.cu.
- * This class is modeled after NeighborListGPUTree, for further documentation see there.
+ *
+ * This class is generic engine to construct high-quality BVH trees on the GPU. The basic algorithm
+ * is described in
+ *       Tero Karras, "Maximizing parallelism in the construction of BVHs, octrees, and k-d trees",
+ *       High Performance Graphics (2012).
+ *       http://dx.doi.org/10.2312/EGGH/HPG12/033-037
+ *
+ * To optimize for traversal performance, we implement the treelet optimization algorithm based on the
+ * surface area heuristic, as described in
+ *       Tero Karraas and Timo Aila, "Fast parallel construction of high-quality bounding volume hierarchies",
+ *       High Performance Graphics (2013).
+ *       http://dx.doi.org/10.1145/2492045.2492055
  *
  * \ingroup computes
  */
@@ -66,6 +77,41 @@ class BVHGPU : public Compute
         //! Update the bounding volume hierarchy
         virtual void compute(unsigned int timestep);
 
+        /*!
+         * Update the cost model for traversal
+         */
+
+        //! Surface area cost for internal nodes
+        virtual void setSurfaceAreaCostI(Scalar C_i)
+            {
+            m_C_i = C_i;
+            }
+
+        //! Surface area cost for leaf nodes
+        virtual void setSurfaceAreaCostL(Scalar C_l)
+            {
+            m_C_l = C_l;
+            }
+
+        //! Surface area cost per primitive in leaf nodes
+        virtual void setSurfaceAreaCostT(Scalar C_t)
+            {
+            m_C_t = C_t;
+            }
+
+        //! Set the number of iterations to optimize the tree
+        virtual void setNIterations(unsigned int n_iterations)
+            {
+            m_iterations = n_iterations;
+            }
+
+        //! Set the treelet size
+        virtual void setTreeletSize(unsigned int treelet_size)
+            {
+            m_treelet_size = treelet_size;
+            }
+
+
         //! Set autotuner parameters
         /*! \param enable Enable/disable autotuning
             \param period period (approximate) in time steps when returning occurs
@@ -83,6 +129,9 @@ class BVHGPU : public Compute
 
             m_tuner_bubble->setPeriod(period);
             m_tuner_bubble->setEnabled(enable);
+
+            m_tuner_optimize->setPeriod(period);
+            m_tuner_optimize->setEnabled(enable);
 
             m_tuner_move->setPeriod(period);
             m_tuner_move->setEnabled(enable);
@@ -148,6 +197,7 @@ class BVHGPU : public Compute
         std::unique_ptr<Autotuner> m_tuner_merge;     //!< Tuner for kernel to merge particles into leafs
         std::unique_ptr<Autotuner> m_tuner_hierarchy; //!< Tuner for kernel to generate tree hierarchy
         std::unique_ptr<Autotuner> m_tuner_bubble;    //!< Tuner for kernel to bubble bounding volumes up hierarchy
+        std::unique_ptr<Autotuner> m_tuner_optimize;  //!< Tuner for kernel to optimize the tree
         std::unique_ptr<Autotuner> m_tuner_move;      //!< Tuner for kernel to move particles to leaf order
         std::unique_ptr<Autotuner> m_tuner_map;       //!< Tuner for kernel to help map particles by type
         // @}
@@ -204,6 +254,14 @@ class BVHGPU : public Compute
         GPUVector<unsigned int> m_node_locks;       //!< Node locks for if node has been visited or not
         GPUVector<uint2> m_tree_parent_sib;         //!< Parents and siblings of all nodes
 
+        // Surface area heuristic
+        Scalar m_C_i;                               //!< Surface area cost of internal nodes
+        Scalar m_C_l;                               //!< Surface area cost of leaf nodes
+        Scalar m_C_t;                               //!< Additional surface area cost of leaf nodes per contained primitive
+
+        unsigned int m_iterations;                  //!< Number of treelet optimization iterations
+        unsigned int m_treelet_size;                //!< Size of treelets to optimize
+
         cudaStream_t m_stream;                //!< CUDA stream for kernel execution
 
         //! Performs initial allocation of tree internal data structure memory
@@ -237,6 +295,9 @@ class BVHGPU : public Compute
         //! Constructs enclosing bounding volums from leaf to roots
         void bubbleBoundingVolumes();
 
+        //! Iteratively optimizes the tree by rotating treelets
+        void optimizeTree();
+
         // @}
         //! \name Tree traversal
         // @{
@@ -258,7 +319,9 @@ BVHGPU<BVNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef,
     std::shared_ptr<IntHPMC> mc)
     : Compute(sysdef), m_mc(mc), m_type_changed(false),
       m_max_num_changed(false), m_n_leaf(0), m_n_internal(0), m_n_node(0),
-      m_particles_per_leaf(leaf_capacity)
+      m_particles_per_leaf(leaf_capacity),
+      m_C_i(1.0), m_C_l(1.0), m_C_t(1.0),
+      m_iterations(1), m_treelet_size(7)
     {
     m_exec_conf->msg->notice(5) << "Constructing BVHGPU" << std::endl;
 
@@ -269,6 +332,7 @@ BVHGPU<BVNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef,
     m_tuner_merge.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_merge_shapes", this->m_exec_conf));
     m_tuner_hierarchy.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_gen_hierarchy", this->m_exec_conf));
     m_tuner_bubble.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_bubble_bounding_volumes", this->m_exec_conf));
+    m_tuner_optimize.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_optimize_tree", this->m_exec_conf));
     m_tuner_move.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_move_particles", this->m_exec_conf));
     m_tuner_map.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_map_particles", this->m_exec_conf));
 
@@ -619,7 +683,10 @@ void BVHGPU<BVNode, Shape, IntHPMC>::buildTree()
     // step six: bubble up the bounding volumes
     bubbleBoundingVolumes();
 
-    // step seven: move particle information into leaf nodes
+    // step seven (optional): iteratively optimize the tree
+    optimizeTree();
+
+    // step eight: move particle information into leaf nodes
     moveLeafParticles();
 
     if (m_prof) m_prof->pop(m_exec_conf);
@@ -891,6 +958,59 @@ void BVHGPU<BVNode, Shape, IntHPMC>::bubbleBoundingVolumes()
     if (m_prof) m_prof->pop(m_exec_conf);
     }
 
+//! walk up the tree from the leaves, and optimize treelets of size n by brute-force search according to the surface area heuristic
+/*!
+ * \post One iteration of treelet optimization has been performed, and tree topology and bounding volumes have been updated
+ *
+ * \note Call after bubbleBoundingVolumes(), as often as needed
+ */
+template<class BVNode, class Shape, class IntHPMC>
+void BVHGPU<BVNode, Shape, IntHPMC>::optimizeTree()
+    {
+    if (m_prof) m_prof->push(m_exec_conf,"Optimize");
+
+    for (unsigned int i = 0; i < m_iterations; ++i)
+        {
+        ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
+        ArrayHandle<BVNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
+
+        ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::readwrite);
+
+        // Rotate the treelets
+        m_tuner_optimize->begin();
+        detail::gpu_bvh_optimize_treelets<BVNode>(d_node_locks.data,
+                               d_tree_nodes.data,
+                               d_tree_parent_sib.data,
+                               m_pdata->getNTypes(),
+                               m_n_leaf,
+                               m_n_internal,
+                               m_C_i,
+                               m_C_l,
+                               m_C_t,
+                               m_treelet_size,
+                               m_tuner_bubble->getParam()
+                               );
+        if (m_exec_conf->isCUDAErrorCheckingEnabled())
+            CHECK_CUDA_ERROR();
+        m_tuner_optimize->end();
+
+        // Update the bounding volumes
+        m_tuner_bubble->begin();
+        detail::gpu_bvh_bubble_bounding_volumes<BVNode>(d_node_locks.data,
+                               d_tree_nodes.data,
+                               d_tree_parent_sib.data,
+                               m_pdata->getNTypes(),
+                               m_n_leaf,
+                               m_n_internal,
+                               m_tuner_bubble->getParam());
+        if (m_exec_conf->isCUDAErrorCheckingEnabled())
+            CHECK_CUDA_ERROR();
+        m_tuner_bubble->end();
+        }
+    if (m_prof) m_prof->pop(m_exec_conf);
+    }
+
+
 template<class BVNode, class Shape, class IntHPMC>
 void BVHGPU<BVNode, Shape, IntHPMC>::moveLeafParticles()
     {
@@ -926,6 +1046,10 @@ void export_BVHGPU(pybind11::module& m, const std::string& name)
         m, name.c_str(), pybind11::base<Compute>())
         .def( pybind11::init< std::shared_ptr<SystemDefinition>, unsigned int, std::shared_ptr<IntHPMC> >())
         .def( pybind11::init< std::shared_ptr<SystemDefinition>, unsigned int >())
+        .def( "setSurfaceAreaCostI", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostI)
+        .def( "setSurfaceAreaCostL", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostI)
+        .def( "setNIterations", &BVHGPU<BVNode,Shape,IntHPMC>::setNIterations)
+        .def( "setTreeletSize", &BVHGPU<BVNode,Shape,IntHPMC>::setTreeletSize)
     ;
     }
 
