@@ -716,6 +716,7 @@ cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
  * \param root the index of the root node
  * \param leaves The array which will hold nleaves consecutive leaves
  * \param internal_nodes The array which will hold nleaves-1 internal nodes
+ * \param d_tree_parent_sib The parent sibling information per tree node
  * \param d_tree_noes The node array in global memory
  *
  * \tparam n The maximum number treelet leaves
@@ -728,47 +729,58 @@ template<unsigned int n, class BVHNode>
 __device__ unsigned int formTreelet(unsigned int root,
     unsigned int *leaves,
     unsigned int *internal_nodes,
+    const uint2 *d_tree_parent_sib,
     const BVHNode *d_tree_nodes)
     {
-    unsigned int leaves_tmp[n];
-    unsigned int holes[n];
+    unsigned int active_set[n];
+    unsigned int is_active[n];
 
-    // we assume we start with an internal node, which has two children
+    // we always start with an internal node, which has two children
     unsigned int left_child = d_tree_nodes[root].np_child_masked >> 1;
-    unsigned int right_child = d_tree_nodes[left_child].rope;
+    unsigned int right_child = d_tree_parent_sib[root].y >> 1;
 
-    // store in array of internal nodes
-    internal_nodes[0] = root;
-
-    // keep track of holes in the set of n levaes
-    for (unsigned int i = 0; i < n; ++i)
-        holes[i] = 1;
-
-    leaves_tmp[0] = left_child; holes[0] = 0;
-    leaves_tmp[1] = right_child; holes[1] = 0;
+    // current number of internal nodes
+    unsigned int n_internal = 0;
 
     // current number of treelet leaves
-    unsigned int nleaves = 2;
+    unsigned int n_leaves = 0;
 
-    // the first empty slot in the leaves array
-    unsigned int insert_pos = 2;
+    // store in array of internal nodes
+    internal_nodes[n_internal++] = root;
 
-    // iterate over treelet levels, converting the leaves with the largest surface area into internal nodes
-    while (nleaves < n)
+    // reset the active set
+    for (unsigned int i = 0; i < n; ++i)
+        is_active[i] = 0;
+
+    // curent size of active set
+    unsigned int n_active = 0;
+
+    // push left and right child to active set
+    active_set[n_active] = left_child;
+    is_active[n_active++] = 1;
+
+    active_set[n_active] = right_child;
+    is_active[n_active++] = 1;
+
+    // iteratively build the treelet, creating n-1 internal nodes
+    while (n_active && n_internal < n-1 )
         {
-        // find leaf with largest surface area
+        // the first empty slot in the active set
+        unsigned int insert_pos = UINT_MAX;
+
+        // find bounding volume in active set with largest surface area
         Scalar max_area(-FLT_MAX);
         unsigned int imax;
         for (unsigned int i = 0; i < n; ++i)
             {
             // skip holes in the set
-            if (holes[i])
+            if (!is_active[i])
                 {
                 insert_pos = i;
                 continue;
                 }
 
-            Scalar area = d_tree_nodes[leaves_tmp[i]].bounding_volume.getSurfaceArea();
+            Scalar area = d_tree_nodes[active_set[i]].bounding_volume.getSurfaceArea();
             if (area > max_area)
                 {
                 max_area = area;
@@ -776,36 +788,61 @@ __device__ unsigned int formTreelet(unsigned int root,
                 }
             }
 
-        // are we a leaf node already?
-        unsigned int cur_node_idx = leaves_tmp[imax];
+        unsigned int cur_node_idx = active_set[imax];
 
-        if (!(d_tree_nodes[cur_node_idx].np_child_masked & 1))
-            break;
+        // are we an actual leaf node already?
+        if (d_tree_nodes[cur_node_idx].np_child_masked & 1)
+            {
+            // no, pop the current node from the active set
+            is_active[imax] = 0;
+            n_active--;
 
-        // remove the node from the set of leaves, and add its two children as new leaves
+            // stash it as an internal node for later recycling
+            internal_nodes[n_internal++] = cur_node_idx;
 
-        // store it for later reuse
-        internal_nodes[nleaves-1] = cur_node_idx;
+            // push its two children
 
-        left_child = d_tree_nodes[leaves_tmp[imax]].np_child_masked >> 1;
-        right_child = d_tree_nodes[left_child].rope;
+            // left child, replace the current node
+            left_child = d_tree_nodes[cur_node_idx].np_child_masked >> 1;
+            is_active[imax] = 1;
+            active_set[imax] = left_child;
+            n_active++;
 
-        // first replace the current node
-        leaves_tmp[imax] = left_child;
+            // right child, insert at next free position
+            right_child = d_tree_parent_sib[cur_node_idx].y >> 1;
+            is_active[insert_pos] = 1;
+            active_set[insert_pos] = right_child;
+            n_active++;
+            }
+        else
+            {
+            // pop this leaf node from the active set
+            is_active[imax] = 0;
+            n_active--;
 
-        // then insert at the next free position
-        leaves_tmp[insert_pos] = right_child;
-        holes[insert_pos] = 0;
-        nleaves++;
+            // write it to the output list and move on
+            leaves[n_leaves++] = cur_node_idx;
+            }
         }
 
-    // write to final output array in compact form
-    nleaves = 0;
+    // dump the active set into the output list of leaves
     for (unsigned int i = 0; i < n; ++i)
-        if (!holes[i])
-            leaves[nleaves++] = leaves_tmp[i];
+        if (is_active[i])
+            leaves[n_leaves++] = active_set[i]; // add it to the output
 
-    return nleaves;
+    return n_leaves;
+    }
+
+/*!
+ * Computes the Hamming weight, i.e. the number of bits set to one
+ *
+ *https://stackoverflow.com/questions/109023/how-to-count-the-number-of-set-bits-in-a-32-bit-integer
+ */
+__device__ int numberOfSetBits(int i)
+    {
+    i = i - ((i >> 1) & 0x55555555);
+    i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
+    return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
     }
 
 /*!
@@ -826,107 +863,178 @@ __device__ unsigned int formTreelet(unsigned int root,
  */
 template<unsigned int n>
 __device__ void reconstructTree(
-    const unsigned int root,
     const unsigned int nleaves,
     const unsigned int *leaves,
     const unsigned int *internal_nodes,
-    const int p_opt_bar,
+    const unsigned int size,
+    const int *p_opt_bar,
     const Scalar *c_opt,
     uint2 *d_tree_parent_sib)
     {
-    // keep track of which leaves have been processed
-    unsigned int leaves_processed[n];
+    // holds the current active subset
+    int active_set[n];
+
+    // the parent (.x) of the node corresponding to the active subset, and a
+    // and a flag (.y) indicating whether we are a left node
+    uint2 active_parent_sib[n];
+
+    // a pointer into siblings per activ set
+    unsigned int active_sibling_ptr[n];
+
+    unsigned int is_active[n];
+
+    // the currently active subset
+    unsigned int cur_set = size-1;
+
+    // load the corresponding partition
+    int cur_p_bar = p_opt_bar[cur_set];
+
+    // current number of internal nodes
+    unsigned int n_internal = 0;
+
+    // count the number of subsets traversed
+    unsigned int n_subsets = 0;
+
+    // a sibling node per traversed node
+    unsigned int siblings[2*n-1];
+
+    // an actual index per traversed node
+    unsigned int node_indices[2*n-1];
+
+    // load the (internal) root node as active parent
+    unsigned int cur_parent = internal_nodes[n_internal++];
+    uint2 cur_parent_sib;
+    cur_parent_sib.x = cur_parent;
+
+    // reset the active set
     for (unsigned int i = 0; i < n; ++i)
-        leaves_processed[i] = 0;
+        is_active[i] = 0;
 
-    unsigned int n_leaves_processed = 0;
-    unsigned int n_internal_nodes_used = 0;
+    // curent size of active set
+    unsigned int n_active = 0;
 
-    unsigned int cur_parent = root;
-    unsigned int cur_sibling = 0;
+    // push the left and the right subsets into the active set, including a pointer to their parent and their
+    // sibling identity, and a pointer to the siblings array
+    unsigned int left_sibling = 0;
+    unsigned int right_sibling = 1;
 
-    // attach leaves level by level, the one with the largest SAH cost first
-    while (n_leaves_processed < nleaves)
+    active_set[n_active] = cur_p_bar;
+    cur_parent_sib.y = 1;
+    active_parent_sib[n_active] = cur_parent_sib;
+    siblings[n_subsets] = right_sibling;
+    active_sibling_ptr[n_active] = n_subsets++;
+    is_active[n_active++] = 1;
+
+    active_set[n_active] = ~cur_p_bar & cur_set;
+    cur_parent_sib.y = 0;
+    active_parent_sib[n_active] = cur_parent_sib;
+    siblings[n_subsets] = left_sibling;
+    active_sibling_ptr[n_active] = n_subsets++;
+    is_active[n_active++] = 1;
+
+    // iteratively reconstruct the treelet, creating nleaves-1 internal nodes
+    while (n_active && n_internal < nleaves-1 )
         {
-        // find leaf with largest surface area
-        Scalar max_area(-FLT_MAX);
-        unsigned int imax;
-        for (unsigned int i = 0; i < nleaves; ++i)
-            {
-            if (leaves_processed[i])
-                continue;
+        // the first empty slot in the active set
+        unsigned int insert_pos = UINT_MAX;
 
-            // use previously calculated area
-            Scalar area = c_opt[1 << i];
-            if (area > max_area)
+        // find subset among active sets with largest surface area cost
+        Scalar max_cost(-FLT_MAX);
+        unsigned int imax;
+        for (unsigned int i = 0; i < n; ++i)
+            {
+            // skip holes in the set
+            if (!is_active[i])
                 {
-                max_area = area;
+                insert_pos = i;
+                continue;
+                }
+
+            Scalar cost = c_opt[active_set[i]];
+
+            if (cost > max_cost)
+                {
+                max_cost = cost;
                 imax = i;
                 }
             }
 
-        n_leaves_processed++;
-        leaves_processed[imax] = 1;
+        // the currently active subset which maximizes the cost function
+        cur_set = active_set[imax];
 
-        unsigned int cur_node_idx = leaves[imax];
-
-        // point the leaf to the current parent
-        uint2 cur_parent_sib;
-        cur_parent_sib.x = cur_parent;
-
-        unsigned int sibling = UINT_MAX;
-        if (n_internal_nodes_used == nleaves -1)
+        // is this subset a single node, i.e., a leaf?
+        if (numberOfSetBits(cur_set) > 1)
             {
-            // we will use a treelet leaf as sibling, it must be the last unprocessed one then
-            unsigned int i;
-            for (i = 0; i < nleaves; ++i)
-                {
-                if (!leaves_processed[i])
-                    {
-                    sibling = leaves[i];
-                    break;
-                    }
-                }
-            n_leaves_processed++;
-            // don't bother to set leaves_processed[i]
+            // no, pop the current set from the active list
+            is_active[imax] = 0;
+            n_active--;
+
+            // create an internal node, recycling from the stash
+            unsigned int cur_node_idx = internal_nodes[n_internal++];
+
+            // set the parent and sibling identity of this internal node
+            cur_parent_sib = active_parent_sib[imax];
+            d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
+
+            // now that the node index has materialized, fill in the node_indices array
+            node_indices[active_sibling_ptr[imax]] = cur_node_idx;
+
+            // the internal node will become the next parent
+            cur_parent_sib.x = cur_node_idx;
+
+            // the partition corresponding to this subset (== subset of nodes in the left subtree)
+            unsigned int cur_p_bar = p_opt_bar[cur_set];
+
+            // the sibling pointers, inside the siblings array
+            left_sibling = n_subsets;
+            right_sibling = n_subsets + 1;
+
+            // push the left subset
+            unsigned int left_subset = cur_p_bar;
+            is_active[imax] = 1;
+            active_set[imax] = left_subset;
+            cur_parent_sib.y = 1;
+            active_parent_sib[imax] = cur_parent_sib;
+            active_sibling_ptr[imax] = n_subsets;
+            siblings[n_subsets++] = right_sibling;
+            n_active++;
+
+            // right subset, insert at next free position
+            unsigned int right_subset = ~cur_p_bar & cur_set;
+            is_active[insert_pos] = 1;
+            active_set[insert_pos] = right_subset;
+            cur_parent_sib.y = 0;
+            active_parent_sib[insert_pos] = cur_parent_sib;
+            active_sibling_ptr[insert_pos] = n_subsets;
+            siblings[n_subsets++] = left_sibling;
+            n_active++;
             }
         else
             {
-            // reuse one of the internal nodes as sibling
-            sibling = internal_nodes[n_internal_nodes_used++];
+            // pop this subset node from the active list
+            is_active[imax] = 0;
+            n_active--;
+
+            // get the corresponding leaf node
+            unsigned int i = 0;
+            while (cur_set >> 1)
+                {
+                cur_set >>= 1;
+                i++;
+                }
+            unsigned int cur_node_idx = leaves[i];
+
+            // fill in node index for later reconnecting siblings
+            node_indices[active_sibling_ptr[imax]] = cur_node_idx;
+
+            // update it's parent pointer and sibling identity
+            d_tree_parent_sib[cur_node_idx] = active_parent_sib[imax];
             }
-
-        // update the parent-sibling fields for both children, first for the treelet leaf
-        cur_parent_sib.y = sibling << 1;
-
-        // is this leaf node supposed to be a left sibling? (we know from the optimal partition)
-        bool is_left = p_opt_bar & (1 << imax);
-
-        if (is_left)
-            cur_parent_sib.y &= 1;
-
-        d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
-
-        // update the parent-sibling field for the other node
-        cur_parent_sib.y = cur_node_idx;
-        if (!is_left)
-            cur_parent_sib.y &= 1;
-
-        d_tree_parent_sib[sibling] = cur_parent_sib;
         }
-    }
 
-
-/*!
- * Computes the Hamming weight, i.e. the number of bits set to one
- *
- *https://stackoverflow.com/questions/109023/how-to-count-the-number-of-set-bits-in-a-32-bit-integer
- */
-__device__ int numberOfSetBits(int i)
-    {
-    i = i - ((i >> 1) & 0x55555555);
-    i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
-    return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+    // all nodes have been processed, all that is left to do is to connect the siblings
+    for (unsigned int i = 0; i < n_subsets; ++i)
+        d_tree_parent_sib[node_indices[i]].y |= siblings[i] << 1;
     }
 
 //! Kernel to optimize subtrees (treelets), employing a bottom-up traversal
@@ -992,7 +1100,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             unsigned int internal_nodes[n];
 
             // construct the initial treelet, computing the surface area of leaf nodes to be addded
-            unsigned int nleaves = formTreelet<n>(cur_node_idx, leaves, internal_nodes, d_tree_nodes);
+            unsigned int nleaves = formTreelet<n>(cur_node_idx, leaves, internal_nodes, d_tree_parent_sib, d_tree_nodes);
 
             // now we have nleaves consecutive leaves stored in the leaves array
             // find the optimal partitioning according to the surface area heuristic
@@ -1116,7 +1224,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             // and c_opt[size-1] the associated cost
 
             // update d_tree_parent_sib for the optimal treelet
-            reconstructTree<n>(cur_node_idx, nleaves, leaves, internal_nodes, p_opt_bar[size-1], c_opt, d_tree_parent_sib);
+            reconstructTree<n>(nleaves, leaves, internal_nodes, size, p_opt_bar, c_opt, d_tree_parent_sib);
 
             // bump the current node one level
             cur_node_idx = cur_parent;
