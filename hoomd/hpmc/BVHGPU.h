@@ -258,6 +258,7 @@ class BVHGPU : public Compute
         Scalar m_C_i;                               //!< Surface area cost of internal nodes
         Scalar m_C_l;                               //!< Surface area cost of leaf nodes
         Scalar m_C_t;                               //!< Additional surface area cost of leaf nodes per contained primitive
+        GPUVector<Scalar> m_tree_cost;              //!< The cost per tree node
 
         unsigned int m_iterations;                  //!< Number of treelet optimization iterations
         unsigned int m_treelet_size;                //!< Size of treelets to optimize
@@ -419,9 +420,12 @@ void BVHGPU<BVNode, Shape, IntHPMC>::allocateTree()
     GPUVector<uint2> tree_parent_sib(m_exec_conf);
     m_tree_parent_sib.swap(tree_parent_sib);
 
-    // holds two Scalar4s per node in tree
+    // the bounding volumes and nodes for traversal
     GPUVector<BVNode> tree_nodes(m_exec_conf);
     m_tree_nodes.swap(tree_nodes);
+
+    // SAH cost per tree node
+    GPUVector<Scalar>(m_exec_conf).swap(m_tree_cost);
 
     // we really only need as many morton codes as we have leafs
     GPUVector<uint32_t> morton_codes_red(m_exec_conf);
@@ -969,12 +973,16 @@ void BVHGPU<BVNode, Shape, IntHPMC>::optimizeTree()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Optimize");
 
+    // reallocate array if necessary
+    m_tree_cost.resize(m_n_node);
+
     for (unsigned int i = 0; i < m_iterations; ++i)
         {
         ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
         ArrayHandle<BVNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
 
         ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::readwrite);
+        ArrayHandle<Scalar> d_tree_cost(m_tree_cost, access_location::device, access_mode::overwrite);
 
         // Rotate the treelets
         m_tuner_optimize->begin();
@@ -988,6 +996,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::optimizeTree()
                                m_C_l,
                                m_C_t,
                                m_treelet_size,
+                               d_tree_cost.data,
                                m_tuner_bubble->getParam()
                                );
         if (m_exec_conf->isCUDAErrorCheckingEnabled())

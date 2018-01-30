@@ -929,7 +929,7 @@ __device__ void reconstructTree(
     active_sibling_ptr[n_active] = n_subsets++;
     is_active[n_active++] = 1;
 
-    active_set[n_active] = (~cur_p_bar) & cur_set;
+    active_set[n_active] = cur_p_bar^cur_set;
     cur_parent_sib.y = 0;
     active_parent_sib[n_active] = cur_parent_sib;
     siblings[n_subsets] = left_sibling;
@@ -1010,7 +1010,7 @@ __device__ void reconstructTree(
             n_active++;
 
             // right subset, insert at next free position
-            unsigned int right_subset = (~cur_p_bar) & cur_set;
+            unsigned int right_subset = cur_p_bar^cur_set;
             is_active[insert_pos] = 1;
             active_set[insert_pos] = right_subset;
             cur_parent_sib.y = 0;
@@ -1086,7 +1086,8 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                                               const unsigned int nleafs,
                                               const Scalar C_i,
                                               const Scalar C_l,
-                                              const Scalar C_t)
+                                              const Scalar C_t,
+                                              Scalar *d_tree_cost)
     {
     const unsigned int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -1178,13 +1179,22 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                 unsigned int leaf = leaves[i];
                 unsigned int np_child_masked = d_tree_nodes[leaf].np_child_masked;
                 bool is_leaf = ! (np_child_masked & 1);
-                unsigned int npart = 0;
+                Scalar cost;
                 if (is_leaf)
-                    npart = np_child_masked >> 1;
-                Scalar area = d_tree_nodes[leaf].bounding_volume.getSurfaceArea();
+                    {
+                    unsigned int npart = np_child_masked >> 1;
+                    Scalar area = d_tree_nodes[leaf].bounding_volume.getSurfaceArea();
 
-                // compute cost metric and store in local memory
-                c_opt[1 << i] = area*(C_l + npart*C_t);
+                    // compute cost metric and store in local memory
+                    cost = area*(C_l + npart*C_t);
+                    }
+                else
+                    {
+                    // initialize with cost previously computed in bottom-up traversal
+                    cost = d_tree_cost[leaf];
+                    }
+
+                c_opt[1 << i] = cost;
                 }
 
             // iterate over size of subset
@@ -1245,6 +1255,9 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             // update d_tree_parent_sib for the optimal treelet
             reconstructTree<n>(nleaves, leaves, internal_nodes, size, p_opt_bar, c_opt, d_tree_nodes, d_tree_parent_sib);
 
+            // store cost for further accumulation
+            d_tree_cost[cur_node_idx] = c_opt[size-1];
+
             // bump the current node one level
             cur_node_idx = cur_parent;
             }
@@ -1263,6 +1276,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
  * \param C_i cost of traversing an internal node, per unit area of the bounding volume divided by root node area
  * \param C_l cost of traversing a leaf node, per unit area of the bounding volume divided by root node area
  * \param C_t cost of checking a primitive or particle contained in the leaf node, per primitive and unit area over root node area
+ * \param the accumulated SAH cost per tree node
  * \param block_size Requested thread block size
  *
  * \returns cudaSuccess on completion
@@ -1278,6 +1292,7 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_l,
                                    const Scalar C_t,
                                    const unsigned int n,
+                                   Scalar *d_tree_cost,
                                    const unsigned int block_size)
     {
     cudaMemset(d_node_locks, 0, sizeof(unsigned int)*ninternal);
@@ -1301,7 +1316,8 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                                                              nleafs,
                                                                              C_i,
                                                                              C_l,
-                                                                             C_t);
+                                                                             C_t,
+                                                                             d_tree_cost);
         }
     else
         {
@@ -1505,6 +1521,7 @@ template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_l,
                                    const Scalar C_t,
                                    const unsigned int n,
+                                   Scalar *d_tree_cost,
                                    const unsigned int block_size);
 
 // OBB
@@ -1530,6 +1547,7 @@ template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_l,
                                    const Scalar C_t,
                                    const unsigned int n,
+                                   Scalar *d_tree_cost,
                                    const unsigned int block_size);
 
 } // namespace detail

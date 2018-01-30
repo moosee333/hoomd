@@ -148,6 +148,7 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_l,
                                    const Scalar C_t,
                                    const unsigned int n,
+                                   Scalar *d_tree_cost,
                                    const unsigned int block_size);
 
 cudaError_t gpu_bvh_gen_hierarchy(uint2 *d_tree_parent_sib,
