@@ -735,9 +735,9 @@ __device__ unsigned int formTreelet(unsigned int root,
     unsigned int active_set[n];
     unsigned int is_active[n];
 
-    // we always start with an internal node, which has two children
+    // we always start with an internal node and its two children
     unsigned int left_child = d_tree_nodes[root].np_child_masked >> 1;
-    unsigned int right_child = d_tree_parent_sib[root].y >> 1;
+    unsigned int right_child = d_tree_parent_sib[left_child].y >> 1;
 
     // current number of internal nodes
     unsigned int n_internal = 0;
@@ -790,7 +790,7 @@ __device__ unsigned int formTreelet(unsigned int root,
 
         unsigned int cur_node_idx = active_set[imax];
 
-        // are we an actual leaf node already?
+        // have we arrived at an actual leaf node already?
         if (d_tree_nodes[cur_node_idx].np_child_masked & 1)
             {
             // no, pop the current node from the active set
@@ -809,7 +809,7 @@ __device__ unsigned int formTreelet(unsigned int root,
             n_active++;
 
             // right child, insert at next free position
-            right_child = d_tree_parent_sib[cur_node_idx].y >> 1;
+            right_child = d_tree_parent_sib[left_child].y >> 1;
             is_active[insert_pos] = 1;
             active_set[insert_pos] = right_child;
             n_active++;
@@ -830,6 +830,9 @@ __device__ unsigned int formTreelet(unsigned int root,
         if (is_active[i])
             leaves[n_leaves++] = active_set[i]; // add it to the output
 
+    for (unsigned int i = 1; i < n_leaves; ++i)
+        if (leaves[0] == leaves[i])
+            printf("== %d %d %d\n", i, leaves[i], n_leaves);
     return n_leaves;
     }
 
@@ -861,7 +864,7 @@ __device__ int numberOfSetBits(int i)
  * \post d_tree_parent_sib will contain the right parent-sibling information, and bounding volumes still need to be updated
  *
  */
-template<unsigned int n>
+template<unsigned int n, class BVHNode>
 __device__ void reconstructTree(
     const unsigned int nleaves,
     const unsigned int *leaves,
@@ -869,6 +872,7 @@ __device__ void reconstructTree(
     const unsigned int size,
     const int *p_opt_bar,
     const Scalar *c_opt,
+    BVHNode *d_tree_nodes,
     uint2 *d_tree_parent_sib)
     {
     // holds the current active subset
@@ -884,7 +888,7 @@ __device__ void reconstructTree(
     unsigned int is_active[n];
 
     // the currently active subset
-    unsigned int cur_set = size-1;
+    int cur_set = size-1;
 
     // load the corresponding partition
     int cur_p_bar = p_opt_bar[cur_set];
@@ -892,14 +896,14 @@ __device__ void reconstructTree(
     // current number of internal nodes
     unsigned int n_internal = 0;
 
-    // count the number of subsets traversed
+    // count the number of subsets traversed (not including the root)
     unsigned int n_subsets = 0;
 
     // a sibling node per traversed node
-    unsigned int siblings[2*n-1];
+    unsigned int siblings[2*n-2];
 
     // an actual index per traversed node
-    unsigned int node_indices[2*n-1];
+    unsigned int node_indices[2*n-2];
 
     // load the (internal) root node as active parent
     unsigned int cur_parent = internal_nodes[n_internal++];
@@ -925,15 +929,17 @@ __device__ void reconstructTree(
     active_sibling_ptr[n_active] = n_subsets++;
     is_active[n_active++] = 1;
 
-    active_set[n_active] = ~cur_p_bar & cur_set;
+    active_set[n_active] = (~cur_p_bar) & cur_set;
     cur_parent_sib.y = 0;
     active_parent_sib[n_active] = cur_parent_sib;
     siblings[n_subsets] = left_sibling;
     active_sibling_ptr[n_active] = n_subsets++;
     is_active[n_active++] = 1;
 
-    // iteratively reconstruct the treelet, creating nleaves-1 internal nodes
-    while (n_active && n_internal < nleaves-1 )
+    unsigned int leaves_count = 0;
+
+    // iteratively reconstruct the treelet, creating nleaves-1 internal nodes and nleaves leaf nodes
+    while (n_active && n_subsets < 2*nleaves-1 )
         {
         // the first empty slot in the active set
         unsigned int insert_pos = UINT_MAX;
@@ -976,6 +982,10 @@ __device__ void reconstructTree(
             cur_parent_sib = active_parent_sib[imax];
             d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
 
+            // set the left child pointer on the parent if this is a left child
+            if (cur_parent_sib.y & 1)
+                d_tree_nodes[cur_parent_sib.x].np_child_masked = 1 | (cur_node_idx << 1);
+
             // now that the node index has materialized, fill in the node_indices array
             node_indices[active_sibling_ptr[imax]] = cur_node_idx;
 
@@ -1000,7 +1010,7 @@ __device__ void reconstructTree(
             n_active++;
 
             // right subset, insert at next free position
-            unsigned int right_subset = ~cur_p_bar & cur_set;
+            unsigned int right_subset = (~cur_p_bar) & cur_set;
             is_active[insert_pos] = 1;
             active_set[insert_pos] = right_subset;
             cur_parent_sib.y = 0;
@@ -1011,7 +1021,7 @@ __device__ void reconstructTree(
             }
         else
             {
-            // pop this subset node from the active list
+            // pop this subset from the active list
             is_active[imax] = 0;
             n_active--;
 
@@ -1027,14 +1037,24 @@ __device__ void reconstructTree(
             // fill in node index for later reconnecting siblings
             node_indices[active_sibling_ptr[imax]] = cur_node_idx;
 
-            // update it's parent pointer and sibling identity
-            d_tree_parent_sib[cur_node_idx] = active_parent_sib[imax];
+            // set the parent and sibling identity of this internal node
+            cur_parent_sib = active_parent_sib[imax];
+            d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
+
+            // set the left child pointer on the parent if this is a left child
+            if (cur_parent_sib.y & 1)
+                d_tree_nodes[cur_parent_sib.x].np_child_masked = 1 | (cur_node_idx << 1);
+
+            leaves_count++;
             }
         }
 
     // all nodes have been processed, all that is left to do is to connect the siblings
     for (unsigned int i = 0; i < n_subsets; ++i)
-        d_tree_parent_sib[node_indices[i]].y |= siblings[i] << 1;
+        {
+        d_tree_parent_sib[node_indices[i]].y |= (node_indices[siblings[i]] << 1);
+        }
+
     }
 
 //! Kernel to optimize subtrees (treelets), employing a bottom-up traversal
@@ -1100,7 +1120,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             unsigned int internal_nodes[n];
 
             // construct the initial treelet, computing the surface area of leaf nodes to be addded
-            unsigned int nleaves = formTreelet<n>(cur_node_idx, leaves, internal_nodes, d_tree_parent_sib, d_tree_nodes);
+            unsigned int nleaves = formTreelet<n>(cur_parent, leaves, internal_nodes, d_tree_parent_sib, d_tree_nodes);
 
             // now we have nleaves consecutive leaves stored in the leaves array
             // find the optimal partitioning according to the surface area heuristic
@@ -1208,7 +1228,6 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                             unsigned int leaf = leaves[i];
                             unsigned int np_child_masked = d_tree_nodes[leaf].np_child_masked;
                             bool is_leaf = ! (np_child_masked & 1);
-                            unsigned int npart = 0;
                             if (is_leaf)
                                 total_num_particles += np_child_masked >> 1;
                             }
@@ -1224,7 +1243,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             // and c_opt[size-1] the associated cost
 
             // update d_tree_parent_sib for the optimal treelet
-            reconstructTree<n>(nleaves, leaves, internal_nodes, size, p_opt_bar, c_opt, d_tree_parent_sib);
+            reconstructTree<n>(nleaves, leaves, internal_nodes, size, p_opt_bar, c_opt, d_tree_nodes, d_tree_parent_sib);
 
             // bump the current node one level
             cur_node_idx = cur_parent;
