@@ -1048,6 +1048,7 @@ void export_BVHGPU(pybind11::module& m, const std::string& name)
         .def( pybind11::init< std::shared_ptr<SystemDefinition>, unsigned int >())
         .def( "setSurfaceAreaCostI", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostI)
         .def( "setSurfaceAreaCostL", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostI)
+        .def( "setSurfaceAreaCostT", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostT)
         .def( "setNIterations", &BVHGPU<BVNode,Shape,IntHPMC>::setNIterations)
         .def( "setTreeletSize", &BVHGPU<BVNode,Shape,IntHPMC>::setTreeletSize)
     ;

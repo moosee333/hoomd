@@ -952,10 +952,10 @@ class clusters(_updater):
 
             bvh_cls = getattr(_hpmc,"BVHGPU"+bvh_type+shape)
             leaf_capacity=4
-            bvh = bvh_cls(hoomd.context.current.system_definition,leaf_capacity, mc.cpp_integrator)
-            hoomd.context.current.system.overwriteCompute(bvh, "auto_bvh_"+bvh_type)
+            self.cpp_bvh = bvh_cls(hoomd.context.current.system_definition,leaf_capacity, mc.cpp_integrator)
+            hoomd.context.current.system.overwriteCompute(self.cpp_bvh, "auto_bvh_"+bvh_type)
 
-            self.cpp_updater = cls(hoomd.context.current.system_definition, mc.cpp_integrator, int(seed), bvh)
+            self.cpp_updater = cls(hoomd.context.current.system_definition, mc.cpp_integrator, int(seed), self.cpp_bvh)
 
         # register the clusters updater
         self.setupUpdater(period)
