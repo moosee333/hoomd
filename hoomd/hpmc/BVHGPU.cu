@@ -673,7 +673,7 @@ __global__ void gpu_bvh_bubble_bounding_volumes_kernel(unsigned int *d_node_lock
 
 /*!
  * \param d_node_locks Atomic flags identifying when node has been visited
- * \param d_bounding_volumes AABB array for all tree nodes
+ * \param d_tree_nodes AABB array for all tree nodes
  * \param d_tree_parent_sib Parent and sibling indexes of each node
  * \param ntypes Number of particle types
  * \param nleafs Number of leaf nodes
@@ -1076,7 +1076,7 @@ __device__ void reconstructTreelet(
             }
         }
 
-    // all nodes have been processed, connect the siblings (we'll save updateing ropes for postprocessing)
+    // all nodes have been processed, connect the siblings (we'll save updating ropes for postprocessing)
     for (unsigned int i = 0; i < n_subsets; ++i)
         {
         d_tree_parent_sib[node_indices[i]].y |= (node_indices[siblings[i]] << 1);
@@ -1309,7 +1309,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
 
 /*!
  * \param d_node_locks Atomic flags identifying when node has been visited
- * \param d_bounding_volumes AABB array for all tree nodes
+ * \param d_tree_nodes AABB array for all tree nodes
  * \param d_tree_parent_sib Parent and sibling indexes of each node
  * \param ntypes Number of particle types
  * \param nleafs Number of leaf nodes
@@ -1413,6 +1413,108 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
     }
 
 
+//! Kernel to postprocess the tree after multiple rounds of optimization
+/*!
+ * \param d_node_locks Atomic flags identifying when node has been visited
+ * \param d_bv_nodes Bounding volume array for all tree nodes
+ * \param d_tree_parent_sib Parent and sibling indexes of each node
+ * \param ntypes Number of particle types
+ * \param nleafs Number of leaf nodes
+ *
+ * \b Implementation
+ * This kernel works like gbu_bvh_bubble_bounding_volumes_kernel(), but all it does is update the ropes
+ * for traversal.
+ */
+template<class BVHNode>
+__global__ void gpu_bvh_postprocess_tree_kernel(unsigned int *d_node_locks,
+                                              BVHNode *d_tree_nodes,
+                                              const uint2 *d_tree_parent_sib,
+                                              const unsigned int ntypes,
+                                              const unsigned int nleafs)
+    {
+    const unsigned int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (idx >= nleafs)
+        return;
+
+    unsigned int cur_node_idx = idx;
+    unsigned int lock_key = 0;
+    do
+        {
+        uint2 cur_parent_sib = d_tree_parent_sib[cur_node_idx];
+        unsigned int cur_parent = cur_parent_sib.x;
+
+        // first we compute the skip for this node always
+        // back track up the tree until you find a left child
+        // we have a check in place so that we don't stall on the root node
+        uint2 backtrack = cur_parent_sib;
+        while (!(backtrack.y & 1) && backtrack.x != (backtrack.y >> 1))
+            {
+            backtrack = d_tree_parent_sib[backtrack.x];
+            }
+        // then, the skip is to the sibling of that node, or else to quit
+        if (backtrack.y & 1)
+            {
+            d_tree_nodes[cur_node_idx].rope = backtrack.y >> 1;
+            }
+        else
+            {
+            d_tree_nodes[cur_node_idx].rope = -1;
+            }
+
+        // then, we do an atomicAdd on the lock to see if we need to process the parent AABBs
+        // check to make sure the parent is bigger than nleafs, or else the node lock always fails
+        // so that we terminate the thread
+        lock_key = (cur_parent >= nleafs) ? atomicAdd(d_node_locks + cur_parent - nleafs, 1) : 0;
+
+        if (lock_key == 1)
+            {
+            // bump the current node one level
+            cur_node_idx = cur_parent;
+            }
+        }
+    while (lock_key == 1);
+    }
+
+/*!
+ * \param d_node_locks Atomic flags identifying when node has been visited
+ * \param d_tree_nodes AABB array for all tree nodes
+ * \param d_tree_parent_sib Parent and sibling indexes of each node
+ * \param ntypes Number of particle types
+ * \param nleafs Number of leaf nodes
+ * \param block_size Requested thread block size
+ *
+ * \returns cudaSuccess on completion
+ */
+template<class BVHNode>
+cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
+                                   BVHNode *d_tree_nodes,
+                                   const uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const unsigned int block_size)
+    {
+    cudaMemset(d_node_locks, 0, sizeof(unsigned int)*ninternal);
+
+    static unsigned int max_block_size = UINT_MAX;
+    if (max_block_size == UINT_MAX)
+        {
+        cudaFuncAttributes attr;
+        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_postprocess_tree_kernel<BVHNode>);
+        max_block_size = attr.maxThreadsPerBlock;
+        }
+
+    int run_block_size = min(block_size,max_block_size);
+
+    gpu_bvh_postprocess_tree_kernel<BVHNode><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
+                                                                         d_tree_nodes,
+                                                                         d_tree_parent_sib,
+                                                                         ntypes,
+                                                                         nleafs);
+
+    return cudaSuccess;
+    }
 //! Kernel to find divisons between particle types in sorted order
 /*!
  * \param d_type_head Index to first type in leaf ordered particles by type
@@ -1609,6 +1711,14 @@ template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    Scalar *d_tree_cost,
                                    const unsigned int block_size);
 
+template cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
+                                   AABBNodeGPU *d_tree_nodes,
+                                   const uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const unsigned int block_size);
+
 // OBB
 template cudaError_t gpu_bvh_bubble_bounding_volumes<OBBNodeGPU>(unsigned int *d_node_locks,
                                    OBBNodeGPU *d_tree_nodes,
@@ -1633,6 +1743,14 @@ template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_t,
                                    const unsigned int n,
                                    Scalar *d_tree_cost,
+                                   const unsigned int block_size);
+
+template cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
+                                   OBBNodeGPU *d_tree_nodes,
+                                   const uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
                                    const unsigned int block_size);
 
 } // namespace detail

@@ -151,6 +151,15 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    Scalar *d_tree_cost,
                                    const unsigned int block_size);
 
+template<class BVHNode>
+cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
+                                   BVHNode *d_tree_nodes,
+                                   const uint2 *d_tree_parent_sib,
+                                   const unsigned int ntypes,
+                                   const unsigned int nleafs,
+                                   const unsigned int ninternal,
+                                   const unsigned int block_size);
+
 cudaError_t gpu_bvh_gen_hierarchy(uint2 *d_tree_parent_sib,
                                     const uint32_t *d_morton_codes,
                                     const unsigned int *d_num_per_type,

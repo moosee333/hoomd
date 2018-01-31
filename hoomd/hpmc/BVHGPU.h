@@ -130,8 +130,11 @@ class BVHGPU : public Compute
             m_tuner_bubble->setPeriod(period);
             m_tuner_bubble->setEnabled(enable);
 
-            m_tuner_optimize->setPeriod(period);
-            m_tuner_optimize->setEnabled(enable);
+            m_tuner_optimize->setPeriod(period*m_iterations);
+            m_tuner_optimize->setEnabled(enable*m_iterations);
+
+            m_tuner_postprocess->setPeriod(period);
+            m_tuner_postprocess->setEnabled(enable);
 
             m_tuner_move->setPeriod(period);
             m_tuner_move->setEnabled(enable);
@@ -201,6 +204,7 @@ class BVHGPU : public Compute
         std::unique_ptr<Autotuner> m_tuner_hierarchy; //!< Tuner for kernel to generate tree hierarchy
         std::unique_ptr<Autotuner> m_tuner_bubble;    //!< Tuner for kernel to bubble bounding volumes up hierarchy
         std::unique_ptr<Autotuner> m_tuner_optimize;  //!< Tuner for kernel to optimize the tree
+        std::unique_ptr<Autotuner> m_tuner_postprocess; //!< Tuner for kernel to postprocess after optimization
         std::unique_ptr<Autotuner> m_tuner_move;      //!< Tuner for kernel to move particles to leaf order
         std::unique_ptr<Autotuner> m_tuner_map;       //!< Tuner for kernel to help map particles by type
         // @}
@@ -338,6 +342,7 @@ BVHGPU<BVHNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef
     m_tuner_hierarchy.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_gen_hierarchy", this->m_exec_conf));
     m_tuner_bubble.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_bubble_bounding_volumes", this->m_exec_conf));
     m_tuner_optimize.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_optimize_tree", this->m_exec_conf));
+    m_tuner_postprocess.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_postprocess_tree", this->m_exec_conf));
     m_tuner_move.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_move_particles", this->m_exec_conf));
     m_tuner_map.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_map_particles", this->m_exec_conf));
 
@@ -1024,17 +1029,17 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::optimizeTree()
 
     if (m_iterations)
         {
-        m_tuner_bubble->begin();
-        detail::gpu_bvh_bubble_bounding_volumes<BVHNode>(d_node_locks.data,
+        m_tuner_postprocess->begin();
+        detail::gpu_bvh_postprocess_tree<BVHNode>(d_node_locks.data,
                                     d_tree_nodes.data,
                                     d_tree_parent_sib.data,
                                     m_pdata->getNTypes(),
                                     m_n_leaf,
                                     m_n_internal,
-                                    m_tuner_bubble->getParam());
+                                    m_tuner_postprocess->getParam());
         if (m_exec_conf->isCUDAErrorCheckingEnabled())
             CHECK_CUDA_ERROR();
-        m_tuner_bubble->end();
+        m_tuner_postprocess->end();
         }
 
     if (m_prof) m_prof->pop(m_exec_conf);
