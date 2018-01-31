@@ -54,11 +54,11 @@ namespace hpmc
  *
  * \ingroup computes
  */
-template<class BVNode, class Shape = detail::EmptyShape, class IntHPMC = std::tuple<> >
+template<class BVHNode, class Shape = detail::EmptyShape, class IntHPMC = std::tuple<> >
 class BVHGPU : public Compute
     {
     public:
-        typedef BVNode node_type;  //!< Export the type of BVH node
+        typedef BVHNode node_type;  //!< Export the type of BVH node
 
         //! Constructs the compute
         /*! \param sysdef The system definition
@@ -140,6 +140,9 @@ class BVHGPU : public Compute
             m_tuner_map->setEnabled(enable);
             }
 
+        //! Print statistics about the BVH tree
+        virtual void printStats();
+
         //! Accessor methods
 
         const GPUArray<unsigned int>& getLeafOffsets()
@@ -152,7 +155,7 @@ class BVHGPU : public Compute
             return m_tree_roots;
             }
 
-        const GPUArray<BVNode>& getTreeNodes()
+        const GPUArray<BVHNode>& getTreeNodes()
             {
             return m_tree_nodes;
             }
@@ -238,10 +241,11 @@ class BVHGPU : public Compute
         GPUArray<uint64_t> m_morton_types_alt;  //!< Double buffer for morton codes needed for sorting
         GPUFlags<int> m_morton_conditions;      //!< Condition flag to catch out of bounds particles
 
-        GPUArray<unsigned int> m_leaf_offset;   //!< Total offset in particle index for leaf nodes by type
-        GPUArray<unsigned int> m_num_per_type;  //!< Number of particles per type
-        GPUArray<unsigned int> m_type_head;     //!< Head list to each particle type
-        GPUArray<unsigned int> m_tree_roots;    //!< Index for root node of each tree by type
+        GPUVector<unsigned int> m_leaf_offset;   //!< Total offset in particle index for leaf nodes by type
+        GPUVector<unsigned int> m_num_per_type;  //!< Number of particles per type
+        GPUVector<unsigned int> m_type_head;     //!< Head list to each particle type
+        GPUVector<unsigned int> m_tree_roots;    //!< Index for root node of each tree by type
+        GPUVector<unsigned int> m_leaf_num;      //!< Number of leaves per type
 
         // hierarchy generation
         unsigned int m_n_leaf;                      //!< Total number of leaves in trees
@@ -250,7 +254,7 @@ class BVHGPU : public Compute
         unsigned int m_particles_per_leaf;          //!< Number of particles per leaf
 
         GPUVector<uint32_t> m_morton_codes_red;     //!< Reduced capacity 30 bit morton code array (per leaf)
-        GPUVector<BVNode> m_tree_nodes;             //!< Nodes and bounding volume of both merged leaf nodes and internal nodes
+        GPUVector<BVHNode> m_tree_nodes;             //!< Nodes and bounding volume of both merged leaf nodes and internal nodes
         GPUVector<unsigned int> m_node_locks;       //!< Node locks for if node has been visited or not
         GPUVector<uint2> m_tree_parent_sib;         //!< Parents and siblings of all nodes
 
@@ -314,8 +318,8 @@ class BVHGPU : public Compute
         // @}
     };
 
-template<class BVNode, class Shape, class IntHPMC>
-BVHGPU<BVNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef,
+template<class BVHNode, class Shape, class IntHPMC>
+BVHGPU<BVHNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef,
     unsigned int leaf_capacity,
     std::shared_ptr<IntHPMC> mc)
     : Compute(sysdef), m_mc(mc), m_type_changed(false),
@@ -348,8 +352,8 @@ BVHGPU<BVNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef,
     CHECK_CUDA_ERROR();
     }
 
-template<class BVNode, class Shape, class IntHPMC>
-BVHGPU<BVNode, Shape, IntHPMC>::~BVHGPU()
+template<class BVHNode, class Shape, class IntHPMC>
+BVHGPU<BVHNode, Shape, IntHPMC>::~BVHGPU()
     {
     m_exec_conf->msg->notice(5) << "Destroying BVHGPU" << std::endl;
     m_pdata->getNumTypesChangeSignal().disconnect<BVHGPU, &BVHGPU::slotNumTypesChanged>(this);
@@ -359,8 +363,8 @@ BVHGPU<BVNode, Shape, IntHPMC>::~BVHGPU()
     CHECK_CUDA_ERROR();
     }
 
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::compute(unsigned int timestep)
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::compute(unsigned int timestep)
     {
     // skip if we shouldn't compute this step
     if (!shouldCompute(timestep))
@@ -382,8 +386,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::compute(unsigned int timestep)
     buildTree();
     }
 
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::allocateTree()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::allocateTree()
     {
     // allocate per particle memory
     GPUArray<uint64_t> morton_types(m_pdata->getMaxN(), m_exec_conf);
@@ -403,16 +407,19 @@ void BVHGPU<BVNode, Shape, IntHPMC>::allocateTree()
     m_leaf_db.swap(leaf_db);
 
     // allocate per type memory
-    GPUArray<unsigned int> leaf_offset(m_pdata->getNTypes(), m_exec_conf);
+    GPUVector<unsigned int> leaf_offset(m_pdata->getNTypes(), m_exec_conf);
     m_leaf_offset.swap(leaf_offset);
 
-    GPUArray<unsigned int> tree_roots(m_pdata->getNTypes(), m_exec_conf);
+    GPUVector<unsigned int> tree_roots(m_pdata->getNTypes(), m_exec_conf);
     m_tree_roots.swap(tree_roots);
 
-    GPUArray<unsigned int> num_per_type(m_pdata->getNTypes(), m_exec_conf);
+    GPUVector<unsigned int> leaf_num(m_pdata->getNTypes(), m_exec_conf);
+    m_leaf_num.swap(leaf_num);
+
+    GPUVector<unsigned int> num_per_type(m_pdata->getNTypes(), m_exec_conf);
     m_num_per_type.swap(num_per_type);
 
-    GPUArray<unsigned int> type_head(m_pdata->getNTypes(), m_exec_conf);
+    GPUVector<unsigned int> type_head(m_pdata->getNTypes(), m_exec_conf);
     m_type_head.swap(type_head);
 
     // allocate the tree memory to default lengths of 0 (will be resized later)
@@ -421,7 +428,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::allocateTree()
     m_tree_parent_sib.swap(tree_parent_sib);
 
     // the bounding volumes and nodes for traversal
-    GPUVector<BVNode> tree_nodes(m_exec_conf);
+    GPUVector<BVHNode> tree_nodes(m_exec_conf);
     m_tree_nodes.swap(tree_nodes);
 
     // SAH cost per tree node
@@ -443,8 +450,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::allocateTree()
 /*!
  * \post Tree internal data structures are updated to begin a build.
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::setupTree()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::setupTree()
     {
     // increase arrays that depend on the local number of particles
     if (m_max_num_changed)
@@ -465,6 +472,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::setupTree()
         {
         m_leaf_offset.resize(m_pdata->getNTypes());
         m_tree_roots.resize(m_pdata->getNTypes());
+        m_leaf_num.resize(m_pdata->getNTypes());
         m_num_per_type.resize(m_pdata->getNTypes());
         m_type_head.resize(m_pdata->getNTypes());
 
@@ -482,8 +490,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::setupTree()
  * This is done by taking the ceiling of the log2 of the type index using integers.
  * \sa sortMortonCodes
  */
-template<class BVNode, class Shape, class IntHPMC>
-inline void BVHGPU<BVNode, Shape, IntHPMC>::calcTypeBits()
+template<class BVHNode, class Shape, class IntHPMC>
+inline void BVHGPU<BVHNode, Shape, IntHPMC>::calcTypeBits()
     {
     if (m_pdata->getNTypes() > 1)
         {
@@ -513,8 +521,8 @@ inline void BVHGPU<BVNode, Shape, IntHPMC>::calcTypeBits()
  * determines the leaf offsets and and tree roots. When there is only one type, most operations are skipped since these
  * values are simple to determine.
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::countParticlesAndTrees()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::countParticlesAndTrees()
     {
     if (m_prof) m_prof->push(m_exec_conf,"map");
 
@@ -546,6 +554,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::countParticlesAndTrees()
             ArrayHandle<unsigned int> h_num_per_type(m_num_per_type, access_location::host, access_mode::overwrite);
             ArrayHandle<unsigned int> h_leaf_offset(m_leaf_offset, access_location::host, access_mode::overwrite);
             ArrayHandle<unsigned int> h_tree_roots(m_tree_roots, access_location::host, access_mode::overwrite);
+            ArrayHandle<unsigned int> h_leaf_num(m_leaf_num, access_location::host, access_mode::overwrite);
 
             // loop through the type heads and figure out how many there are of each
             m_n_leaf = 0;
@@ -584,6 +593,10 @@ void BVHGPU<BVNode, Shape, IntHPMC>::countParticlesAndTrees()
                 // temporarily stash the number of leafs in the tree root array
                 unsigned int cur_n_leaf = (N_i + m_particles_per_leaf - 1)/m_particles_per_leaf;
                 h_tree_roots.data[cur_type] = cur_n_leaf;
+
+                // store for printing stats
+                h_leaf_num.data[cur_type] = cur_n_leaf;
+
                 m_n_leaf += cur_n_leaf;
 
                 // compute the offset that is needed for this type, set and accumulate the total offset required
@@ -627,6 +640,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::countParticlesAndTrees()
         ArrayHandle<unsigned int> h_num_per_type(m_num_per_type, access_location::host, access_mode::overwrite);
         ArrayHandle<unsigned int> h_leaf_offset(m_leaf_offset, access_location::host, access_mode::overwrite);
         ArrayHandle<unsigned int> h_tree_roots(m_tree_roots, access_location::host, access_mode::overwrite);
+        ArrayHandle<unsigned int> h_leaf_num(m_leaf_num, access_location::host, access_mode::overwrite);
 
         // with one type, we don't need to do anything fancy
         // type head is the first particle
@@ -640,6 +654,9 @@ void BVHGPU<BVNode, Shape, IntHPMC>::countParticlesAndTrees()
 
         // number of leafs is for all particles
         m_n_leaf = (m_pdata->getN() + m_pdata->getNGhosts() + m_particles_per_leaf - 1)/m_particles_per_leaf;
+
+        // store for printing stats
+        h_leaf_num.data[0] = m_n_leaf;
 
         // number of internal nodes is one less than number of leafs
         m_n_internal = m_n_leaf - 1;
@@ -657,8 +674,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::countParticlesAndTrees()
  * "Maximizing parallelism in the construction of BVHs, octrees, and k-d trees", High Performance Graphics (2012).
  * \post a valid tree is allocated and ready for traversal
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::buildTree()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::buildTree()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Build tree");
 
@@ -700,8 +717,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::buildTree()
  * \post One morton code-type key is assigned per particle
  * \note Call before sortMortonCodes().
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::calcMortonCodes()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::calcMortonCodes()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Morton codes");
 
@@ -769,8 +786,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::calcMortonCodes()
  * \post Morton code-keys are sorted by type then position along the Z order curve.
  * \note Call after calcMortonCodes(), but before mergeLeafParticles().
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::sortMortonCodes()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::sortMortonCodes()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Sort");
 
@@ -846,8 +863,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::sortMortonCodes()
  * \post Leafs are constructed for adjacent groupings of particles.
  * \note Call after sortMortonCodes(), but before genTreeHierarchy().
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::mergeLeafParticles()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::mergeLeafParticles()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Leaf merge");
 
@@ -862,7 +879,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::mergeLeafParticles()
     ArrayHandle<unsigned int> d_leaf_offset(m_leaf_offset, access_location::device, access_mode::read);
 
     // tree bounding volumes and reduced morton codes to overwrite
-    ArrayHandle<BVNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::overwrite);
+    ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::overwrite);
     ArrayHandle<uint32_t> d_morton_codes_red(m_morton_codes_red, access_location::device, access_mode::overwrite);
     ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::overwrite);
 
@@ -885,7 +902,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::mergeLeafParticles()
                               this->m_sysdef->getNDimensions());
 
     m_tuner_merge->begin();
-    detail::gpu_bvh_merge_shapes<Shape, BVNode>(args,
+    detail::gpu_bvh_merge_shapes<Shape, BVHNode>(args,
                                                 d_tree_nodes.data,
                                                 d_params);
 
@@ -903,8 +920,8 @@ void BVHGPU<BVNode, Shape, IntHPMC>::mergeLeafParticles()
  *       saves the right child as a rope to complete the edge graph.
  * \note Call after mergeLeafParticles(), but before bubbleBoundingVolumes().
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::genTreeHierarchy()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::genTreeHierarchy()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Hierarchy");
 
@@ -938,17 +955,17 @@ void BVHGPU<BVNode, Shape, IntHPMC>::genTreeHierarchy()
  *       defined between nodes.
  * \note Call after genTreeHierarchy()
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::bubbleBoundingVolumes()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::bubbleBoundingVolumes()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Bubble");
     ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
-    ArrayHandle<BVNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
+    ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
 
     ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::read);
 
     m_tuner_bubble->begin();
-    detail::gpu_bvh_bubble_bounding_volumes<BVNode>(d_node_locks.data,
+    detail::gpu_bvh_bubble_bounding_volumes<BVHNode>(d_node_locks.data,
                            d_tree_nodes.data,
                            d_tree_parent_sib.data,
                            m_pdata->getNTypes(),
@@ -968,25 +985,25 @@ void BVHGPU<BVNode, Shape, IntHPMC>::bubbleBoundingVolumes()
  *
  * \note Call after bubbleBoundingVolumes(), as often as needed
  */
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::optimizeTree()
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::optimizeTree()
     {
     if (m_prof) m_prof->push(m_exec_conf,"Optimize");
 
     // reallocate array if necessary
-    m_tree_cost.resize(m_n_node);
+    m_tree_cost.resize(m_n_node*m_iterations);
 
     for (unsigned int i = 0; i < m_iterations; ++i)
         {
         ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
-        ArrayHandle<BVNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
+        ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
 
         ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::readwrite);
         ArrayHandle<Scalar> d_tree_cost(m_tree_cost, access_location::device, access_mode::overwrite);
 
         // Rotate the treelets
         m_tuner_optimize->begin();
-        detail::gpu_bvh_optimize_treelets<BVNode>(d_node_locks.data,
+        detail::gpu_bvh_optimize_treelets<BVHNode>(d_node_locks.data,
                                d_tree_nodes.data,
                                d_tree_parent_sib.data,
                                m_pdata->getNTypes(),
@@ -996,7 +1013,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::optimizeTree()
                                m_C_l,
                                m_C_t,
                                m_treelet_size,
-                               d_tree_cost.data,
+                               d_tree_cost.data+m_n_node*i,
                                m_tuner_bubble->getParam()
                                );
         if (m_exec_conf->isCUDAErrorCheckingEnabled())
@@ -1005,7 +1022,7 @@ void BVHGPU<BVNode, Shape, IntHPMC>::optimizeTree()
 
         // Update the bounding volumes
         m_tuner_bubble->begin();
-        detail::gpu_bvh_bubble_bounding_volumes<BVNode>(d_node_locks.data,
+        detail::gpu_bvh_bubble_bounding_volumes<BVHNode>(d_node_locks.data,
                                d_tree_nodes.data,
                                d_tree_parent_sib.data,
                                m_pdata->getNTypes(),
@@ -1019,9 +1036,68 @@ void BVHGPU<BVNode, Shape, IntHPMC>::optimizeTree()
     if (m_prof) m_prof->pop(m_exec_conf);
     }
 
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::printStats()
+    {
+    // return early if the notice level is less than 1
+    if (m_exec_conf->msg->getNoticeLevel() < 1)
+        return;
 
-template<class BVNode, class Shape, class IntHPMC>
-void BVHGPU<BVNode, Shape, IntHPMC>::moveLeafParticles()
+    m_exec_conf->msg->notice(1) << "-- BVH stats:" << endl;
+    m_exec_conf->msg->notice(1)
+        << m_pdata->getN()+m_pdata->getNGhosts() << " particles, "
+        << m_pdata->getNTypes() << " types" << std::endl;
+
+    // the surface area heuristic per iteration and particle type
+    std::vector<std::vector<Scalar> > cost(m_iterations, std::vector<Scalar>(m_pdata->getNTypes(),0.0));
+
+    ArrayHandle<unsigned int> h_tree_roots(m_tree_roots, access_location::host, access_mode::read);
+    ArrayHandle<Scalar> h_tree_cost(m_tree_cost, access_location::host, access_mode::read);
+    ArrayHandle<BVHNode> h_tree_nodes(m_tree_nodes, access_location::host, access_mode::read);
+
+    // obtain current SAH costs per iteration and type
+    for (unsigned iter = 0; iter < m_iterations; iter++)
+        for (unsigned int itype = 0; itype < m_pdata->getNTypes(); ++itype)
+            if (h_tree_roots.data[itype] != BVH_GPU_INVALID_NODE)
+                {
+                unsigned int root = h_tree_roots.data[itype];
+                cost[iter][itype] = h_tree_cost.data[root+m_n_node*iter];
+
+                // Area of root node
+                Scalar A_root = h_tree_nodes.data[root].bounding_volume.getSurfaceArea();
+                cost[iter][itype] /= A_root;
+                }
+
+    ArrayHandle<unsigned int> h_leaf_num(m_leaf_num, access_location::host, access_mode::read);
+
+    // average surface area cost per itertion
+    std::vector<Scalar> avg_cost(m_iterations,0.0);
+
+    for (unsigned iter = 0; iter < m_iterations; iter++)
+        for (unsigned int itype = 0; itype < m_pdata->getNTypes(); ++itype)
+            {
+            // number of nodes = number of leaves + number of internal nodes
+            unsigned int n_nodes_type = 2*h_leaf_num.data[itype]-1;
+
+            // normalize by fraction of nodes of this type
+            avg_cost[iter] += cost[iter][itype]*(Scalar)n_nodes_type/(Scalar)m_n_node;
+            }
+
+    if (m_iterations > 0)
+        {
+        m_exec_conf->msg->notice(1) << "Avg. surface area heuristic after " << std::endl;
+
+        // print statistics
+        for (unsigned int iter = 0; iter < m_iterations; iter++)
+            m_exec_conf->msg->notice(1) << " " << iter+1 << ((iter+1 > 1) ? " iterations : " : " iteration  : " )
+                << avg_cost[iter] << std::endl;
+        }
+
+    }
+
+
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::moveLeafParticles()
     {
     if (m_prof) m_prof->push(m_exec_conf,"move");
     ArrayHandle<Scalar4> d_leaf_xyzf(m_leaf_xyzf, access_location::device, access_mode::overwrite);
@@ -1048,18 +1124,18 @@ void BVHGPU<BVNode, Shape, IntHPMC>::moveLeafParticles()
     if (m_prof) m_prof->pop(m_exec_conf);
     }
 
-template <class BVNode, class Shape = detail::EmptyShape, class IntHPMC = std::tuple<> >
+template <class BVHNode, class Shape = detail::EmptyShape, class IntHPMC = std::tuple<> >
 void export_BVHGPU(pybind11::module& m, const std::string& name)
     {
-    pybind11::class_< BVHGPU<BVNode, Shape, IntHPMC>, std::shared_ptr< BVHGPU<BVNode, Shape, IntHPMC> > >(
+    pybind11::class_< BVHGPU<BVHNode, Shape, IntHPMC>, std::shared_ptr< BVHGPU<BVHNode, Shape, IntHPMC> > >(
         m, name.c_str(), pybind11::base<Compute>())
         .def( pybind11::init< std::shared_ptr<SystemDefinition>, unsigned int, std::shared_ptr<IntHPMC> >())
         .def( pybind11::init< std::shared_ptr<SystemDefinition>, unsigned int >())
-        .def( "setSurfaceAreaCostI", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostI)
-        .def( "setSurfaceAreaCostL", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostI)
-        .def( "setSurfaceAreaCostT", &BVHGPU<BVNode,Shape,IntHPMC>::setSurfaceAreaCostT)
-        .def( "setNIterations", &BVHGPU<BVNode,Shape,IntHPMC>::setNIterations)
-        .def( "setTreeletSize", &BVHGPU<BVNode,Shape,IntHPMC>::setTreeletSize)
+        .def( "setSurfaceAreaCostI", &BVHGPU<BVHNode,Shape,IntHPMC>::setSurfaceAreaCostI)
+        .def( "setSurfaceAreaCostL", &BVHGPU<BVHNode,Shape,IntHPMC>::setSurfaceAreaCostI)
+        .def( "setSurfaceAreaCostT", &BVHGPU<BVHNode,Shape,IntHPMC>::setSurfaceAreaCostT)
+        .def( "setNIterations", &BVHGPU<BVHNode,Shape,IntHPMC>::setNIterations)
+        .def( "setTreeletSize", &BVHGPU<BVHNode,Shape,IntHPMC>::setTreeletSize)
     ;
     }
 
