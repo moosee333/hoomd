@@ -1103,10 +1103,13 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
         uint2 cur_parent_sib = d_tree_parent_sib[cur_node_idx];
         unsigned int cur_parent = cur_parent_sib.x;
 
+        // have we hit the tree root?
+        bool is_root = cur_parent == cur_node_idx;
+
         // then, we do an atomicAdd on the lock to see if we need to process the parent nodes
         // check to make sure the parent is bigger than nleafs, or else the node lock always fails
         // so that we terminate the thread
-        lock_key = (cur_parent >= nleafs) ? atomicAdd(d_node_locks + cur_parent - nleafs, 1) : 0;
+        lock_key = (!is_root && cur_parent >= nleafs) ? atomicAdd(d_node_locks + cur_parent - nleafs, 1) : 0;
 
         // process the node
         if (lock_key == 1)
