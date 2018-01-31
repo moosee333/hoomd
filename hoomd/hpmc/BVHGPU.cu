@@ -846,7 +846,7 @@ __device__ int numberOfSetBits(int i)
     }
 
 /*!
- * Reconstruct the tree topology using the optimal treelet, as determined by a
+ * Reconstruct the tree topology and bounding volumes using the optimal treelet, as determined by a
  * a partition of the its nodes into left and right for every subtree
  *
  * \param nleaves The size of the treelet
@@ -861,8 +861,7 @@ __device__ int numberOfSetBits(int i)
  * \tparam n The maximum number treelet leaves
  *
  * \post d_tree_parent_sib will contain the right parent-sibling information, and
- *       d_tree_nodes will have updated parent-child relationships and skip pointers
- *       Bounding volumes still need to be updated
+ *       d_tree_nodes will contain updated parent-child relationships and bounding volumes
  */
 template<unsigned int n, class BVHNode>
 __device__ void reconstructTreelet(
@@ -909,6 +908,12 @@ __device__ void reconstructTreelet(
 
     // an actual index per traversed node
     unsigned int node_indices[2*n-2];
+
+    // the bounding volumes of the treelet leaves
+    typename BVHNode::bounding_volume_type bounding_volumes[n];
+
+    for (unsigned int i = 0; i < nleaves; ++i)
+        bounding_volumes[i] = d_tree_nodes[leaves[i]].bounding_volume;
 
     // load the (internal) root node as active parent
     unsigned int cur_parent = internal_nodes[n_internal++];
@@ -976,8 +981,11 @@ __device__ void reconstructTreelet(
         // the currently active subset which maximizes the cost function
         cur_set = active_set[imax];
 
-        // is this subset a single node, i.e., a leaf?
-        if (numberOfSetBits(cur_set) > 1)
+        // the size of the subtree
+        unsigned int cur_size = numberOfSetBits(cur_set);
+
+        // is this subset a single node, i.e., a treelet leaf?
+        if (cur_size > 1)
             {
             // no, pop the current set from the active list
             is_active[imax] = 0;
@@ -1000,6 +1008,9 @@ __device__ void reconstructTreelet(
             // now that the node index has materialized, fill in the node_indices array
             unsigned int cur_ptr = active_sibling_ptr[imax];
             node_indices[cur_ptr] = cur_node_idx;
+
+            // update bounding volume with volume that fits the subtree
+            d_tree_nodes[cur_node_idx].bounding_volume = merge<n>(bounding_volumes, cur_set);
 
             // the internal node will become the next parent
             cur_parent_sib.x = cur_node_idx;
@@ -1069,49 +1080,6 @@ __device__ void reconstructTreelet(
     for (unsigned int i = 0; i < n_subsets; ++i)
         {
         d_tree_parent_sib[node_indices[i]].y |= (node_indices[siblings[i]] << 1);
-        }
-    }
-
-/*!
- * Update the bounding volumes of all internal node of the treelet
- *
- * \param nleaves The size of the treelet
- * \param internal_nodes Array of internal treelet nodes
- * \param d_tree_nodes The nodes of the tree
- * \param d_tree_parent_sib the parent sibling relationship array
- * \tparam The type of BVH node
- *
- * \pre the tree topologye is current, so reconstructTreelet() has been called prior to this funciton
- * \post d_tree_nodes will contain updated bounding volumes
- *
- * Iterate over the internal nodes, merging their children's bounding volumes into the current node's volume,
- * and repeat until information has propagated to the root
- */
-template<class BVHNode>
-__device__ void propagateTreeletBoundingVolumes(
-    const unsigned int nleaves,
-    const unsigned int *internal_nodes,
-    BVHNode *d_tree_nodes,
-    const uint2 *d_tree_parent_sib)
-    {
-    // the longest possible propagation distance is when all internal nodes are arranged in a chain,
-    // the path has length nleaves-1
-    for (unsigned int i = 0; i < nleaves-1; ++i)
-        {
-        // iterate over all internal nodes
-        for (unsigned int j = 0; j < nleaves-1; ++j)
-            {
-            unsigned int cur_node_idx = internal_nodes[j];
-
-            unsigned int left_child = d_tree_nodes[cur_node_idx].np_child_masked >> 1;
-            unsigned int right_child = d_tree_parent_sib[left_child].y >> 1;
-
-            typename BVHNode::bounding_volume_type new_bv = merge(d_tree_nodes[left_child].bounding_volume,
-                                                              d_tree_nodes[right_child].bounding_volume);
-
-            // set this node's bounding volume
-            d_tree_nodes[cur_node_idx].bounding_volume = new_bv;
-            }
         }
     }
 
@@ -1330,13 +1298,6 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                 d_tree_nodes,
                 d_tree_parent_sib,
                 d_tree_cost);
-
-            // update the bounding volumes of the treelet
-            propagateTreeletBoundingVolumes(
-                nleaves,
-                internal_nodes,
-                d_tree_nodes,
-                d_tree_parent_sib);
 
             // store cost for further accumulation
             d_tree_cost[cur_node_idx] = c_opt[size-1];

@@ -23,14 +23,6 @@
 
 #include "ConvexHull3D.h"
 
-//! A relative convergence criterion for iteratively optimizing tight fitting OBBs
-// smaller epsilon will lead to tighter OBB's at the expense of increased
-// tree building time
-#define GPU_EPS_CONVERGENCE Scalar(1e-6)
-
-//! Currently a compile time constant
-const unsigned int GPU_MAX_OBB_VERTS = 16;
-
 /*! \file OBB.h
     \brief Basic OBB routines
 */
@@ -924,12 +916,11 @@ DEVICE inline Scalar orient(Vector p, Vector q, Vector r, Vector s)
     \param radius the radius of every particle sphere
     \param dim Dimensionality of the system
  */
-template<unsigned int Nvert, class Vector, class VectorIt = const Vector *>
+template<class Vector, class VectorIt = const Vector *>
 DEVICE inline void compute_obb_from_spheres(OBB& obb,
     VectorIt pos,
     unsigned int n,
-    const Scalar radius,
-    const unsigned dim)
+    const Scalar radius)
     {
     // compute mean
     vec3<Scalar> mean = vec3<Scalar>(0,0,0);
@@ -938,224 +929,53 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
 
     vec3<Scalar> axis[3];
 
-    if (dim == 3)
+    // compute covariance matrix
+    typedef Eigen::Matrix<Scalar, 3, 3> matrix_t;
+    matrix_t m;
+    m(0,0) = m(0,1) = m(0,2) = m(1,0) = m(1,1) = m(1,2) = m(2,0) = m(2,1) = m(2,2) = 0.0;
+
+    for (unsigned int i = 0; i < n; ++i)
         {
-        // compute covariance matrix
-        typedef Eigen::Matrix<Scalar, 3, 3> matrix_t;
-        matrix_t m;
-        m(0,0) = m(0,1) = m(0,2) = m(1,0) = m(1,1) = m(1,2) = m(2,0) = m(2,1) = m(2,2) = 0.0;
+        mean += vec3<Scalar>(pos[i])/(Scalar)n;
+        }
 
-        if (n >= 3 && n <= Nvert)
-            {
-            // compute the convex hull
-            ConvexHull3D<Nvert,Vector, decltype(pos)> ch(pos, n);
-            const unsigned int nhull = ch.getStorageSize();
-            unsigned int I[nhull];
-            unsigned int J[nhull];
-            unsigned int K[nhull];
+    for (unsigned int i = 0; i < n; ++i)
+        {
+        vec3<Scalar> dr = vec3<Scalar>(pos[i]) - mean;
 
-            ch.compute(I,J,K);
-            unsigned int nfacets = ch.getNumFacets();
+        m(0,0) += dr.x * dr.x/(Scalar)n;
+        m(1,0) += dr.y * dr.x/(Scalar)n;
+        m(2,0) += dr.z * dr.x/(Scalar)n;
 
-            Scalar hull_area(0.0);
-            vec3<Scalar> hull_centroid(0.0,0.0,0.0);
+        m(0,1) += dr.x * dr.y/(Scalar)n;
+        m(1,1) += dr.y * dr.y/(Scalar)n;
+        m(2,1) += dr.z * dr.y/(Scalar)n;
 
-            for (unsigned int i = 0; i < nfacets; ++i)
-                {
-                // triangle vertices
-                vec3<Scalar> p(pos[I[i]]);
-                vec3<Scalar> q(pos[J[i]]);
-                vec3<Scalar> r(pos[K[i]]);
+        m(0,2) += dr.x * dr.z/(Scalar)n;
+        m(1,2) += dr.y * dr.z/(Scalar)n;
+        m(2,2) += dr.z * dr.z/(Scalar)n;
+        }
 
-                vec3<Scalar> centroid = Scalar(1./3.)*(p+q+r);
-                vec3<Scalar> crossp = cross(q-p,r-p);
-                Scalar area = Scalar(0.5)*fast::sqrt(dot(crossp,crossp));
-                hull_area += area;
-                hull_centroid += area*centroid;
+    // compute normalized eigenvectors
+    Eigen::SelfAdjointEigenSolver<matrix_t> es;
+    es.computeDirect(m);
 
-                Scalar fac = area/12.0;
-                m(0,0) += fac*(9.0*centroid.x*centroid.x + p.x*p.x + q.x*q.x + r.x*r.x);
-                m(0,1) += fac*(9.0*centroid.x*centroid.y + p.x*p.y + q.x*q.y + r.x*r.y);
-                m(0,2) += fac*(9.0*centroid.x*centroid.z + p.x*p.z + q.x*q.z + r.x*r.z);
-                m(1,0) += fac*(9.0*centroid.y*centroid.x + p.y*p.x + q.y*q.x + r.y*r.x);
-                m(1,1) += fac*(9.0*centroid.y*centroid.y + p.y*p.y + q.y*q.y + r.y*r.y);
-                m(1,2) += fac*(9.0*centroid.y*centroid.z + p.y*p.z + q.y*q.z + r.y*r.z);
-                m(2,0) += fac*(9.0*centroid.z*centroid.x + p.z*p.x + q.z*q.x + r.z*r.x);
-                m(2,1) += fac*(9.0*centroid.z*centroid.y + p.z*p.y + q.z*q.y + r.z*r.y);
-                m(2,2) += fac*(9.0*centroid.z*centroid.z + p.z*p.z + q.z*q.z + r.z*r.z);
-                }
-
-            hull_centroid /= hull_area;
-            m(0,0) = m(0,0)/hull_area - hull_centroid.x*hull_centroid.x;
-            m(0,1) = m(0,1)/hull_area - hull_centroid.x*hull_centroid.y;
-            m(0,2) = m(0,2)/hull_area - hull_centroid.x*hull_centroid.z;
-            m(1,0) = m(1,0)/hull_area - hull_centroid.y*hull_centroid.x;
-            m(1,1) = m(1,1)/hull_area - hull_centroid.y*hull_centroid.y;
-            m(1,2) = m(1,2)/hull_area - hull_centroid.y*hull_centroid.z;
-            m(2,0) = m(2,0)/hull_area - hull_centroid.z*hull_centroid.x;
-            m(2,1) = m(2,1)/hull_area - hull_centroid.z*hull_centroid.y;
-            m(2,2) = m(2,2)/hull_area - hull_centroid.z*hull_centroid.z;
-
-            mean = hull_centroid;
-            }
-        else
-            {
-            for (unsigned int i = 0; i < n; ++i)
-                {
-                mean += vec3<Scalar>(pos[i])/(Scalar)n;
-                }
-
-            // degenerate case
-            for (unsigned int i = 0; i < n; ++i)
-                {
-                vec3<Scalar> dr = vec3<Scalar>(pos[i]) - mean;
-
-                m(0,0) += dr.x * dr.x/(Scalar)n;
-                m(1,0) += dr.y * dr.x/(Scalar)n;
-                m(2,0) += dr.z * dr.x/(Scalar)n;
-
-                m(0,1) += dr.x * dr.y/(Scalar)n;
-                m(1,1) += dr.y * dr.y/(Scalar)n;
-                m(2,1) += dr.z * dr.y/(Scalar)n;
-
-                m(0,2) += dr.x * dr.z/(Scalar)n;
-                m(1,2) += dr.y * dr.z/(Scalar)n;
-                m(2,2) += dr.z * dr.z/(Scalar)n;
-                }
-            }
-
-        // compute normalized eigenvectors
-        Eigen::SelfAdjointEigenSolver<matrix_t> es;
-        es.computeDirect(m);
-
-        if (es.info() != Eigen::Success)
-            {
-            // numerical issue, set r to identity matrix
-            r.row0 = vec3<Scalar>(1,0,0);
-            r.row1 = vec3<Scalar>(0,1,0);
-            r.row2 = vec3<Scalar>(0,0,1);
-            }
-        else
-            {
-            auto eigen_vec = es.eigenvectors();
-            r.row0 = vec3<Scalar>(eigen_vec(0,0),eigen_vec(0,1),eigen_vec(0,2));
-            r.row1 = vec3<Scalar>(eigen_vec(1,0),eigen_vec(1,1),eigen_vec(1,2));
-            r.row2 = vec3<Scalar>(eigen_vec(2,0),eigen_vec(2,1),eigen_vec(2,2));
-            }
-
-        vec3<Scalar> cur_axis[3];
-
-        cur_axis[0] = vec3<Scalar>(r.row0.x, r.row1.x, r.row2.x);
-        cur_axis[1] = vec3<Scalar>(r.row0.y, r.row1.y, r.row2.y);
-        cur_axis[2] = vec3<Scalar>(r.row0.z, r.row1.z, r.row2.z);
-
-        // iteratively improve OBB
-        bool done = false;
-        Scalar min_V = FLT_MAX;
-        unsigned int min_axis = 0;
-        vec2<Scalar> min_axes_2d[2];
-
-        while (! done)
-            {
-            bool updated_axes = false;
-
-            // test if a projection normal to any axis reduces the volume of the bounding box
-            for (unsigned int test_axis = 0; test_axis < 3; ++test_axis)
-                {
-                vec2<Scalar> new_axes_2d[2];
-                vec2<Scalar> c;
-
-                Scalar area = MinAreaRect<Vector>(pos, cur_axis, test_axis, n, c, new_axes_2d);
-
-                // handle special case, in 2D an axis in the plane should not be minimizing
-                if (area == 0.0)
-                    continue;
-
-                // find extent along test_axis
-                Scalar proj_min = FLT_MAX;
-                Scalar proj_max = -FLT_MAX;
-                for (unsigned int i = 0; i < n; ++i)
-                    {
-                    Scalar proj = dot(vec3<Scalar>(pos[i]), cur_axis[test_axis]);
-
-                    if (proj > proj_max) proj_max = proj;
-                    if (proj < proj_min) proj_min = proj;
-                    }
-                Scalar extent = proj_max - proj_min;
-
-                // bounding box volume
-                Scalar V = extent*area;
-
-                Scalar eps_rel(GPU_EPS_CONVERGENCE); // convergence criterion
-                if (V < min_V)
-                    {
-                    if (min_V-V < eps_rel*min_V)
-                        done = true;
-
-                    min_V = V;
-                    min_axes_2d[0] = new_axes_2d[0];
-                    min_axes_2d[1] = new_axes_2d[1];
-                    min_axis = test_axis;
-                    updated_axes = true;
-                    }
-                } // end loop over test axis
-
-            if (updated_axes)
-                {
-                vec3<Scalar> new_axis[3];
-
-                // test axis stays the same
-                new_axis[min_axis] = cur_axis[min_axis];
-
-                // rotate axes
-                for (unsigned int j = 0 ; j < 3; j++)
-                    {
-                    if (j != min_axis)
-                        {
-                        for (unsigned int l = j+1; l < 3; l++)
-                            if (l != min_axis)
-                                {
-                                new_axis[l] = min_axes_2d[0].x*cur_axis[j]+min_axes_2d[0].y*cur_axis[l];
-                                new_axis[j] = min_axes_2d[1].x*cur_axis[j]+min_axes_2d[1].y*cur_axis[l];
-                                }
-                        }
-                    }
-
-                // update axes
-                for (unsigned int j = 0; j < 3; j++)
-                    cur_axis[j] = new_axis[j];
-                }
-            else
-                {
-                // no direction leads to an improvement, we are done
-                done = true;
-                }
-            }
-
-        // update rotation matrix
-        r.row0 = cur_axis[0]; r.row1 = cur_axis[1]; r.row2 = cur_axis[2];
-        r = transpose(r);
+    if (es.info() != Eigen::Success)
+        {
+        // numerical issue, set r to identity matrix
+        r.row0 = vec3<Scalar>(1,0,0);
+        r.row1 = vec3<Scalar>(0,1,0);
+        r.row2 = vec3<Scalar>(0,0,1);
         }
     else
         {
-        // in 2 dimensions, directly minimize the rectangle area
-        vec2<Scalar> new_axes_2d[2];
-        vec2<Scalar> c;
-
-        vec3<Scalar> cur_axis[3];
-        cur_axis[0] = vec3<Scalar>(1,0,0);
-        cur_axis[1] = vec3<Scalar>(0,1,0);
-        cur_axis[2] = vec3<Scalar>(0,0,1);
-        unsigned int test_axis = 2; // z axis
-
-        MinAreaRect<Vector>(pos, cur_axis, test_axis, n, c, new_axes_2d);
-        r.row0 = vec3<Scalar>(new_axes_2d[0].x,new_axes_2d[0].y,0);
-        r.row1 = vec3<Scalar>(new_axes_2d[1].x,new_axes_2d[1].y,0);
-        r.row2 = vec3<Scalar>(0,0,1);
-        r = transpose(r);
+        auto eigen_vec = es.eigenvectors();
+        r.row0 = vec3<Scalar>(eigen_vec(0,0),eigen_vec(0,1),eigen_vec(0,2));
+        r.row1 = vec3<Scalar>(eigen_vec(1,0),eigen_vec(1,1),eigen_vec(1,2));
+        r.row2 = vec3<Scalar>(eigen_vec(2,0),eigen_vec(2,1),eigen_vec(2,2));
         }
 
-    // make sure that the coordinate system is proper
+        // make sure that the coordinate system is proper
     if (r.det() < Scalar(0.0))
         {
         // swap column two and three
@@ -1204,39 +1024,58 @@ DEVICE inline void compute_obb_from_spheres(OBB& obb,
     obb.rotation = quat<Scalar>(r);
     }
 
-//! Merge two OBBs
-DEVICE inline OBB merge(const OBB& a, const OBB& b)
+/*! Merge together OBBs in a union
+    \param obbs The array of OBBs
+    \param bitset A bitset corresponding to the OBBs to merge
+
+    \tparam n maximum number of OBBs to merge
+
+    \returns a tight fit to the union of the OBBs
+*/
+template<unsigned int n>
+DEVICE inline OBB merge(const OBB *obbs, const int bitset)
     {
     // corners of the two OBBs
-    vec3<Scalar> corners[16];
+    vec3<Scalar> corners[n*8];
 
-    rotmat3<OverlapReal> ra(conj(a.rotation));
-    corners[0] = a.center + ra.row0*a.lengths.x + ra.row1*a.lengths.y + ra.row2*a.lengths.z;
-    corners[1] = a.center - ra.row0*a.lengths.x + ra.row1*a.lengths.y + ra.row2*a.lengths.z;
-    corners[2] = a.center + ra.row0*a.lengths.x - ra.row1*a.lengths.y + ra.row2*a.lengths.z;
-    corners[3] = a.center - ra.row0*a.lengths.x - ra.row1*a.lengths.y + ra.row2*a.lengths.z;
-    corners[4] = a.center + ra.row0*a.lengths.x + ra.row1*a.lengths.y - ra.row2*a.lengths.z;
-    corners[5] = a.center - ra.row0*a.lengths.x + ra.row1*a.lengths.y - ra.row2*a.lengths.z;
-    corners[6] = a.center + ra.row0*a.lengths.x - ra.row1*a.lengths.y - ra.row2*a.lengths.z;
-    corners[7] = a.center - ra.row0*a.lengths.x - ra.row1*a.lengths.y - ra.row2*a.lengths.z;
+    unsigned int n_obb = 0;
 
-    rotmat3<OverlapReal> rb(conj(b.rotation));
-    corners[8] = b.center + rb.row0*b.lengths.x + rb.row1*b.lengths.y + rb.row2*b.lengths.z;
-    corners[9] = b.center - rb.row0*b.lengths.x + rb.row1*b.lengths.y + rb.row2*b.lengths.z;
-    corners[10] = b.center + rb.row0*b.lengths.x - rb.row1*b.lengths.y + rb.row2*b.lengths.z;
-    corners[11] = b.center - rb.row0*b.lengths.x - rb.row1*b.lengths.y + rb.row2*b.lengths.z;
-    corners[12] = b.center + rb.row0*b.lengths.x + rb.row1*b.lengths.y - rb.row2*b.lengths.z;
-    corners[13] = b.center - rb.row0*b.lengths.x + rb.row1*b.lengths.y - rb.row2*b.lengths.z;
-    corners[14] = b.center + rb.row0*b.lengths.x - rb.row1*b.lengths.y - rb.row2*b.lengths.z;
-    corners[15] = b.center - rb.row0*b.lengths.x - rb.row1*b.lengths.y - rb.row2*b.lengths.z;
+    for (unsigned int i = 0; i < n; ++i)
+        {
+        if (bitset & 1 << i)
+            {
+            const OBB& cur_obb(obbs[i]);
+            rotmat3<OverlapReal> r(conj(cur_obb.rotation));
+            corners[n_obb*8+0] = cur_obb.center + r.row0*cur_obb.lengths.x + r.row1*cur_obb.lengths.y + r.row2*cur_obb.lengths.z;
+            corners[n_obb*8+1] = cur_obb.center - r.row0*cur_obb.lengths.x + r.row1*cur_obb.lengths.y + r.row2*cur_obb.lengths.z;
+            corners[n_obb*8+2] = cur_obb.center + r.row0*cur_obb.lengths.x - r.row1*cur_obb.lengths.y + r.row2*cur_obb.lengths.z;
+            corners[n_obb*8+3] = cur_obb.center - r.row0*cur_obb.lengths.x - r.row1*cur_obb.lengths.y + r.row2*cur_obb.lengths.z;
+            corners[n_obb*8+4] = cur_obb.center + r.row0*cur_obb.lengths.x + r.row1*cur_obb.lengths.y - r.row2*cur_obb.lengths.z;
+            corners[n_obb*8+5] = cur_obb.center - r.row0*cur_obb.lengths.x + r.row1*cur_obb.lengths.y - r.row2*cur_obb.lengths.z;
+            corners[n_obb*8+6] = cur_obb.center + r.row0*cur_obb.lengths.x - r.row1*cur_obb.lengths.y - r.row2*cur_obb.lengths.z;
+            corners[n_obb*8+7] = cur_obb.center - r.row0*cur_obb.lengths.x - r.row1*cur_obb.lengths.y - r.row2*cur_obb.lengths.z;
+
+            n_obb++;
+            }
+        }
 
     OBB result;
 
     // compute an OBB given the corners of the two OBBs as points
-    unsigned int dim = 3;
-    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, vec3<Scalar> >(result, &corners[0], 16, 0.0, dim);
+    compute_obb_from_spheres<vec3<Scalar> >(result, &corners[0], n_obb*8, 0.0);
 
     return result;
+    }
+
+//! Merge two OBBs
+DEVICE inline OBB merge(const OBB& a, const OBB& b)
+    {
+    OBB obbs[2];
+    obbs[0] = a;
+    obbs[1] = b;
+
+    int bitset = 3;
+    return merge<2>(obbs, bitset);
     }
 
 //! A 'point' shape, just to get BVH working with point particles (doesn't provide overlap testing ..)
@@ -1298,7 +1137,7 @@ DEVICE inline void computeBoundingVolume(
 
     auto verts = PermutationMap<Vector, const unsigned int *>(postype, map_tree_pid+start_idx);
 
-    compute_obb_from_spheres<GPU_MAX_OBB_VERTS, Vector>(obb, verts, n, Scalar(0.5)*shape.getCircumsphereDiameter(), dim);
+    compute_obb_from_spheres<Vector>(obb, verts, n, Scalar(0.5)*shape.getCircumsphereDiameter());
     }
 
 }; // end namespace detail
@@ -1306,5 +1145,4 @@ DEVICE inline void computeBoundingVolume(
 }; // end namespace hpmc
 
 #undef DEVICE
-#undef GPU_EPS_CONVERGENCE
 #endif //__OBB_H__

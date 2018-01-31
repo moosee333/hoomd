@@ -330,7 +330,6 @@ HOSTDEVICE inline bool contains(const AABB& a, const AABB& b)
     #endif
     }
 
-
 //! Merge two AABBs
 /*! \param a First AABB
     \param b Second AABB
@@ -368,6 +367,38 @@ HOSTDEVICE inline AABB merge(const AABB& a, const AABB& b)
     #endif
 
     return new_aabb;
+    }
+
+/*! Merge together n AABBs in a union
+    \param aabbs The array of AABBs
+    \param bitset The bitset of the AABBs we merge
+
+    \tparam n maximum number of AABBs to merge
+
+    \returns the union of AABBs
+*/
+template<unsigned int n>
+HOSTDEVICE inline AABB merge(const AABB *aabbs, const int bitset)
+    {
+    AABB result;
+
+    bool init = true;
+
+    for (unsigned int i = 0; i < n; ++i)
+        {
+        if (bitset & (1 << i))
+            {
+            if (init)
+                {
+                result = aabbs[i];
+                init = false;
+                }
+            else
+                result = merge(result, aabbs[i]);
+            }
+        }
+
+    return result;
     }
 
 #ifdef __CUDA_ARCH__
@@ -444,7 +475,6 @@ __device__ inline void AtomicMin(float * const address, const float value)
         } while (assumed != old);
     }
 
-template <>
 __device__ inline void AtomicMin(double * const address, const double value)
     {
     if (* address <= value)
