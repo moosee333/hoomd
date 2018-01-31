@@ -1103,7 +1103,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
         uint2 cur_parent_sib = d_tree_parent_sib[cur_node_idx];
         unsigned int cur_parent = cur_parent_sib.x;
 
-        // then, we do an atomicAdd on the lock to see if we need to process the parent AABBs
+        // then, we do an atomicAdd on the lock to see if we need to process the parent nodes
         // check to make sure the parent is bigger than nleafs, or else the node lock always fails
         // so that we terminate the thread
         lock_key = (cur_parent >= nleafs) ? atomicAdd(d_node_locks + cur_parent - nleafs, 1) : 0;
@@ -1111,6 +1111,9 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
         // process the node
         if (lock_key == 1)
             {
+            // the current parent becomes the treelet root
+            cur_node_idx = cur_parent;
+
             // now we wish to find the optimal arrangment of the subtree formed by this node
             // and its immediate descendants, which we will search by brute-force
 
@@ -1121,7 +1124,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             unsigned int internal_nodes[n];
 
             // construct the initial treelet, computing the surface area of leaf nodes to be addded
-            unsigned int nleaves = formTreelet<n>(cur_parent, leaves, internal_nodes, d_tree_parent_sib, d_tree_nodes);
+            unsigned int nleaves = formTreelet<n>(cur_node_idx, leaves, internal_nodes, d_tree_parent_sib, d_tree_nodes);
 
             // now we have nleaves consecutive leaves stored in the leaves array
             // find the optimal partitioning according to the surface area heuristic
@@ -1228,6 +1231,7 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                         cur_p_bar = (cur_p_bar - delta_bar) & s_bar;
                         } while (cur_p_bar);
 
+                    #if 0
                     // get number of particles stored in the leaf nodes of this subset
                     unsigned int total_num_particles = 0;
                     for (unsigned int i = 0; i < nleaves; ++i)
@@ -1242,9 +1246,11 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                                 total_num_particles += np_child_masked >> 1;
                             }
                         }
+                    #endif
 
                     // compute the final surface area heuristic
-                    c_opt[s_bar] = min(C_i*areas[s_bar] + c,C_t*areas[s_bar]*total_num_particles);
+//                    c_opt[s_bar] = min(C_i*areas[s_bar] + c,C_t*areas[s_bar]*total_num_particles);
+                    c_opt[s_bar] = C_i*areas[s_bar] + c;
                     p_opt_bar[s_bar] = p_bar;
                     } // end loop over subsets
                 } // end loop over size of subset
@@ -1257,9 +1263,6 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
 
             // store cost for further accumulation
             d_tree_cost[cur_node_idx] = c_opt[size-1];
-
-            // bump the current node one level
-            cur_node_idx = cur_parent;
             }
         }
     while (lock_key == 1);
