@@ -1389,7 +1389,7 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
 
         int run_block_size = min(block_size,max_block_size);
 
-        gpu_bvh_optimize_treelets_kernel<BVHNode,7><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
+        gpu_bvh_optimize_treelets_kernel<BVHNode,5><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
                                                                              d_tree_nodes,
                                                                              d_tree_parent_sib,
                                                                              ntypes,
@@ -1433,7 +1433,7 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
 
         int run_block_size = min(block_size,max_block_size);
 
-        gpu_bvh_optimize_treelets_kernel<BVHNode,7><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
+        gpu_bvh_optimize_treelets_kernel<BVHNode,9><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
                                                                              d_tree_nodes,
                                                                              d_tree_parent_sib,
                                                                              ntypes,
