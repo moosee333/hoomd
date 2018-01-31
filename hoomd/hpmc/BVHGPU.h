@@ -993,15 +993,14 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::optimizeTree()
     // reallocate array if necessary
     m_tree_cost.resize(m_n_node*m_iterations);
 
+    ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
+    ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
+
+    ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::readwrite);
+    ArrayHandle<Scalar> d_tree_cost(m_tree_cost, access_location::device, access_mode::overwrite);
+
     for (unsigned int i = 0; i < m_iterations; ++i)
         {
-        ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
-        ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
-
-        ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::readwrite);
-        ArrayHandle<Scalar> d_tree_cost(m_tree_cost, access_location::device, access_mode::overwrite);
-
-        // Rotate the treelets
         m_tuner_optimize->begin();
         detail::gpu_bvh_optimize_treelets<BVHNode>(d_node_locks.data,
                                d_tree_nodes.data,
@@ -1019,20 +1018,25 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::optimizeTree()
         if (m_exec_conf->isCUDAErrorCheckingEnabled())
             CHECK_CUDA_ERROR();
         m_tuner_optimize->end();
+        }
 
-        // Update the bounding volumes
+    // postprocess, update ropes
+
+    if (m_iterations)
+        {
         m_tuner_bubble->begin();
         detail::gpu_bvh_bubble_bounding_volumes<BVHNode>(d_node_locks.data,
-                               d_tree_nodes.data,
-                               d_tree_parent_sib.data,
-                               m_pdata->getNTypes(),
-                               m_n_leaf,
-                               m_n_internal,
-                               m_tuner_bubble->getParam());
+                                    d_tree_nodes.data,
+                                    d_tree_parent_sib.data,
+                                    m_pdata->getNTypes(),
+                                    m_n_leaf,
+                                    m_n_internal,
+                                    m_tuner_bubble->getParam());
         if (m_exec_conf->isCUDAErrorCheckingEnabled())
             CHECK_CUDA_ERROR();
         m_tuner_bubble->end();
         }
+
     if (m_prof) m_prof->pop(m_exec_conf);
     }
 

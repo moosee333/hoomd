@@ -830,9 +830,6 @@ __device__ unsigned int formTreelet(unsigned int root,
         if (is_active[i])
             leaves[n_leaves++] = active_set[i]; // add it to the output
 
-    for (unsigned int i = 1; i < n_leaves; ++i)
-        if (leaves[0] == leaves[i])
-            printf("== %d %d %d\n", i, leaves[i], n_leaves);
     return n_leaves;
     }
 
@@ -849,23 +846,26 @@ __device__ int numberOfSetBits(int i)
     }
 
 /*!
- * Reconstruct the tree using the optimal treelet, given a partition of the its nodes into left and right subtree
+ * Reconstruct the tree topology using the optimal treelet, as determined by a
+ * a partition of the its nodes into left and right for every subtree
  *
- * \param root the index of the treelet root
  * \param nleaves The size of the treelet
  * \param leaves The array that holds nleaves consecutive leaves
  * \param internal_nodes The array that holds nleaves-1 internal nodes
  * \param p_opt_bar The optimal partition as a bitset
  * \param c_opt The optimal subset costs
+ * \param d_tree_nodes the tree nodes array, holding child pointers
  * \param d_tree_parent_sib the parent sibling relationship array
+ * \param d_tree_cost The cost metric per node
  *
  * \tparam n The maximum number treelet leaves
  *
- * \post d_tree_parent_sib will contain the right parent-sibling information, and bounding volumes still need to be updated
- *
+ * \post d_tree_parent_sib will contain the right parent-sibling information, and
+ *       d_tree_nodes will have updated parent-child relationships and skip pointers
+ *       Bounding volumes still need to be updated
  */
 template<unsigned int n, class BVHNode>
-__device__ void reconstructTree(
+__device__ void reconstructTreelet(
     const unsigned int nleaves,
     const unsigned int *leaves,
     const unsigned int *internal_nodes,
@@ -873,7 +873,8 @@ __device__ void reconstructTree(
     const int *p_opt_bar,
     const Scalar *c_opt,
     BVHNode *d_tree_nodes,
-    uint2 *d_tree_parent_sib)
+    uint2 *d_tree_parent_sib,
+    Scalar *d_tree_cost)
     {
     // holds the current active subset
     int active_set[n];
@@ -882,9 +883,10 @@ __device__ void reconstructTree(
     // and a flag (.y) indicating whether we are a left node
     uint2 active_parent_sib[n];
 
-    // a pointer into siblings per activ set
+    // a pointer into siblings per active set
     unsigned int active_sibling_ptr[n];
 
+    // ==1 if this array element is in use
     unsigned int is_active[n];
 
     // the currently active subset
@@ -893,13 +895,16 @@ __device__ void reconstructTree(
     // load the corresponding partition
     int cur_p_bar = p_opt_bar[cur_set];
 
+    // and the cost
+    Scalar cur_cost = c_opt[cur_set];
+
     // current number of internal nodes
     unsigned int n_internal = 0;
 
     // count the number of subsets traversed (not including the root)
     unsigned int n_subsets = 0;
 
-    // a sibling node per traversed node
+    // a sibling node per traversed node, in the node_indices set
     unsigned int siblings[2*n-2];
 
     // an actual index per traversed node
@@ -909,6 +914,9 @@ __device__ void reconstructTree(
     unsigned int cur_parent = internal_nodes[n_internal++];
     uint2 cur_parent_sib;
     cur_parent_sib.x = cur_parent;
+
+    // assign the cost metric
+    d_tree_cost[cur_parent] = cur_cost;
 
     // reset the active set
     for (unsigned int i = 0; i < n; ++i)
@@ -982,12 +990,16 @@ __device__ void reconstructTree(
             cur_parent_sib = active_parent_sib[imax];
             d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
 
+            // assign tree cost
+            d_tree_cost[cur_node_idx] = c_opt[cur_set];
+
             // set the left child pointer on the parent if this is a left child
             if (cur_parent_sib.y & 1)
                 d_tree_nodes[cur_parent_sib.x].np_child_masked = 1 | (cur_node_idx << 1);
 
             // now that the node index has materialized, fill in the node_indices array
-            node_indices[active_sibling_ptr[imax]] = cur_node_idx;
+            unsigned int cur_ptr = active_sibling_ptr[imax];
+            node_indices[cur_ptr] = cur_node_idx;
 
             // the internal node will become the next parent
             cur_parent_sib.x = cur_node_idx;
@@ -1027,9 +1039,10 @@ __device__ void reconstructTree(
 
             // get the corresponding leaf node
             unsigned int i = 0;
-            while (cur_set >> 1)
+            unsigned int j = cur_set;
+            while (j >> 1)
                 {
-                cur_set >>= 1;
+                j >>= 1;
                 i++;
                 }
             unsigned int cur_node_idx = leaves[i];
@@ -1041,6 +1054,9 @@ __device__ void reconstructTree(
             cur_parent_sib = active_parent_sib[imax];
             d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
 
+            // assign leave node cost
+            d_tree_cost[cur_node_idx] = c_opt[cur_set];
+
             // set the left child pointer on the parent if this is a left child
             if (cur_parent_sib.y & 1)
                 d_tree_nodes[cur_parent_sib.x].np_child_masked = 1 | (cur_node_idx << 1);
@@ -1049,12 +1065,54 @@ __device__ void reconstructTree(
             }
         }
 
-    // all nodes have been processed, all that is left to do is to connect the siblings
+    // all nodes have been processed, connect the siblings (we'll save updateing ropes for postprocessing)
     for (unsigned int i = 0; i < n_subsets; ++i)
         {
         d_tree_parent_sib[node_indices[i]].y |= (node_indices[siblings[i]] << 1);
         }
+    }
 
+/*!
+ * Update the bounding volumes of all internal node of the treelet
+ *
+ * \param nleaves The size of the treelet
+ * \param internal_nodes Array of internal treelet nodes
+ * \param d_tree_nodes The nodes of the tree
+ * \param d_tree_parent_sib the parent sibling relationship array
+ * \tparam The type of BVH node
+ *
+ * \pre the tree topologye is current, so reconstructTreelet() has been called prior to this funciton
+ * \post d_tree_nodes will contain updated bounding volumes
+ *
+ * Iterate over the internal nodes, merging their children's bounding volumes into the current node's volume,
+ * and repeat until information has propagated to the root
+ */
+template<class BVHNode>
+__device__ void propagateTreeletBoundingVolumes(
+    const unsigned int nleaves,
+    const unsigned int *internal_nodes,
+    BVHNode *d_tree_nodes,
+    const uint2 *d_tree_parent_sib)
+    {
+    // the longest possible propagation distance is when all internal nodes are arranged in a chain,
+    // the path has length nleaves-1
+    for (unsigned int i = 0; i < nleaves-1; ++i)
+        {
+        // iterate over all internal nodes
+        for (unsigned int j = 0; j < nleaves-1; ++j)
+            {
+            unsigned int cur_node_idx = internal_nodes[j];
+
+            unsigned int left_child = d_tree_nodes[cur_node_idx].np_child_masked >> 1;
+            unsigned int right_child = d_tree_parent_sib[left_child].y >> 1;
+
+            typename BVHNode::bounding_volume_type new_bv = merge(d_tree_nodes[left_child].bounding_volume,
+                                                              d_tree_nodes[right_child].bounding_volume);
+
+            // set this node's bounding volume
+            d_tree_nodes[cur_node_idx].bounding_volume = new_bv;
+            }
+        }
     }
 
 //! Kernel to optimize subtrees (treelets), employing a bottom-up traversal
@@ -1261,8 +1319,24 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             // p_opt[size-1] contains the optimal partition of all nleaves leaves,
             // and c_opt[size-1] the associated cost
 
-            // update d_tree_parent_sib for the optimal treelet
-            reconstructTree<n>(nleaves, leaves, internal_nodes, size, p_opt_bar, c_opt, d_tree_nodes, d_tree_parent_sib);
+            // update the tree topology using the optimal treelet
+            reconstructTreelet<n>(
+                nleaves,
+                leaves,
+                internal_nodes,
+                size,
+                p_opt_bar,
+                c_opt,
+                d_tree_nodes,
+                d_tree_parent_sib,
+                d_tree_cost);
+
+            // update the bounding volumes of the treelet
+            propagateTreeletBoundingVolumes(
+                nleaves,
+                internal_nodes,
+                d_tree_nodes,
+                d_tree_parent_sib);
 
             // store cost for further accumulation
             d_tree_cost[cur_node_idx] = c_opt[size-1];
