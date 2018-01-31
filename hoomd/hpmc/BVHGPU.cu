@@ -1174,31 +1174,18 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
             // leaf is part of the left subtree
             int p_opt_bar[max_size];
 
+            // store the bounding volumes of the leaves in a temporary arrray
+            typename BVHNode::bounding_volume_type leaves_bv[n];
+
+            for (unsigned int i = 0; i < nleaves; ++i)
+                leaves_bv[i] = d_tree_nodes[leaves[i]].bounding_volume;
+
             // iterate over subsets of leaves
             // _bar indicates bitset
             for (int s_bar = 1; s_bar < size; ++s_bar)
                 {
-                typename BVHNode::bounding_volume_type bv;
-                bool init = true;
-                for (unsigned int i = 0; i < nleaves; ++i)
-                    {
-                    unsigned int cur_leaf = leaves[i];
-                    // if this leaf is in the subset
-                    if (s_bar & (1 << i))
-                        {
-                        if (init)
-                            {
-                            // initialize with leave bounding volume
-                            bv = d_tree_nodes[cur_leaf].bounding_volume;
-                            init = false;
-                            }
-                        else
-                            {
-                            // merge with current bounding volume
-                            bv = merge(bv, d_tree_nodes[cur_leaf].bounding_volume);
-                            }
-                        }
-                    }
+                // get the union bounding volume for this subset
+                typename BVHNode::bounding_volume_type bv = merge<n>(leaves_bv, s_bar);
 
                 // store the area of the union in local memory
                 areas[s_bar] = bv.getSurfaceArea();
