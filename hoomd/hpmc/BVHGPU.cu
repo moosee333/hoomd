@@ -1377,13 +1377,57 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
     {
     cudaMemset(d_node_locks, 0, sizeof(unsigned int)*ninternal);
 
-    if (n == 7)
+    if (n == 5)
+        {
+        static unsigned int max_block_size = UINT_MAX;
+        if (max_block_size == UINT_MAX)
+            {
+            cudaFuncAttributes attr;
+            cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_optimize_treelets_kernel<BVHNode,5>);
+            max_block_size = attr.maxThreadsPerBlock;
+            }
+
+        int run_block_size = min(block_size,max_block_size);
+
+        gpu_bvh_optimize_treelets_kernel<BVHNode,7><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
+                                                                             d_tree_nodes,
+                                                                             d_tree_parent_sib,
+                                                                             ntypes,
+                                                                             nleafs,
+                                                                             C_i,
+                                                                             C_l,
+                                                                             C_t,
+                                                                             d_tree_cost);
+        }
+    else if (n == 7)
         {
         static unsigned int max_block_size = UINT_MAX;
         if (max_block_size == UINT_MAX)
             {
             cudaFuncAttributes attr;
             cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_optimize_treelets_kernel<BVHNode,7>);
+            max_block_size = attr.maxThreadsPerBlock;
+            }
+
+        int run_block_size = min(block_size,max_block_size);
+
+        gpu_bvh_optimize_treelets_kernel<BVHNode,7><<<nleafs/run_block_size + 1, run_block_size>>>(d_node_locks,
+                                                                             d_tree_nodes,
+                                                                             d_tree_parent_sib,
+                                                                             ntypes,
+                                                                             nleafs,
+                                                                             C_i,
+                                                                             C_l,
+                                                                             C_t,
+                                                                             d_tree_cost);
+        }
+    else if (n == 9)
+        {
+        static unsigned int max_block_size = UINT_MAX;
+        if (max_block_size == UINT_MAX)
+            {
+            cudaFuncAttributes attr;
+            cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_optimize_treelets_kernel<BVHNode,9>);
             max_block_size = attr.maxThreadsPerBlock;
             }
 
