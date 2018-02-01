@@ -895,7 +895,7 @@ class clusters(_updater):
     #     run(1e4)
     #     tuner.update()
     # ~~~~~~~~~~~~
-    def __init__(self, mc, seed, period=1, bvh_type="AABB"):
+    def __init__(self, mc, seed, period=1, bvh_type="AABB", leaf_capacity=4):
         hoomd.util.print_status_line();
 
         if not isinstance(mc, integrate.mode_hpmc):
@@ -951,7 +951,6 @@ class clusters(_updater):
             cls = getattr(_hpmc, "UpdaterClustersGPU"+shape+bvh_type)
 
             bvh_cls = getattr(_hpmc,"BVHGPU"+bvh_type+shape)
-            leaf_capacity=4
             self.cpp_bvh = bvh_cls(hoomd.context.current.system_definition,leaf_capacity, mc.cpp_integrator)
             hoomd.context.current.system.overwriteCompute(self.cpp_bvh, "auto_bvh_"+bvh_type)
 
