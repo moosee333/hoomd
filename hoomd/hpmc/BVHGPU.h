@@ -918,6 +918,7 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::mergeLeafParticles()
     if (m_prof) m_prof->pop(m_exec_conf);
     }
 
+#include <bitset>
 /*!
  * \post Parent-child-sibling relationships are established between nodes.
  * \note This function should always be called alongside bubbleBoundingVolumes to generate a complete hierarchy.

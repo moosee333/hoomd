@@ -287,10 +287,10 @@ cudaError_t gpu_bvh_morton_sort(uint64_t *d_morton_types,
 __device__ inline int delta(const uint32_t *d_morton_codes,
                             unsigned int i,
                             unsigned int j,
-                            int min_idx,
-                            int max_idx)
+                            unsigned int min_idx,
+                            unsigned int max_idx)
     {
-    if (j > max_idx || j < min_idx)
+    if (j > max_idx || j < min_idx || i < min_idx || i > max_idx )
         {
         return -1;
         }
@@ -327,13 +327,14 @@ __device__ inline int delta(const uint32_t *d_morton_codes,
 __device__ inline uint2 determineRange(const uint32_t *d_morton_codes,
                                        const int min_idx,
                                        const int max_idx,
-                                       const int idx)
+                                       const int idx,
+                                       int &d)
     {
     int forward_prefix = delta(d_morton_codes, idx, idx+1, min_idx, max_idx);
     int backward_prefix = delta(d_morton_codes, idx, idx-1, min_idx, max_idx);
 
     // get direction of the range based on sign
-    int d = ((forward_prefix - backward_prefix) > 0) ? 1 : -1;
+    d = ((forward_prefix - backward_prefix) >= 0) ? 1 : -1;
 
     // get minimum prefix
     int min_prefix = delta(d_morton_codes, idx, idx-d, min_idx, max_idx);
@@ -345,29 +346,20 @@ __device__ inline uint2 determineRange(const uint32_t *d_morton_codes,
         lmax = lmax << 1;
         }
 
-    unsigned int len = 0;
-    unsigned int step = lmax;
+    unsigned int l = 0;
+    unsigned int t = lmax;
     do
         {
-        step = step >> 1;
-        unsigned int new_len = len + step;
-        if (delta(d_morton_codes, idx, idx + d*new_len, min_idx, max_idx) > min_prefix)
-            len = new_len;
+        t = t >> 1;
+        if (delta(d_morton_codes, idx, idx + (l+t)*d, min_idx, max_idx) > min_prefix)
+            l = l + t;
         }
-    while (step > 1);
+    while (t > 1);
 
-   // order range based on direction
     uint2 range;
-    if (d > 0)
-        {
-        range.x = idx;
-        range.y = idx + len;
-        }
-    else
-        {
-        range.x = idx - len;
-        range.y = idx;
-        }
+    range.x = idx;
+    range.y = idx + d*l;
+
     return range;
     }
 
@@ -382,41 +374,38 @@ __device__ inline uint2 determineRange(const uint32_t *d_morton_codes,
  */
 __device__ inline unsigned int findSplit(const uint32_t *d_morton_codes,
                                          const unsigned int first,
-                                         const unsigned int last)
+                                         const unsigned int last,
+                                         const int d,
+                                         const unsigned int min_idx,
+                                         const unsigned int max_idx)
     {
-    uint32_t first_code = d_morton_codes[first];
-    uint32_t last_code = d_morton_codes[last];
-
-    // if codes match, then just split evenly
-    if (first_code == last_code)
-        return (first + last) >> 1;
-
     // get the length of the common prefix
-    int common_prefix = __clz(first_code ^ last_code);
+    int common_prefix = delta(d_morton_codes, first, last, min_idx, max_idx);
 
     // assume split starts at first, and begin binary search
-    unsigned int split = first;
-    unsigned int step = last - first;
+    int l = d*(last-first);
+    int t = l;
+    int s = 0;
     do
         {
-        // exponential decrease (is factor of 2 best?)
-        step = (step + 1) >> 1;
-        unsigned int new_split = split + step;
+        t = (t + 1) >> 1;
+        unsigned int new_split = first + (s+t)*d;
 
         // if proposed split lies within range
-        if (new_split < last)
+        if (s < l)
             {
-            unsigned int split_code = d_morton_codes[new_split];
-            int split_prefix = __clz(first_code ^ split_code);
+            int split_prefix = delta(d_morton_codes, first, new_split, min_idx, max_idx);
 
             // if new split shares a longer number of bits, accept it
             if (split_prefix > common_prefix)
                 {
-                split = new_split;
+                s = s + t;
                 }
             }
         }
-    while (step > 1);
+    while (t > 1);
+
+    int split = first + s*d + ((d < 0) ? d : 0);
 
     return split;
     }
@@ -494,17 +483,18 @@ __global__ void gpu_bvh_gen_hierarchy_kernel(uint2 *d_tree_parent_sib,
         }
 
     // enact the magical split determining
-    uint2 range = determineRange(d_morton_codes, origin, end, node_idx);
+    int d;
+    uint2 range = determineRange(d_morton_codes, origin, end, node_idx,d);
     unsigned int first = range.x;
     unsigned int last = range.y;
-    unsigned int split = findSplit(d_morton_codes, first, last);
+    unsigned int split = findSplit(d_morton_codes, first, last, d, origin, end);
 
     uint2 children;
     // set the children, shifting ahead by nleafs - cur_type to account for leaf shifting
     // this factor comes out from resetting 0 = N_leaf,i each time, and then remapping this to
     // an internal node
-    children.x = (split == first) ? split : (nleafs - active_types + split);
-    children.y = ((split + 1) == last) ? (split + 1) : nleafs - active_types + split + 1;
+    children.x = (split == min(first,last)) ? split : (nleafs - active_types + split);
+    children.y = ((split + 1) == max(first,last)) ? (split + 1) : nleafs - active_types + split + 1;
 
     uint2 parent_sib;
     parent_sib.x = nleafs + idx;
