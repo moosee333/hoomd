@@ -131,7 +131,7 @@ class BVHGPU : public Compute
             m_tuner_bubble->setEnabled(enable);
 
             m_tuner_optimize->setPeriod(period*m_iterations);
-            m_tuner_optimize->setEnabled(enable*m_iterations);
+            m_tuner_optimize->setEnabled(enable);
 
             m_tuner_postprocess->setPeriod(period);
             m_tuner_postprocess->setEnabled(enable);
