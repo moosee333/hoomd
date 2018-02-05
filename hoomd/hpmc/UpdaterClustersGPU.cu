@@ -160,6 +160,35 @@ struct generate_uniform
         }
     };
 
+//! Generates edges such that the lower triangular adjacency matrix is filled
+struct sort_pair : public thrust::unary_function<uint2, uint2>
+    {
+    __device__
+    uint2 operator()(const uint2& p) const
+        {
+        unsigned int i = p.x;
+        unsigned int j = p.y;
+        return (j < i) ? make_uint2(i,j) : make_uint2(j,i);
+        }
+    };
+
+struct pair_less : public thrust::binary_function<uint2, uint2, bool>
+    {
+    __device__ bool operator()(const uint2 &lhs, const uint2 &rhs) const
+        {
+        return lhs.x < rhs.x || (lhs.x == rhs.x && lhs.y < rhs.y);
+        }
+    };
+
+struct pair_equal : public thrust::binary_function<uint2, uint2, bool>
+    {
+    __device__ bool operator()(const uint2 &lhs, const uint2 &rhs) const
+        {
+        return lhs.x == rhs.x && lhs.y == rhs.y;
+        }
+    };
+
+
 cudaError_t gpu_connected_components(
     const uint2 *d_adj,
     unsigned int N,
@@ -172,31 +201,58 @@ cudaError_t gpu_connected_components(
     float jump_tol,
     const CachedAllocator& alloc)
     {
+    // make a copy of the input
+    uint2 *d_adj_copy;
+    check_cuda(cudaMalloc((void **)&d_adj_copy,n_elements*sizeof(uint2)));
+    check_cuda(cudaMemcpy(d_adj_copy, d_adj, sizeof(uint2)*n_elements,cudaMemcpyDeviceToDevice));
+
+    // fill sparse matrix and make it symmetric
+    thrust::device_ptr<uint2> adj(d_adj_copy);
+
+    // sort every pair
+    thrust::transform(
+        thrust::cuda::par(alloc),
+        adj,
+        adj + n_elements,
+        adj,
+        sort_pair());
+
+    // sort the list of pairs
+    thrust::sort(
+        thrust::cuda::par(alloc),
+        adj,
+        adj + n_elements,
+        pair_less());
+
+    // remove duplicates
+    auto unique_end = thrust::unique(
+        thrust::cuda::par(alloc),
+        adj,
+        adj + n_elements,
+        pair_equal());
+
+    unsigned int n_unique = unique_end - adj;
+
     // input matrix in COO format
     nvgraphCOOTopology32I_t COO_input;
     COO_input = (nvgraphCOOTopology32I_t) malloc(sizeof(struct nvgraphCOOTopology32I_st));
 
     COO_input->nvertices = N;
-    COO_input->nedges = 2*n_elements;  // for undirected graph
-    COO_input->tag = NVGRAPH_UNSORTED;
+    COO_input->nedges = n_unique;  // for undirected graph
+    COO_input->tag = NVGRAPH_UNSORTED; // bc of the transpose
 
     // allocate COO matrix topology
     check_cuda(cudaMalloc((void **)&(COO_input->source_indices), COO_input->nedges*sizeof(int)));
     check_cuda(cudaMalloc((void **)&(COO_input->destination_indices), COO_input->nedges*sizeof(int)));
 
-    // fill sparse matrix and make it symmetric
-    thrust::device_ptr<const uint2> adj(d_adj);
     auto source = thrust::make_transform_iterator(adj, get_source());
     auto destination = thrust::make_transform_iterator(adj, get_destination());
+
     thrust::device_ptr<int> coo_source(COO_input->source_indices);
     thrust::device_ptr<int> coo_destination(COO_input->destination_indices);
 
-    thrust::copy(source, source+n_elements, coo_source);
-    thrust::copy(destination, destination+n_elements, coo_destination);
-
-    // transpose
-    thrust::copy(source, source+n_elements, coo_destination+n_elements);
-    thrust::copy(destination, destination+n_elements, coo_source+n_elements);
+    thrust::copy(source, source+n_unique, coo_source);
+    thrust::copy(destination, destination+n_unique, coo_destination);
 
     // a current limitation of nvgraph is to only support graphs with a single edge/vertex data type
     // we need both float (for spectral analysis) and int (for traversal), so create two parallel graphs
@@ -261,8 +317,8 @@ cudaError_t gpu_connected_components(
     // copy over topology
     CSR_output_I->nvertices = CSR_output_F->nvertices;
     CSR_output_I->nedges = CSR_output_F->nedges;
-    cudaMemcpy(CSR_output_I->source_offsets,CSR_output_F->source_offsets,(COO_input->nvertices+1)*sizeof(int),cudaMemcpyDeviceToDevice);
-    cudaMemcpy(CSR_output_I->destination_indices,CSR_output_F->destination_indices,(COO_input->nedges)*sizeof(int),cudaMemcpyDeviceToDevice);
+    check_cuda(cudaMemcpy(CSR_output_I->source_offsets,CSR_output_F->source_offsets,(CSR_output_F->nvertices+1)*sizeof(int),cudaMemcpyDeviceToDevice));
+    check_cuda(cudaMemcpy(CSR_output_I->destination_indices,CSR_output_F->destination_indices,(CSR_output_F->nedges)*sizeof(int),cudaMemcpyDeviceToDevice));
 
     // these variables will track the dimensions of the current subgraph
     unsigned int nverts = CSR_output_F->nvertices;
@@ -436,7 +492,7 @@ cudaError_t gpu_connected_components(
     // a queue for subgraphs (BFS over components)
     std::queue<nvgraphGraphDescr_t>  Q;
 
-    // push the parent graphs
+    // push the parent graph
     Q.push(graph_F);
 
     num_components = 0;
@@ -1045,6 +1101,7 @@ cudaError_t gpu_connected_components(
     check_cuda(cudaFree(CSR_output_I->destination_indices));
     check_cuda(cudaFree(d_edge_data_csr_F));
     check_cuda(cudaFree(d_edge_data_coo_F));
+    check_cuda(cudaFree(d_adj_copy));
 
     check_nvgraph(nvgraphDestroyGraphDescr(nvgraphH, graph_I));
 
