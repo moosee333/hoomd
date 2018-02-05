@@ -1141,13 +1141,10 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
         uint2 cur_parent_sib = d_tree_parent_sib[cur_node_idx];
         unsigned int cur_parent = cur_parent_sib.x;
 
-        // have we hit the tree root?
-        bool is_root = cur_parent == cur_node_idx;
-
         // then, we do an atomicAdd on the lock to see if we need to process the parent nodes
         // check to make sure the parent is bigger than nleafs, or else the node lock always fails
         // so that we terminate the thread
-        lock_key = (!is_root && cur_parent >= nleafs) ? atomicAdd(d_node_locks + cur_parent - nleafs, 1) : 0;
+        lock_key = (cur_parent >= nleafs) ? atomicAdd(d_node_locks + cur_parent - nleafs, 1) : 0;
 
         // process the node
         if (lock_key == 1)
@@ -1574,9 +1571,21 @@ __global__ void gpu_bvh_collapse_subtrees_kernel(const unsigned int ninternal,
     const uint2 parent_sib = d_tree_parent_sib[idx];
     unsigned int cur_parent = parent_sib.x;
     bool is_root = cur_parent == idx;
-    bool collapse_parent = d_tree_npart[cur_parent] & 1;
 
-    if (collapse_current && (!collapse_parent || is_root))
+    // backtrack to find out if any of the ancestors need to be collapsed
+    uint2 backtrack = parent_sib;
+    bool collapse_ancestors = false;
+    while (backtrack.x != (backtrack.y >> 1))
+        {
+        if (d_tree_npart[backtrack.x] & 1)
+            {
+            collapse_ancestors = true;
+            break;
+            }
+        backtrack = d_tree_parent_sib[backtrack.x];
+        }
+
+    if (collapse_current && (!collapse_ancestors || is_root))
         {
         // collapse the subtree by traversing it and appending the particles to the output array
 
