@@ -263,7 +263,7 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
         ArrayHandle<Scalar4> d_aabb_postype(m_aabb_postype, access_location::device, access_mode::overwrite);
 
         // access BVH
-        ArrayHandle<unsigned int> d_leaf_offset(m_bvh_gpu->getLeafOffsets(), access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_node_heads(m_bvh_gpu->getNodeHeads(), access_location::device, access_mode::read);
         ArrayHandle<unsigned int> d_tree_roots(m_bvh_gpu->getTreeRoots(), access_location::device, access_mode::read);
         ArrayHandle<typename BVH::node_type> d_tree_nodes(m_bvh_gpu->getTreeNodes(), access_location::device, access_mode::read);
         ArrayHandle<Scalar4> d_tree_xyzf(m_bvh_gpu->getLeafXYZF(), access_location::device, access_mode::read);
@@ -311,7 +311,7 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
                                            d_aabb_postype.data,
-                                           d_leaf_offset.data,
+                                           d_node_heads.data,
                                            d_tree_roots.data,
                                            d_tree_xyzf.data,
                                            m_bvh_gpu->getParticlesPerLeaf()
@@ -451,7 +451,7 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
         ArrayHandle<Scalar4> d_aabb_postype(m_aabb_postype, access_location::device, access_mode::overwrite);
 
         // access BVH
-        ArrayHandle<unsigned int> d_leaf_offset(m_bvh_gpu->getLeafOffsets(), access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_node_heads(m_bvh_gpu->getNodeHeads(), access_location::device, access_mode::read);
         ArrayHandle<unsigned int> d_tree_roots(m_bvh_gpu->getTreeRoots(), access_location::device, access_mode::read);
         ArrayHandle<typename BVH::node_type> d_tree_nodes(m_bvh_gpu->getTreeNodes(), access_location::device, access_mode::read);
         ArrayHandle<Scalar4> d_tree_xyzf(m_bvh_gpu->getLeafXYZF(), access_location::device, access_mode::read);
@@ -499,7 +499,7 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
                                            d_aabb_idx.data,
                                            d_aabb_tag.data,
                                            d_aabb_postype.data,
-                                           d_leaf_offset.data,
+                                           d_node_heads.data,
                                            d_tree_roots.data,
                                            d_tree_xyzf.data,
                                            m_bvh_gpu->getParticlesPerLeaf()

@@ -135,6 +135,7 @@ cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
                                    const unsigned int ntypes,
                                    const unsigned int nleafs,
                                    const unsigned int ninternal,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size);
 
 template<class BVHNode>
@@ -149,6 +150,7 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_t,
                                    const unsigned int n,
                                    Scalar *d_tree_cost,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size);
 
 template<class BVHNode>
@@ -178,6 +180,32 @@ cudaError_t gpu_bvh_move_particles(Scalar4 *d_leaf_xyzf,
                                      const unsigned int *d_map_tree_pid,
                                      const unsigned int N,
                                      const unsigned int block_size);
+
+//! Kernel driver to collapse subtrees into leaf nodes
+template<class BVHNode>
+cudaError_t gpu_bvh_collapse_subtrees(const unsigned int ninternal,
+                           const unsigned int nleaf,
+                           BVHNode *d_tree_nodes,
+                           const uint2 *d_tree_parent_sib,
+                           const unsigned int *d_tree_npart,
+                           const unsigned int *d_leaf_offset,
+                           const unsigned int num_types,
+                           const unsigned int *d_num_per_type,
+                           unsigned int *d_node_head,
+                           const unsigned int nparticles_per_leaf,
+                           const unsigned int *d_map_tree_pid,
+                           unsigned int *d_count,
+                           unsigned int *d_map_tree_pid_out,
+                           const unsigned int block_size);
+
+//! Kernel driver to update node head information of leaves for traversal
+cudaError_t gpu_bvh_update_node_heads(const unsigned int nleaf,
+                                 const unsigned int *d_leaf_offset,
+                                 const unsigned int num_types,
+                                 const unsigned int *d_num_per_type,
+                                 unsigned int *d_node_head,
+                                 const unsigned int nparticles_per_leaf,
+                                 const unsigned int block_size);
 
 //! Kernel driver to initialize counting for types and nodes
 cudaError_t gpu_bvh_init_count(unsigned int *d_type_head,

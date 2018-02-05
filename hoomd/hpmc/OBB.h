@@ -1042,7 +1042,7 @@ DEVICE inline OBB merge(const OBB *obbs, const int bitset)
 
     for (unsigned int i = 0; i < n; ++i)
         {
-        if (bitset & 1 << i)
+        if (bitset & (1 << i))
             {
             const OBB& cur_obb(obbs[i]);
             rotmat3<OverlapReal> r(conj(cur_obb.rotation));

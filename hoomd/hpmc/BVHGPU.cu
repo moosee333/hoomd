@@ -9,7 +9,6 @@
 
 #include "hoomd/extern/cub/cub/cub.cuh"
 
-
 /*! \file BVHGPU.cu
     \brief Defines GPU kernel code for BVH generation on the GPU
 */
@@ -568,6 +567,7 @@ cudaError_t gpu_bvh_gen_hierarchy(uint2 *d_tree_parent_sib,
  * \param d_tree_parent_sib Parent and sibling indexes of each node
  * \param ntypes Number of particle types
  * \param nleafs Number of leaf nodes
+ * \param d_tree_npart Counts the number of particles in a subtree
  *
  * \b Implementation
  * One thread is called per leaf node. The second thread to reach an internal node processes its two children,
@@ -591,7 +591,8 @@ __global__ void gpu_bvh_bubble_bounding_volumes_kernel(unsigned int *d_node_lock
                                               BVHNode *d_tree_nodes,
                                               const uint2 *d_tree_parent_sib,
                                               const unsigned int ntypes,
-                                              const unsigned int nleafs)
+                                              const unsigned int nleafs,
+                                              unsigned int *d_tree_npart)
     {
     const unsigned int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -600,6 +601,12 @@ __global__ void gpu_bvh_bubble_bounding_volumes_kernel(unsigned int *d_node_lock
 
     // okay, first we start from the leaf and set my bounding box
     auto cur_node = d_tree_nodes[idx];
+
+    // get number of particles stored in this leaf node
+    unsigned int npart = cur_node.np_child_masked >> 1;
+
+    // set it on the leaf
+    d_tree_npart[idx] = npart << 1;
 
     // zero the counters for internal nodes
     cur_node.rope = 0;
@@ -650,11 +657,20 @@ __global__ void gpu_bvh_bubble_bounding_volumes_kernel(unsigned int *d_node_lock
             // this must always be some internal node, so stash the left child of this node here
             cur_node.np_child_masked = ((cur_is_left ? cur_node_idx : cur_sibling) << 1) | 1;
 
+            // combine subtree sizes
+            npart += d_tree_npart[cur_sibling] >> 1;
+
             // store in global memory
             d_tree_nodes[cur_parent] = cur_node;
 
+            // store number of particles in subtree (0 bit is for indicating collapse)
+            d_tree_npart[cur_parent] = npart << 1;
+
             // bump the current node one level
             cur_node_idx = cur_parent;
+
+            // make sure other threads see our data
+            __threadfence();
             }
         }
     while (lock_key == 1);
@@ -667,6 +683,7 @@ __global__ void gpu_bvh_bubble_bounding_volumes_kernel(unsigned int *d_node_lock
  * \param d_tree_parent_sib Parent and sibling indexes of each node
  * \param ntypes Number of particle types
  * \param nleafs Number of leaf nodes
+ * \param d_tree_npart Number of particles in subtrees
  * \param block_size Requested thread block size
  *
  * \returns cudaSuccess on completion
@@ -678,6 +695,7 @@ cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
                                    const unsigned int ntypes,
                                    const unsigned int nleafs,
                                    const unsigned int ninternal,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size)
     {
     cudaMemset(d_node_locks, 0, sizeof(unsigned int)*ninternal);
@@ -696,7 +714,8 @@ cudaError_t gpu_bvh_bubble_bounding_volumes(unsigned int *d_node_locks,
                                                                          d_tree_nodes,
                                                                          d_tree_parent_sib,
                                                                          ntypes,
-                                                                         nleafs);
+                                                                         nleafs,
+                                                                         d_tree_npart);
 
     return cudaSuccess;
     }
@@ -861,9 +880,11 @@ __device__ void reconstructTreelet(
     const unsigned int size,
     const int *p_opt_bar,
     const Scalar *c_opt,
+    const unsigned int *npart_opt,
     BVHNode *d_tree_nodes,
     uint2 *d_tree_parent_sib,
-    Scalar *d_tree_cost)
+    Scalar *d_tree_cost,
+    unsigned int *d_tree_npart)
     {
     // holds the current active subset
     int active_set[n];
@@ -991,6 +1012,9 @@ __device__ void reconstructTreelet(
             // assign tree cost
             d_tree_cost[cur_node_idx] = c_opt[cur_set];
 
+            // .. and number of particles
+            d_tree_npart[cur_node_idx] = npart_opt[cur_set];
+
             // set the left child pointer on the parent if this is a left child
             if (cur_parent_sib.y & 1)
                 d_tree_nodes[cur_parent_sib.x].np_child_masked = 1 | (cur_node_idx << 1);
@@ -1055,9 +1079,6 @@ __device__ void reconstructTreelet(
             cur_parent_sib = active_parent_sib[imax];
             d_tree_parent_sib[cur_node_idx] = cur_parent_sib;
 
-            // assign leave node cost
-            d_tree_cost[cur_node_idx] = c_opt[cur_set];
-
             // set the left child pointer on the parent if this is a left child
             if (cur_parent_sib.y & 1)
                 d_tree_nodes[cur_parent_sib.x].np_child_masked = 1 | (cur_node_idx << 1);
@@ -1103,7 +1124,8 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                                               const Scalar C_i,
                                               const Scalar C_l,
                                               const Scalar C_t,
-                                              Scalar *d_tree_cost)
+                                              Scalar *d_tree_cost,
+                                              unsigned int *d_tree_npart)
     {
     const unsigned int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -1159,6 +1181,9 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
 
             // the optimal query cost
             Scalar c_opt[max_size];
+
+            // Flag to indicate whether the subtree should be collapsed
+            unsigned int npart_opt[max_size];
 
             // the optimal partitioning, a bit indicates if the corresponding
             // leaf is part of the left subtree
@@ -1237,26 +1262,27 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                         cur_p_bar = (cur_p_bar - delta_bar) & s_bar;
                         } while (cur_p_bar);
 
-                    #if 0
                     // get number of particles stored in the leaf nodes of this subset
                     unsigned int total_num_particles = 0;
                     for (unsigned int i = 0; i < nleaves; ++i)
                         {
                         if (s_bar & (1 << i))
                             {
-                            // is this treelet leaf an actual leaf node?
-                            unsigned int leaf = leaves[i];
-                            unsigned int np_child_masked = d_tree_nodes[leaf].np_child_masked;
-                            bool is_leaf = ! (np_child_masked & 1);
-                            if (is_leaf)
-                                total_num_particles += np_child_masked >> 1;
+                            total_num_particles += d_tree_npart[leaves[i]] >> 1;
                             }
                         }
-                    #endif
 
                     // compute the final surface area heuristic
-//                    c_opt[s_bar] = min(C_i*areas[s_bar] + c,C_t*areas[s_bar]*total_num_particles);
-                    c_opt[s_bar] = C_i*areas[s_bar] + c;
+
+                    // cost of the internal nodes in this subtree
+                    Scalar cost = C_i*areas[s_bar] + c;
+
+                    // cost for collapsing this subtree
+                    Scalar collapse_cost = areas[s_bar]*(C_t*total_num_particles+C_l);
+
+                    bool collapse = collapse_cost < cost;
+                    c_opt[s_bar] = min(cost,collapse_cost);
+                    npart_opt[s_bar] = (total_num_particles << 1) | (collapse ? 1 : 0);
                     p_opt_bar[s_bar] = p_bar;
                     } // end loop over subsets
                 } // end loop over size of subset
@@ -1272,12 +1298,18 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
                 size,
                 p_opt_bar,
                 c_opt,
+                npart_opt,
                 d_tree_nodes,
                 d_tree_parent_sib,
-                d_tree_cost);
+                d_tree_cost,
+                d_tree_npart);
 
             // store cost for further accumulation
             d_tree_cost[cur_node_idx] = c_opt[size-1];
+            d_tree_npart[cur_node_idx] = npart_opt[size-1];
+
+            // make sure other threads see our data
+            __threadfence();
             }
         }
     while (lock_key == 1);
@@ -1294,7 +1326,8 @@ __global__ void gpu_bvh_optimize_treelets_kernel(unsigned int *d_node_locks,
  * \param C_i cost of traversing an internal node, per unit area of the bounding volume divided by root node area
  * \param C_l cost of traversing a leaf node, per unit area of the bounding volume divided by root node area
  * \param C_t cost of checking a primitive or particle contained in the leaf node, per primitive and unit area over root node area
- * \param the accumulated SAH cost per tree node
+ * \param d_tree_cost the accumulated SAH cost per tree node
+ * \param d_tree_npart Number of particles in subtrees
  * \param block_size Requested thread block size
  *
  * \returns cudaSuccess on completion
@@ -1311,6 +1344,7 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_t,
                                    const unsigned int n,
                                    Scalar *d_tree_cost,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size)
     {
     cudaMemset(d_node_locks, 0, sizeof(unsigned int)*ninternal);
@@ -1335,7 +1369,8 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                                                              C_i,
                                                                              C_l,
                                                                              C_t,
-                                                                             d_tree_cost);
+                                                                             d_tree_cost,
+                                                                             d_tree_npart);
         }
     else if (n == 7)
         {
@@ -1357,7 +1392,8 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                                                              C_i,
                                                                              C_l,
                                                                              C_t,
-                                                                             d_tree_cost);
+                                                                             d_tree_cost,
+                                                                             d_tree_npart);
         }
     else if (n == 9)
         {
@@ -1379,7 +1415,8 @@ cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                                                              C_i,
                                                                              C_l,
                                                                              C_t,
-                                                                             d_tree_cost);
+                                                                             d_tree_cost,
+                                                                             d_tree_npart);
         }
     else
         {
@@ -1439,6 +1476,9 @@ __global__ void gpu_bvh_postprocess_tree_kernel(unsigned int *d_node_locks,
             d_tree_nodes[cur_node_idx].rope = -1;
             }
 
+        // make sure other threads see our data
+        __threadfence();
+
         // then, we do an atomicAdd on the lock to see if we need to process the parent AABBs
         // check to make sure the parent is bigger than nleafs, or else the node lock always fails
         // so that we terminate the thread
@@ -1492,6 +1532,265 @@ cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
 
     return cudaSuccess;
     }
+
+/*!
+ * Kernel to identify subtrees to be collapsed into leaf nodes and update the roots of those subtrees
+ *
+ * \param ninternal Number of internal nodes
+ * \param nleaf Number of leaf nodes
+ * \param d_tree_nodes The nodes array
+ * \param d_tree_parent_sib parent and sibling information per node
+ * \param d_tree_npart Number of particles in subtrees and flag for collapsing the subtree
+ * \param d_leaf_offset Offset of types in leaves array
+ * \param num_types Number of types in simulation
+ * \param d_num_per_type Number of particles per type
+ * \param d_node_head Output list of node starts in leaf array
+ * \param nparticles_per_leaf Initial number of particles per leaf
+ */
+template<class BVHNode>
+__global__ void gpu_bvh_collapse_subtrees_kernel(const unsigned int ninternal,
+                                                const unsigned int nleaf,
+                                                BVHNode *d_tree_nodes,
+                                                const uint2 *d_tree_parent_sib,
+                                                const unsigned int *d_tree_npart,
+                                                const unsigned int *d_leaf_offset,
+                                                const unsigned int num_types,
+                                                const unsigned int *d_num_per_type,
+                                                unsigned int *d_node_head,
+                                                const unsigned int nparticles_per_leaf,
+                                                const unsigned int *d_map_tree_pid,
+                                                unsigned int *d_count,
+                                                unsigned int *d_map_tree_pid_out)
+    {
+    unsigned int idx = blockIdx.x*blockDim.x+threadIdx.x;
+
+    if (idx >= ninternal+nleaf)
+        return;
+
+    // are we collapsing the subtree of this internal node? always if this is a leaf node
+    bool is_leaf = ! (d_tree_nodes[idx].np_child_masked & 1);
+    bool collapse_current = (d_tree_npart[idx] & 1) || is_leaf;
+
+    const uint2 parent_sib = d_tree_parent_sib[idx];
+    unsigned int cur_parent = parent_sib.x;
+    bool is_root = cur_parent == idx;
+    bool collapse_parent = d_tree_npart[cur_parent] & 1;
+
+    if (collapse_current && (!collapse_parent || is_root))
+        {
+        // collapse the subtree by traversing it and appending the particles to the output array
+
+        // the number of particles in this subtree
+        unsigned int np = is_leaf ? (d_tree_nodes[idx].np_child_masked >> 1) : (d_tree_npart[idx] >> 1);
+
+        unsigned int cur_node_idx = idx;
+        int end = d_tree_nodes[idx].rope;
+
+        unsigned int node_head = UINT_MAX;
+        unsigned int type = UINT_MAX;
+
+        unsigned int n = 0;
+
+        // stackless search
+        while (cur_node_idx != end)
+            {
+            int rope = d_tree_nodes[cur_node_idx].rope;
+            int np_child_masked = d_tree_nodes[cur_node_idx].np_child_masked;
+
+            if(!(np_child_masked & 1))
+                {
+                if (type == UINT_MAX)
+                    {
+                    // leaf node, get what type of leaf I am (we do this once per subtree)
+                    unsigned int max_idx = 0; // the "N-1" of the leaf node array
+
+                    for (unsigned int cur_type=0; cur_type < num_types; ++cur_type)
+                        {
+                        // max index adds the number of leaf nodes in this type
+                        const unsigned int cur_nleaf = (d_num_per_type[cur_type] + nparticles_per_leaf - 1)/nparticles_per_leaf;
+                        max_idx += cur_nleaf;
+
+                        // we break the loop if we are in range
+                        if (cur_node_idx < max_idx)
+                            {
+                            type = cur_type;
+                            break;
+                            }
+                        }
+                    }
+
+                // all leaves must have at least 1 particle, so we can use this to decide
+                unsigned int cur_node_head = nparticles_per_leaf*cur_node_idx - d_leaf_offset[type];
+
+                const unsigned int n_part = np_child_masked >> 1;
+
+                for (unsigned int cur_p = cur_node_head; cur_p < cur_node_head + n_part; cur_p++)
+                    {
+                    // allocate space for np consecutive particles
+                    if (node_head == UINT_MAX)
+                        node_head = atomicAdd(d_count, np);
+
+                    d_map_tree_pid_out[node_head+(n++)] = d_map_tree_pid[cur_p];
+                    }
+
+                // rope ahead
+                cur_node_idx = rope;
+                }
+            else
+                {
+                // internal node, take left child
+                cur_node_idx = (np_child_masked >> 1);
+                }
+            } // end stackless search
+
+        // update the current node's number of particles and flag it as a leaf node
+        d_node_head[idx] = node_head;
+        d_tree_nodes[idx].np_child_masked = np << 1;
+        }
+    }
+
+/*!
+ * Identify subtrees to be collapsed into leaf nodes and update the roots of those subtrees
+ *
+ * \param ninternal Number of internal nodes
+ * \param nleaf Number of leaf nodes
+ * \param d_tree_nodes The nodes array
+ * \param d_tree_parent_sib parent and sibling information per node
+ * \param d_tree_npart Number of particles in subtrees and flag for collapsing the subtree
+ * \param d_leaf_offset Offset of types in leaves array
+ * \param num_types Number of types in simulation
+ * \param d_num_per_type Number of particles per type
+ * \param d_node_head Output list of node starts in leaf array
+ * \param nparticles_per_leaf Initial number of particles per leaf
+ */
+template<class BVHNode>
+cudaError_t gpu_bvh_collapse_subtrees(const unsigned int ninternal,
+                           const unsigned int nleaf,
+                           BVHNode *d_tree_nodes,
+                           const uint2 *d_tree_parent_sib,
+                           const unsigned int *d_tree_npart,
+                           const unsigned int *d_leaf_offset,
+                           const unsigned int num_types,
+                           const unsigned int *d_num_per_type,
+                           unsigned int *d_node_head,
+                           const unsigned int nparticles_per_leaf,
+                           const unsigned int *d_map_tree_pid,
+                           unsigned int *d_count,
+                           unsigned int *d_map_tree_pid_out,
+                           const unsigned int block_size)
+    {
+    static unsigned int max_block_size = UINT_MAX;
+    if (max_block_size == UINT_MAX)
+        {
+        cudaFuncAttributes attr;
+        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_collapse_subtrees_kernel<BVHNode>);
+        max_block_size = attr.maxThreadsPerBlock;
+        }
+
+    int run_block_size = min(block_size,max_block_size);
+
+    // reset atomic counter
+    cudaMemset(d_count, 0, sizeof(unsigned int));
+
+    gpu_bvh_collapse_subtrees_kernel<BVHNode><<<(ninternal+nleaf)/run_block_size+1, run_block_size>>>(
+        ninternal,
+        nleaf,
+        d_tree_nodes,
+        d_tree_parent_sib,
+        d_tree_npart,
+        d_leaf_offset,
+        num_types,
+        d_num_per_type,
+        d_node_head,
+        nparticles_per_leaf,
+        d_map_tree_pid,
+        d_count,
+        d_map_tree_pid_out);
+
+    return cudaSuccess;
+    }
+
+/*!
+ * Kernel to update node head information
+ *
+ * \param nleaf Number of leaf nodes
+ * \param d_leaf_offset Offset of types in leaves array
+ * \param num_types Number of types in simulation
+ * \param d_num_per_type Number of particles per type
+ * \param d_node_head Output list of node starts in leaf array
+ * \param nparticles_per_leaf Initial number of particles per leaf
+ */
+__global__ void gpu_bvh_update_node_heads_kernel(const unsigned int nleaf,
+                                                const unsigned int *d_leaf_offset,
+                                                const unsigned int num_types,
+                                                const unsigned int *d_num_per_type,
+                                                unsigned int *d_node_head,
+                                                const unsigned int nparticles_per_leaf)
+    {
+    unsigned int idx = blockIdx.x*blockDim.x+threadIdx.x;
+
+    if (idx >= nleaf)
+        return;
+
+    // get what type of leaf I am
+    unsigned int max_idx = 0; // the "N-1" of the leaf node array
+    unsigned int cur_type=0;
+
+    for (cur_type=0; cur_type < num_types; ++cur_type)
+        {
+        // max index adds the number of leaf nodes in this type
+        const unsigned int cur_nleaf = (d_num_per_type[cur_type] + nparticles_per_leaf - 1)/nparticles_per_leaf;
+        max_idx += cur_nleaf;
+
+        // we break the loop if we are in range
+        if (idx < max_idx)
+            break;
+        }
+
+    // all leaves must have at least 1 particle, so we can use this to decide
+    d_node_head[idx] = nparticles_per_leaf*idx - d_leaf_offset[cur_type];
+    }
+
+/*!
+ * Update node head information
+ *
+ * \param nleaf Number of leaf nodes
+ * \param d_leaf_offset Offset of types in leaves array
+ * \param num_types Number of types in simulation
+ * \param d_num_per_type Number of particles per type
+ * \param d_node_head Output list of node starts in leaf array
+ * \param nparticles_per_leaf Initial number of particles per leaf
+ * \param block_size Block size to run the kernel
+ */
+cudaError_t gpu_bvh_update_node_heads(const unsigned int nleaf,
+                                 const unsigned int *d_leaf_offset,
+                                 const unsigned int num_types,
+                                 const unsigned int *d_num_per_type,
+                                 unsigned int *d_node_head,
+                                 const unsigned int nparticles_per_leaf,
+                                 const unsigned int block_size)
+    {
+    static unsigned int max_block_size = UINT_MAX;
+    if (max_block_size == UINT_MAX)
+        {
+        cudaFuncAttributes attr;
+        cudaFuncGetAttributes(&attr, (const void *)gpu_bvh_update_node_heads_kernel);
+        max_block_size = attr.maxThreadsPerBlock;
+        }
+
+    int run_block_size = min(block_size,max_block_size);
+
+    gpu_bvh_update_node_heads_kernel<<<nleaf/run_block_size+1,run_block_size>>>(
+        nleaf,
+        d_leaf_offset,
+        num_types,
+        d_num_per_type,
+        d_node_head,
+        nparticles_per_leaf);
+
+    return cudaSuccess;
+    }
+
 //! Kernel to find divisons between particle types in sorted order
 /*!
  * \param d_type_head Index to first type in leaf ordered particles by type
@@ -1635,7 +1934,8 @@ cudaError_t gpu_bvh_move_particles(Scalar4 *d_leaf_xyzf,
                                      const unsigned int *d_body,
                                      const unsigned int *d_map_tree_pid,
                                      const unsigned int Ntot,
-                                     const unsigned int block_size)
+                                     const unsigned int block_size
+                                     )
     {
     static unsigned int max_block_size = UINT_MAX;
     if (max_block_size == UINT_MAX)
@@ -1648,15 +1948,14 @@ cudaError_t gpu_bvh_move_particles(Scalar4 *d_leaf_xyzf,
     int run_block_size = min(block_size,max_block_size);
 
     gpu_bvh_move_particles_kernel<<<Ntot/run_block_size + 1, run_block_size>>>(d_leaf_xyzf,
-                                                                                 d_leaf_db,
-                                                                                 d_pos,
-                                                                                 d_diameter,
-                                                                                 d_body,
-                                                                                 d_map_tree_pid,
-                                                                                 Ntot);
+                                                                               d_leaf_db,
+                                                                               d_pos,
+                                                                               d_diameter,
+                                                                               d_body,
+                                                                               d_map_tree_pid,
+                                                                               Ntot);
     return cudaSuccess;
     }
-
 
 /*!
  * Template instantiations for various bounding volume types
@@ -1669,6 +1968,7 @@ template cudaError_t gpu_bvh_bubble_bounding_volumes<AABBNodeGPU>(unsigned int *
                                    const unsigned int ntypes,
                                    const unsigned int nleafs,
                                    const unsigned int ninternal,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size);
 
 template cudaError_t gpu_bvh_merge_shapes<EmptyShape, AABBNodeGPU> (const hpmc_bvh_shapes_args_t& args,
@@ -1686,6 +1986,7 @@ template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_t,
                                    const unsigned int n,
                                    Scalar *d_tree_cost,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size);
 
 template cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
@@ -1696,6 +1997,21 @@ template cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
                                    const unsigned int ninternal,
                                    const unsigned int block_size);
 
+template cudaError_t gpu_bvh_collapse_subtrees(const unsigned int ninternal,
+                           const unsigned int nleaf,
+                           AABBNodeGPU *d_tree_nodes,
+                           const uint2 *d_tree_parent_sib,
+                           const unsigned int *d_tree_npart,
+                           const unsigned int *d_leaf_offset,
+                           const unsigned int num_types,
+                           const unsigned int *d_num_per_type,
+                           unsigned int *d_node_head,
+                           const unsigned int nparticles_per_leaf,
+                           const unsigned int *d_map_tree_pid,
+                           unsigned int *d_count,
+                           unsigned int *d_map_tree_pid_out,
+                           const unsigned int block_size);
+
 // OBB
 template cudaError_t gpu_bvh_bubble_bounding_volumes<OBBNodeGPU>(unsigned int *d_node_locks,
                                    OBBNodeGPU *d_tree_nodes,
@@ -1703,6 +2019,7 @@ template cudaError_t gpu_bvh_bubble_bounding_volumes<OBBNodeGPU>(unsigned int *d
                                    const unsigned int ntypes,
                                    const unsigned int nleafs,
                                    const unsigned int ninternal,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size);
 
 template cudaError_t gpu_bvh_merge_shapes<EmptyShape, OBBNodeGPU> (const hpmc_bvh_shapes_args_t& args,
@@ -1720,6 +2037,7 @@ template cudaError_t gpu_bvh_optimize_treelets(unsigned int *d_node_locks,
                                    const Scalar C_t,
                                    const unsigned int n,
                                    Scalar *d_tree_cost,
+                                   unsigned int *d_tree_npart,
                                    const unsigned int block_size);
 
 template cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
@@ -1729,6 +2047,21 @@ template cudaError_t gpu_bvh_postprocess_tree(unsigned int *d_node_locks,
                                    const unsigned int nleafs,
                                    const unsigned int ninternal,
                                    const unsigned int block_size);
+
+template cudaError_t gpu_bvh_collapse_subtrees(const unsigned int ninternal,
+                           const unsigned int nleaf,
+                           OBBNodeGPU *d_tree_nodes,
+                           const uint2 *d_tree_parent_sib,
+                           const unsigned int *d_tree_npart,
+                           const unsigned int *d_leaf_offset,
+                           const unsigned int num_types,
+                           const unsigned int *d_num_per_type,
+                           unsigned int *d_node_head,
+                           const unsigned int nparticles_per_leaf,
+                           const unsigned int *d_map_tree_pid,
+                           unsigned int *d_count,
+                           unsigned int *d_map_tree_pid_out,
+                           const unsigned int block_size);
 
 } // namespace detail
 } // namespace hpmc

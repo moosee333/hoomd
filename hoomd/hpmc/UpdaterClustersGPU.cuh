@@ -82,7 +82,7 @@ struct hpmc_clusters_args_t
                 unsigned int *_d_aabb_idx,
                 unsigned int *_d_aabb_tag,
                 Scalar4 *_d_aabb_postype,
-                const unsigned int *_d_leaf_offset,
+                const unsigned int *_d_node_heads,
                 const unsigned int *_d_tree_roots,
                 const Scalar4 *_d_leaf_xyzf,
                 const unsigned int _nparticles_per_leaf
@@ -130,7 +130,7 @@ struct hpmc_clusters_args_t
                   d_aabb_idx(_d_aabb_idx),
                   d_aabb_tag(_d_aabb_tag),
                   d_aabb_postype(_d_aabb_postype),
-                  d_leaf_offset(_d_leaf_offset),
+                  d_node_heads(_d_node_heads),
                   d_tree_roots(_d_tree_roots),
                   d_leaf_xyzf(_d_leaf_xyzf),
                   nparticles_per_leaf(_nparticles_per_leaf)
@@ -179,7 +179,7 @@ struct hpmc_clusters_args_t
     unsigned int *d_aabb_idx;         //!< AABB indices corresponding to the (sorted) intervals
     unsigned int *d_aabb_tag;         //!< particle tags corresponding to the (sorted) intervals
     Scalar4 *d_aabb_postype;          //!< particle positions and types corresponding to the (sorted) intervals
-    const unsigned int *d_leaf_offset;  //!< Offset for reading leaf particles by type
+    const unsigned int *d_node_heads; //!< Head of every BVH node in sorted list of particles
     const unsigned int *d_tree_roots;   //!< Index for tree root by type
     const Scalar4 *d_leaf_xyzf;         //!< Leaf position-id array
     const unsigned int nparticles_per_leaf; //!< Number of particles per leaf node
@@ -237,7 +237,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                                      const ManagedArray<vec3<Scalar> > image_list,
                                      unsigned int max_n_overlaps,
                                      uint2 *d_conditions,
-                                     const unsigned int *d_leaf_offset,
+                                     const unsigned int *d_node_heads,
                                      const unsigned int *d_tree_roots,
                                      const BVH_type *d_tree_nodes,
                                      const Scalar4 *d_leaf_xyzf,
@@ -251,7 +251,6 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
     extern __shared__ char s_data[];
     typename Shape::param_type *s_params = (typename Shape::param_type *)(&s_data[0]);
     unsigned int *s_check_overlaps = (unsigned int *) (s_params + num_types);
-    unsigned int *s_leaf_offset = s_check_overlaps + overlap_idx.getNumElements();
 
     unsigned int ntyppairs = overlap_idx.getNumElements();
 
@@ -274,15 +273,6 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
             if (cur_offset + tidx < ntyppairs)
                 {
                 s_check_overlaps[cur_offset + tidx] = d_check_overlaps[cur_offset + tidx];
-                }
-            }
-
-        // load in the per type leaf offsets
-        for (unsigned int cur_offset = 0; cur_offset < num_types; cur_offset += block_size)
-            {
-            if (cur_offset + tidx < num_types)
-                {
-                s_leaf_offset[cur_offset + tidx] = d_leaf_offset[cur_offset + tidx];
                 }
             }
         }
@@ -330,7 +320,7 @@ __global__ void gpu_hpmc_clusters_kernel(unsigned int N,
                         {
                         // leaf node
                         // all leaves must have at least 1 particle, so we can use this to decide
-                        const unsigned int node_head = nparticles_per_leaf*cur_node_idx - s_leaf_offset[cur_pair_type];
+                        const unsigned int node_head = d_node_heads[cur_node_idx];
                         const unsigned int n_part = np_child_masked >> 1;
                         for (unsigned int cur_p = node_head + threadIdx.x; cur_p < node_head + n_part; cur_p += blockDim.x)
                             {
@@ -1022,7 +1012,7 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t& args,
                                                      args.image_list,
                                                      args.max_n_overlaps,
                                                      args.d_conditions,
-                                                     args.d_leaf_offset,
+                                                     args.d_node_heads,
                                                      args.d_tree_roots,
                                                      d_tree_nodes,
                                                      args.d_leaf_xyzf,

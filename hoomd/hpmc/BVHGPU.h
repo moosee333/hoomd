@@ -17,6 +17,8 @@
 
 #include "OBB.h"
 
+#include <cuda_runtime.h>
+
 #include <type_traits>
 #include <tuple>
 
@@ -136,6 +138,12 @@ class BVHGPU : public Compute
             m_tuner_postprocess->setPeriod(period);
             m_tuner_postprocess->setEnabled(enable);
 
+            m_tuner_collapse->setPeriod(period);
+            m_tuner_collapse->setEnabled(enable);
+
+            m_tuner_node_heads->setPeriod(period);
+            m_tuner_node_heads->setEnabled(enable);
+
             m_tuner_move->setPeriod(period);
             m_tuner_move->setEnabled(enable);
 
@@ -161,6 +169,11 @@ class BVHGPU : public Compute
         const GPUArray<BVHNode>& getTreeNodes()
             {
             return m_tree_nodes;
+            }
+
+        const GPUVector<unsigned int>& getNodeHeads()
+            {
+            return m_node_head;
             }
 
         const GPUArray<Scalar4>& getLeafXYZF()
@@ -205,6 +218,8 @@ class BVHGPU : public Compute
         std::unique_ptr<Autotuner> m_tuner_bubble;    //!< Tuner for kernel to bubble bounding volumes up hierarchy
         std::unique_ptr<Autotuner> m_tuner_optimize;  //!< Tuner for kernel to optimize the tree
         std::unique_ptr<Autotuner> m_tuner_postprocess; //!< Tuner for kernel to postprocess after optimization
+        std::unique_ptr<Autotuner> m_tuner_collapse;  //!< Tuner for kernel to collapse subtrees after optimization
+        std::unique_ptr<Autotuner> m_tuner_node_heads;//!<Tuner for kernel to update the node heads for traversal
         std::unique_ptr<Autotuner> m_tuner_move;      //!< Tuner for kernel to move particles to leaf order
         std::unique_ptr<Autotuner> m_tuner_map;       //!< Tuner for kernel to help map particles by type
         // @}
@@ -267,6 +282,7 @@ class BVHGPU : public Compute
         Scalar m_C_l;                               //!< Surface area cost of leaf nodes
         Scalar m_C_t;                               //!< Additional surface area cost of leaf nodes per contained primitive
         GPUVector<Scalar> m_tree_cost;              //!< The cost per tree node
+        GPUVector<unsigned int> m_tree_npart;        //!< Number of particles in subtree
 
         unsigned int m_iterations;                  //!< Number of treelet optimization iterations
         unsigned int m_treelet_size;                //!< Size of treelets to optimize
@@ -307,12 +323,23 @@ class BVHGPU : public Compute
         //! Iteratively optimizes the tree by rotating treelets
         void optimizeTree();
 
+        //! Postprocess after optimization
+        void postprocess();
+
+        //! Collapse subtrees after optimization
+        void collapseSubtrees();
+
         // @}
         //! \name Tree traversal
         // @{
 
         GPUArray<Scalar4> m_leaf_xyzf;          //!< Position and id of each particle in a leaf
         GPUArray<Scalar2> m_leaf_db;            //!< Diameter and body of each particle in a leaf
+        GPUVector<unsigned int> m_node_head;    //!< Starting offset of every leaf node in list of sorted particles
+        GPUArray<unsigned int> m_count;         //!< Counter for collecting subtree leaf nodes
+
+        //! Update the starting indices of leaf nodes in the sorted list of particles
+        void updateNodeHeads();
 
         //! Moves particles from ParticleData order to leaf order for more efficient tree traversal
         void moveLeafParticles();
@@ -343,6 +370,8 @@ BVHGPU<BVHNode, Shape, IntHPMC>::BVHGPU(std::shared_ptr<SystemDefinition> sysdef
     m_tuner_bubble.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_bubble_bounding_volumes", this->m_exec_conf));
     m_tuner_optimize.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_optimize_tree", this->m_exec_conf));
     m_tuner_postprocess.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_postprocess_tree", this->m_exec_conf));
+    m_tuner_collapse.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_collapse", this->m_exec_conf));
+    m_tuner_node_heads.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_node_heads", this->m_exec_conf));
     m_tuner_move.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_move_particles", this->m_exec_conf));
     m_tuner_map.reset(new Autotuner(32, 1024, 32, 5, 100000, "bvh_map_particles", this->m_exec_conf));
 
@@ -411,6 +440,8 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::allocateTree()
     GPUArray<Scalar2> leaf_db(m_pdata->getMaxN(), m_exec_conf);
     m_leaf_db.swap(leaf_db);
 
+    GPUVector<unsigned int>(m_exec_conf).swap(m_node_head);
+
     // allocate per type memory
     GPUVector<unsigned int> leaf_offset(m_pdata->getNTypes(), m_exec_conf);
     m_leaf_offset.swap(leaf_offset);
@@ -438,6 +469,10 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::allocateTree()
 
     // SAH cost per tree node
     GPUVector<Scalar>(m_exec_conf).swap(m_tree_cost);
+    GPUVector<unsigned int>(m_exec_conf).swap(m_tree_npart);
+
+    // Node starting indices in leaves
+    GPUVector<unsigned int>(m_exec_conf).swap(m_node_head);
 
     // we really only need as many morton codes as we have leafs
     GPUVector<uint32_t> morton_codes_red(m_exec_conf);
@@ -450,6 +485,8 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::allocateTree()
     // conditions
     GPUFlags<int> morton_conditions(m_exec_conf);
     m_morton_conditions.swap(morton_conditions);
+
+    GPUArray<unsigned int>(1,m_exec_conf).swap(m_count);
     }
 
 /*!
@@ -709,10 +746,16 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::buildTree()
     // step six: bubble up the bounding volumes
     bubbleBoundingVolumes();
 
-    // step seven (optional): iteratively optimize the tree
-    optimizeTree();
+    if (m_iterations)
+        {
+        // step seven (optional): iteratively optimize the tree
+        optimizeTree();
+        }
 
-    // step eight: move particle information into leaf nodes
+    // step eight: update node heads for traversal
+    updateNodeHeads();
+
+    // step nine: move particle information into leaf nodes
     moveLeafParticles();
 
     if (m_prof) m_prof->pop(m_exec_conf);
@@ -964,11 +1007,15 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::genTreeHierarchy()
 template<class BVHNode, class Shape, class IntHPMC>
 void BVHGPU<BVHNode, Shape, IntHPMC>::bubbleBoundingVolumes()
     {
+    // resize subtree particle counts as necessary
+    m_tree_npart.resize(m_n_node);
+
     if (m_prof) m_prof->push(m_exec_conf,"Bubble");
     ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
     ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
 
     ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::read);
+    ArrayHandle<unsigned int> d_tree_npart(m_tree_npart, access_location::device, access_mode::overwrite);
 
     m_tuner_bubble->begin();
     detail::gpu_bvh_bubble_bounding_volumes<BVHNode>(d_node_locks.data,
@@ -977,6 +1024,7 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::bubbleBoundingVolumes()
                            m_pdata->getNTypes(),
                            m_n_leaf,
                            m_n_internal,
+                           d_tree_npart.data,
                            m_tuner_bubble->getParam());
     if (m_exec_conf->isCUDAErrorCheckingEnabled())
         CHECK_CUDA_ERROR();
@@ -999,51 +1047,121 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::optimizeTree()
     // reallocate array if necessary
     m_tree_cost.resize(m_n_node*m_iterations);
 
-    ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
-    ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
-
-    ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::readwrite);
-    ArrayHandle<Scalar> d_tree_cost(m_tree_cost, access_location::device, access_mode::overwrite);
-
-    for (unsigned int i = 0; i < m_iterations; ++i)
         {
-        m_tuner_optimize->begin();
-        detail::gpu_bvh_optimize_treelets<BVHNode>(d_node_locks.data,
-                               d_tree_nodes.data,
-                               d_tree_parent_sib.data,
-                               m_pdata->getNTypes(),
-                               m_n_leaf,
-                               m_n_internal,
-                               m_C_i,
-                               m_C_l,
-                               m_C_t,
-                               m_treelet_size,
-                               d_tree_cost.data+m_n_node*i,
-                               m_tuner_bubble->getParam()
-                               );
-        if (m_exec_conf->isCUDAErrorCheckingEnabled())
-            CHECK_CUDA_ERROR();
-        m_tuner_optimize->end();
+        ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
+        ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
+
+        ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::readwrite);
+        ArrayHandle<Scalar> d_tree_cost(m_tree_cost, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_tree_npart(m_tree_npart, access_location::device, access_mode::readwrite);
+
+        for (unsigned int i = 0; i < m_iterations; ++i)
+            {
+            m_tuner_optimize->begin();
+            detail::gpu_bvh_optimize_treelets<BVHNode>(d_node_locks.data,
+                                   d_tree_nodes.data,
+                                   d_tree_parent_sib.data,
+                                   m_pdata->getNTypes(),
+                                   m_n_leaf,
+                                   m_n_internal,
+                                   m_C_i,
+                                   m_C_l,
+                                   m_C_t,
+                                   m_treelet_size,
+                                   d_tree_cost.data+m_n_node*i,
+                                   d_tree_npart.data,
+                                   m_tuner_bubble->getParam()
+                                   );
+            if (m_exec_conf->isCUDAErrorCheckingEnabled())
+                CHECK_CUDA_ERROR();
+            m_tuner_optimize->end();
+            }
         }
 
-    // postprocess, update ropes
+    // postprocess after optimization
+    postprocess();
 
-    if (m_iterations)
-        {
-        m_tuner_postprocess->begin();
-        detail::gpu_bvh_postprocess_tree<BVHNode>(d_node_locks.data,
-                                    d_tree_nodes.data,
-                                    d_tree_parent_sib.data,
-                                    m_pdata->getNTypes(),
-                                    m_n_leaf,
-                                    m_n_internal,
-                                    m_tuner_postprocess->getParam());
-        if (m_exec_conf->isCUDAErrorCheckingEnabled())
-            CHECK_CUDA_ERROR();
-        m_tuner_postprocess->end();
-        }
+    // collapse subtrees identified during optimization
+    collapseSubtrees();
 
     if (m_prof) m_prof->pop(m_exec_conf);
+    }
+
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::postprocess()
+    {
+    if (m_prof)
+        m_prof->push(m_exec_conf,"Postprocess");
+
+    ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
+    ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::read);
+    ArrayHandle<unsigned int> d_node_locks(m_node_locks, access_location::device, access_mode::overwrite);
+
+    // postprocess, update ropes
+    m_tuner_postprocess->begin();
+    detail::gpu_bvh_postprocess_tree<BVHNode>(d_node_locks.data,
+                                d_tree_nodes.data,
+                                d_tree_parent_sib.data,
+                                m_pdata->getNTypes(),
+                                m_n_leaf,
+                                m_n_internal,
+                                m_tuner_postprocess->getParam());
+    if (m_exec_conf->isCUDAErrorCheckingEnabled())
+        CHECK_CUDA_ERROR();
+    m_tuner_postprocess->end();
+
+    if (m_prof)
+        m_prof->pop(m_exec_conf);
+    }
+
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::collapseSubtrees()
+    {
+    if (m_prof)
+        m_prof->push(m_exec_conf,"Collapse");
+
+    // resize node heads as necessary
+    m_node_head.resize(m_n_node);
+
+        {
+        // and collapse the subtrees
+        ArrayHandle<unsigned int> d_leaf_offset(m_leaf_offset, access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_num_per_type(m_num_per_type, access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_node_head(m_node_head, access_location::device, access_mode::readwrite);
+
+        ArrayHandle<BVHNode> d_tree_nodes(m_tree_nodes, access_location::device, access_mode::readwrite);
+        ArrayHandle<uint2> d_tree_parent_sib(m_tree_parent_sib, access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_tree_npart(m_tree_npart, access_location::device, access_mode::read);
+
+        ArrayHandle<unsigned int> d_map_tree_pid(m_map_tree_pid, access_location::device, access_mode::read);
+        ArrayHandle<unsigned int> d_map_tree_pid_alt(m_map_tree_pid_alt, access_location::device, access_mode::overwrite);
+        ArrayHandle<unsigned int> d_count(m_count, access_location::device, access_mode::overwrite);
+
+        m_tuner_collapse->begin();
+        detail::gpu_bvh_collapse_subtrees<BVHNode>(m_n_internal,
+                                  m_n_leaf,
+                                  d_tree_nodes.data,
+                                  d_tree_parent_sib.data,
+                                  d_tree_npart.data,
+                                  d_leaf_offset.data,
+                                  m_pdata->getNTypes(),
+                                  d_num_per_type.data,
+                                  d_node_head.data,
+                                  m_particles_per_leaf,
+                                  d_map_tree_pid.data,
+                                  d_count.data,
+                                  d_map_tree_pid_alt.data,
+                                  m_tuner_collapse->getParam());
+        if (m_exec_conf->isCUDAErrorCheckingEnabled())
+            CHECK_CUDA_ERROR();
+        m_tuner_collapse->end();
+        }
+
+    // swap current with output array
+    m_map_tree_pid.swap(m_map_tree_pid_alt);
+
+    if (m_prof)
+        m_prof->pop(m_exec_conf);
     }
 
 template<class BVHNode, class Shape, class IntHPMC>
@@ -1133,6 +1251,34 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::moveLeafParticles()
 
     if (m_prof) m_prof->pop(m_exec_conf);
     }
+
+template<class BVHNode, class Shape, class IntHPMC>
+void BVHGPU<BVHNode, Shape, IntHPMC>::updateNodeHeads()
+    {
+    // resize node heads array as necessaary
+    m_node_head.resize(m_n_node);
+
+    if (m_prof) m_prof->push(m_exec_conf,"update node heads");
+
+    ArrayHandle<unsigned int> d_leaf_offset(m_leaf_offset, access_location::device, access_mode::read);
+    ArrayHandle<unsigned int> d_num_per_type(m_num_per_type, access_location::device, access_mode::read);
+    ArrayHandle<unsigned int> d_node_head(m_node_head, access_location::device, access_mode::readwrite);
+
+    m_tuner_node_heads->begin();
+    detail::gpu_bvh_update_node_heads(m_n_leaf,
+                                 d_leaf_offset.data,
+                                 m_pdata->getNTypes(),
+                                 d_num_per_type.data,
+                                 d_node_head.data,
+                                 m_particles_per_leaf,
+                                 m_tuner_node_heads->getParam());
+    if (m_exec_conf->isCUDAErrorCheckingEnabled())
+        CHECK_CUDA_ERROR();
+    m_tuner_node_heads->end();
+
+    if (m_prof) m_prof->pop(m_exec_conf);
+    }
+
 
 template <class BVHNode, class Shape = detail::EmptyShape, class IntHPMC = std::tuple<> >
 void export_BVHGPU(pybind11::module& m, const std::string& name)
