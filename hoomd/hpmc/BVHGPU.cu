@@ -1583,7 +1583,7 @@ __global__ void gpu_bvh_collapse_subtrees_kernel(const unsigned int ninternal,
         // the number of particles in this subtree
         unsigned int np = is_leaf ? (d_tree_nodes[idx].np_child_masked >> 1) : (d_tree_npart[idx] >> 1);
 
-        unsigned int cur_node_idx = idx;
+        int cur_node_idx = idx;
         int end = d_tree_nodes[idx].rope;
 
         unsigned int node_head = UINT_MAX;

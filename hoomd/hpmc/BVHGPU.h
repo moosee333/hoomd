@@ -746,14 +746,14 @@ void BVHGPU<BVHNode, Shape, IntHPMC>::buildTree()
     // step six: bubble up the bounding volumes
     bubbleBoundingVolumes();
 
+    // step seven: update node heads for traversal
+    updateNodeHeads();
+
     if (m_iterations)
         {
-        // step seven (optional): iteratively optimize the tree
+        // step eight (optional): iteratively optimize the tree
         optimizeTree();
         }
-
-    // step eight: update node heads for traversal
-    updateNodeHeads();
 
     // step nine: move particle information into leaf nodes
     moveLeafParticles();
