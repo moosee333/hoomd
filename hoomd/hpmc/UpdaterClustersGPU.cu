@@ -10,6 +10,8 @@
 #include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
+#include <thrust/iterator/constant_iterator.h>
+#include <thrust/iterator/discard_iterator.h>
 #include <thrust/device_ptr.h>
 #include <thrust/copy.h>
 
@@ -207,52 +209,103 @@ cudaError_t gpu_connected_components(
     check_cuda(cudaMemcpy(d_adj_copy, d_adj, sizeof(uint2)*n_elements,cudaMemcpyDeviceToDevice));
 
     // fill sparse matrix and make it symmetric
-    thrust::device_ptr<uint2> adj(d_adj_copy);
+    thrust::device_ptr<uint2> adj_copy(d_adj_copy);
 
     // sort every pair
     thrust::transform(
         thrust::cuda::par(alloc),
-        adj,
-        adj + n_elements,
-        adj,
+        adj_copy,
+        adj_copy + n_elements,
+        adj_copy,
         sort_pair());
 
     // sort the list of pairs
     thrust::sort(
         thrust::cuda::par(alloc),
-        adj,
-        adj + n_elements,
+        adj_copy,
+        adj_copy + n_elements,
         pair_less());
 
     // remove duplicates
     auto unique_end = thrust::unique(
         thrust::cuda::par(alloc),
-        adj,
-        adj + n_elements,
+        adj_copy,
+        adj_copy + n_elements,
         pair_equal());
 
-    unsigned int n_unique = unique_end - adj;
+    unsigned int n_unique = unique_end - adj_copy;
+
+    unsigned int *d_label;
+    check_cuda(cudaMalloc((void **)&d_label,N*sizeof(unsigned int)));
+    thrust::device_ptr<unsigned int> label(d_label);
+
+    // label all endpoints of edges
+    auto source = thrust::make_transform_iterator(adj_copy, get_source());
+    auto destination = thrust::make_transform_iterator(adj_copy, get_destination());
+
+    auto one_it = thrust::constant_iterator<unsigned int>(1);
+    thrust::fill(
+        thrust::cuda::par(alloc),
+        label,
+        label + N,
+        0);
+
+    thrust::scatter(
+        thrust::cuda::par(alloc),
+        one_it,
+        one_it + n_unique,
+        source,
+        label);
+
+    thrust::scatter(
+        thrust::cuda::par(alloc),
+        one_it,
+        one_it + n_unique,
+        destination,
+        label);
+
+    // partition the vertices into trivial ones, i.e. those not connected to any edge, and connected ones
+    int *d_connected_vertices;
+    int *d_trivial_components;
+    check_cuda(cudaMalloc((void **)&d_connected_vertices,N*sizeof(int)));
+    thrust::device_ptr<int> connected_vertices(d_connected_vertices);
+
+    check_cuda(cudaMalloc((void **)&d_trivial_components,N*sizeof(int)));
+    thrust::device_ptr<int> trivial_components(d_trivial_components);
+
+    auto part = thrust::stable_partition_copy(
+        thrust::cuda::par(alloc),
+        thrust::counting_iterator<int>(0),
+        thrust::counting_iterator<int>(0)+N,
+        label,
+        connected_vertices,
+        trivial_components,
+        thrust::identity<int>()
+        );
+    unsigned int n_connected = part.first - connected_vertices;
+    unsigned int n_trivial = part.second - trivial_components;
 
     // input matrix in COO format
     nvgraphCOOTopology32I_t COO_input;
     COO_input = (nvgraphCOOTopology32I_t) malloc(sizeof(struct nvgraphCOOTopology32I_st));
 
     COO_input->nvertices = N;
-    COO_input->nedges = n_unique;  // for undirected graph
-    COO_input->tag = NVGRAPH_UNSORTED; // bc of the transpose
+    COO_input->nedges = 2*n_unique;  // for undirected graph
+    COO_input->tag = NVGRAPH_UNSORTED;
 
     // allocate COO matrix topology
     check_cuda(cudaMalloc((void **)&(COO_input->source_indices), COO_input->nedges*sizeof(int)));
     check_cuda(cudaMalloc((void **)&(COO_input->destination_indices), COO_input->nedges*sizeof(int)));
-
-    auto source = thrust::make_transform_iterator(adj, get_source());
-    auto destination = thrust::make_transform_iterator(adj, get_destination());
 
     thrust::device_ptr<int> coo_source(COO_input->source_indices);
     thrust::device_ptr<int> coo_destination(COO_input->destination_indices);
 
     thrust::copy(source, source+n_unique, coo_source);
     thrust::copy(destination, destination+n_unique, coo_destination);
+
+    // transpose
+    thrust::copy(source, source+n_unique, coo_destination+n_unique);
+    thrust::copy(destination, destination+n_unique, coo_source+n_unique);
 
     // a current limitation of nvgraph is to only support graphs with a single edge/vertex data type
     // we need both float (for spectral analysis) and int (for traversal), so create two parallel graphs
@@ -350,11 +403,13 @@ cudaError_t gpu_connected_components(
         graph_I,
         (void *) CSR_output_I,
         NVGRAPH_CSR_32));
+    #if 0
     check_nvgraph(nvgraphAllocateEdgeData(
         nvgraphH,
         graph_I,
         edge_num_sets_I,
         &edge_dimT_I));
+    #endif
 
 
     /* Vertex data
@@ -414,9 +469,13 @@ cudaError_t gpu_connected_components(
     check_cuda(cudaMalloc((void **) &d_last_x, nverts*sizeof(float)));
 
     // sorted vertex indices for subgraph
-    int *d_vertices;
-    check_cuda(cudaMalloc((void **)&d_vertices, nverts*sizeof(int)));
-    thrust::device_ptr<int> vertices(d_vertices);
+    int *d_vertices_left;
+    check_cuda(cudaMalloc((void **)&d_vertices_left, nverts*sizeof(int)));
+    thrust::device_ptr<int> vertices_left(d_vertices_left);
+
+    int *d_vertices_right;
+    check_cuda(cudaMalloc((void **)&d_vertices_right, nverts*sizeof(int)));
+    thrust::device_ptr<int> vertices_right(d_vertices_right);
 
     // LHS of matrix vector multiplication y, and additive input vector
     float *d_y;
@@ -492,10 +551,35 @@ cudaError_t gpu_connected_components(
     // a queue for subgraphs (BFS over components)
     std::queue<nvgraphGraphDescr_t>  Q;
 
-    // push the parent graph
-    Q.push(graph_F);
+    // take the subgraph of connected vertices
 
-    num_components = 0;
+    // create subgraph objects to the left
+    nvgraphGraphDescr_t sub_graph_connected;
+    check_nvgraph(nvgraphCreateGraphDescr(nvgraphH, &sub_graph_connected));
+
+    // extract the float subgraph
+    check_nvgraph(nvgraphExtractSubgraphByVertex(
+        nvgraphH,
+        graph_F,
+        sub_graph_connected,
+        d_connected_vertices,
+        n_connected));
+
+    // destroy the parent graph already
+    check_nvgraph(nvgraphDestroyGraphDescr(nvgraphH, graph_F));
+
+    // push the root graph
+    Q.push(sub_graph_connected);
+
+    // already label the trivial components
+    thrust::scatter(
+        thrust::cuda::par(alloc),
+        thrust::counting_iterator<unsigned int>(0),
+        thrust::counting_iterator<unsigned int>(0)+n_trivial,
+        trivial_components,
+        components);
+
+    num_components = n_trivial;
 
     int seed = 0;
 
@@ -916,7 +1000,8 @@ cudaError_t gpu_connected_components(
 
             if (split_idx == nverts)
         #else
-        unsigned int split_idx = UINT_MAX;
+        unsigned int n_left = 0;
+        unsigned int n_right = 0;
         if (!done)
         #endif
                 {
@@ -924,7 +1009,7 @@ cudaError_t gpu_connected_components(
                 nvgraphTraversalParameter_t traversal_param;
                 nvgraphTraversalParameterInit(&traversal_param);
                 nvgraphTraversalSetDistancesIndex(&traversal_param, distances_index);
-                nvgraphTraversalSetUndirectedFlag(&traversal_param, true);
+//                nvgraphTraversalSetUndirectedFlag(&traversal_param, 1);
 
                 // do a BFS traversal starting from first index of this putative s.c. component
 
@@ -935,16 +1020,18 @@ cudaError_t gpu_connected_components(
                     (void *) d_component,
                     ptls_index));
 
-                // take its first index
-                thrust::transform(
-                    thrust::cuda::par(alloc),
+                auto component_idx = thrust::make_transform_iterator(
                     component,
-                    component + 1,
-                    source_idx,
                     my_float_as_int());
 
                 // transfer to host
-                int source_vert = 0;
+                int source_vert;
+                thrust::copy(
+                    thrust::cuda::par(alloc),
+                    component_idx,
+                    component_idx + 1,
+                    source_idx);
+
                 check_cuda(cudaMemcpy(&source_vert, d_source_idx, sizeof(int), cudaMemcpyDeviceToHost));
 
                 // do the traversal
@@ -966,10 +1053,6 @@ cudaError_t gpu_connected_components(
                 /*
                  * if any index in the component is unreachable (distance == 2^31 - 1), it can still be split
                  */
-                auto component_idx = thrust::make_transform_iterator(
-                    component,
-                    my_float_as_int());
-
                 auto distance_transform = thrust::make_permutation_iterator(
                         distances,
                         component_idx);
@@ -980,27 +1063,29 @@ cudaError_t gpu_connected_components(
                     distance_transform + nverts,
                     component_distances);
 
-                // fill vertices with ascending sequence
-                auto count = thrust::make_counting_iterator<int>(0);
-                thrust::copy(
-                    thrust::cuda::par(alloc),
-                    count,
-                    count + nverts,
-                    vertices);
-
                 // find first unreachable vertex
                 auto zipit = thrust::make_zip_iterator(thrust::make_tuple(
-                    component_distances, vertices));
+                    component_distances, thrust::counting_iterator<int>(0)));
 
-                auto unreachable_it = thrust::stable_partition(
+                auto zip_left = thrust::make_zip_iterator(thrust::make_tuple(
+                    thrust::discard_iterator<int>(),
+                    vertices_left));
+                auto zip_right = thrust::make_zip_iterator(thrust::make_tuple(
+                    thrust::discard_iterator<int>(),
+                    vertices_right));
+
+                auto part_reachable = thrust::stable_partition_copy(
                     thrust::cuda::par(alloc),
                     zipit,
                     zipit + nverts,
+                    zip_left,
+                    zip_right,
                     is_reachable()
                     );
-                split_idx = unreachable_it - zipit;
+                n_left = part_reachable.first - zip_left;
+                n_right = part_reachable.second - zip_right;
 
-                if (split_idx == nverts)
+                if (n_left == nverts)
                     {
                     // we have found a strongly connected component
                     done = true;
@@ -1019,8 +1104,8 @@ cudaError_t gpu_connected_components(
                     nvgraphH,
                     cur_graph_F,
                     sub_graph_left_F,
-                    d_vertices,
-                    split_idx));
+                    d_vertices_left,
+                    n_left));
 
                 // push the left subgraph in the queue
                 Q.push(sub_graph_left_F);
@@ -1034,8 +1119,8 @@ cudaError_t gpu_connected_components(
                     nvgraphH,
                     cur_graph_F,
                     sub_graph_right_F,
-                    d_vertices+split_idx,
-                    nverts - split_idx));
+                    d_vertices_right,
+                    n_right));
 
                 // push the right subgraph in the queue
                 Q.push(sub_graph_right_F);
@@ -1082,7 +1167,8 @@ cudaError_t gpu_connected_components(
     check_cuda(cudaFree(d_component_distances));
     check_cuda(cudaFree(d_ptl_idx));
     check_cuda(cudaFree(d_source_idx));
-    check_cuda(cudaFree(d_vertices));
+    check_cuda(cudaFree(d_vertices_left));
+    check_cuda(cudaFree(d_vertices_right));
     check_cuda(cudaFree(d_delta_x));
     check_cuda(cudaFree(d_z));
     check_cuda(cudaFree(d_y));
@@ -1102,6 +1188,9 @@ cudaError_t gpu_connected_components(
     check_cuda(cudaFree(d_edge_data_csr_F));
     check_cuda(cudaFree(d_edge_data_coo_F));
     check_cuda(cudaFree(d_adj_copy));
+    check_cuda(cudaFree(d_label));
+    check_cuda(cudaFree(d_connected_vertices));
+    check_cuda(cudaFree(d_trivial_components));
 
     check_nvgraph(nvgraphDestroyGraphDescr(nvgraphH, graph_I));
 
