@@ -7,7 +7,7 @@
 */
 
 // nvgraph not stable yet
-#undef NVGRAPH_AVAILABLE
+//#undef NVGRAPH_AVAILABLE
 
 #ifdef ENABLE_CUDA
 
@@ -781,6 +781,7 @@ void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timest
 
         for (unsigned int i = 0; i < N; ++i)
             clusters[h_components.data[i]].push_back(i);
+
         #else
         // compute connected components on CPU
         this->m_G.connectedComponents(clusters);

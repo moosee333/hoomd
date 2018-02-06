@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2017 The Regents of the University of Michigan
 // This file is part of the HOOMD-blue project, released under the BSD 3-Clause License.
 
-#undef NVGRAPH_AVAILABLE // currently unstable
+//#undef NVGRAPH_AVAILABLE // currently unstable
 #ifdef NVGRAPH_AVAILABLE
 
 #include "UpdaterClustersGPU.cuh"
@@ -285,6 +285,25 @@ cudaError_t gpu_connected_components(
     unsigned int n_connected = part.first - connected_vertices;
     unsigned int n_trivial = part.second - trivial_components;
 
+    // wrap the components output vector
+    thrust::device_ptr<unsigned int> components(d_components);
+
+    // already label the trivial components
+    thrust::scatter(
+        thrust::cuda::par(alloc),
+        thrust::counting_iterator<unsigned int>(0),
+        thrust::counting_iterator<unsigned int>(0)+n_trivial,
+        trivial_components,
+        components);
+
+    num_components = n_trivial;
+
+    if (!n_connected)
+        {
+        // return early
+        return cudaSuccess;
+        }
+
     // input matrix in COO format
     nvgraphCOOTopology32I_t COO_input;
     COO_input = (nvgraphCOOTopology32I_t) malloc(sizeof(struct nvgraphCOOTopology32I_st));
@@ -545,9 +564,6 @@ cudaError_t gpu_connected_components(
     check_cuda(cudaMalloc((void **) &d_component, sizeof(float)*nverts));
     thrust::device_ptr<float> component(d_component);
 
-    // wrap the components output vector
-    thrust::device_ptr<unsigned int> components(d_components);
-
     // a queue for subgraphs (BFS over components)
     std::queue<nvgraphGraphDescr_t>  Q;
 
@@ -570,16 +586,6 @@ cudaError_t gpu_connected_components(
 
     // push the root graph
     Q.push(sub_graph_connected);
-
-    // already label the trivial components
-    thrust::scatter(
-        thrust::cuda::par(alloc),
-        thrust::counting_iterator<unsigned int>(0),
-        thrust::counting_iterator<unsigned int>(0)+n_trivial,
-        trivial_components,
-        components);
-
-    num_components = n_trivial;
 
     int seed = 0;
 
