@@ -44,9 +44,9 @@ class Graph
         inline void addEdge(unsigned int v, unsigned int w);
 
         #ifdef ENABLE_TBB
-        inline void connectedComponents(std::vector<tbb::concurrent_vector<unsigned int> >& cc);
+        inline void connectedComponents(std::map<unsigned int, tbb::concurrent_vector<unsigned int> >& cc);
         #else
-        inline void connectedComponents(std::vector<std::vector<unsigned int> >& cc);
+        inline void connectedComponents(std::map<unsigned int, std::vector<unsigned int> >& cc);
         #endif
 
     private:
@@ -119,14 +119,15 @@ class Graph
 
 // Gather connected components in an undirected graph
 #ifdef ENABLE_TBB
-void Graph::connectedComponents(std::vector<tbb::concurrent_vector<unsigned int> >& cc)
+void Graph::connectedComponents(std::map<unsigned int,tbb::concurrent_vector<unsigned int> >& cc)
 #else
-void Graph::connectedComponents(std::vector<std::vector<unsigned int> >& cc)
+void Graph::connectedComponents(std::map<unsigned int,std::vector<unsigned int> >& cc)
 #endif
     {
     std::fill(visited.begin(), visited.end(), 0);
 
     #ifdef ENABLE_TBB
+    unsigned int ncomponent = 0;
     for (unsigned int v = 0; v < visited.size(); ++v)
         {
         if (! visited[v])
@@ -134,7 +135,7 @@ void Graph::connectedComponents(std::vector<std::vector<unsigned int> >& cc)
             tbb::concurrent_vector<unsigned int> component;
             DFSTask& a = *new(tbb::task::allocate_root()) DFSTask(v, visited, component, adj);
             tbb::task::spawn_root_and_wait(a);
-            cc.push_back(component);
+            cc[ncomponent++] = component;
             }
         }
     #else
@@ -152,7 +153,7 @@ void Graph::connectedComponents(std::vector<std::vector<unsigned int> >& cc)
     #else
     // Breadth first search
     std::queue<unsigned int> Q;
-
+    unsigned int ncomponent = 0;
     for (unsigned int v = 0; v < visited.size(); ++v)
         {
         if (! visited[v])
@@ -181,7 +182,7 @@ void Graph::connectedComponents(std::vector<std::vector<unsigned int> >& cc)
                     }
                 }
 
-            cc.push_back(component);
+            cc[ncomponent++] = component;
             }
         }
     #endif
@@ -398,9 +399,9 @@ class UpdaterClusters : public Updater
         Scalar m_flip_probability;                  //!< Cluster flip probability
 
         #ifdef ENABLE_TBB
-        std::vector<tbb::concurrent_vector<unsigned int> > m_clusters; //!< Cluster components
+        std::map<unsigned int,tbb::concurrent_vector<unsigned int> > m_clusters; //!< Cluster components
         #else
-        std::vector<std::vector<unsigned int> > m_clusters; //!< Cluster components
+        std::map<unsigned int,std::vector<unsigned int> > m_clusters; //!< Cluster components
         #endif
 
         detail::Graph m_G; //!< The graph
@@ -466,9 +467,9 @@ class UpdaterClusters : public Updater
 
         //! Determine connected components of the interaction graph
         #ifdef ENABLE_TBB
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int,tbb::concurrent_vector<unsigned int> >& clusters);
         #else
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int,std::vector<unsigned int> >& clusters);
         #endif
 
         //! Helper function to get interaction range
@@ -979,9 +980,9 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
 
 template<class Shape>
 #ifdef ENABLE_TBB
-void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
+void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int, tbb::concurrent_vector<unsigned int> >& clusters)
 #else
-void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters)
+void UpdaterClusters<Shape>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int, std::vector<unsigned int> >& clusters)
 #endif
     {
     // collect interactions on rank 0
@@ -1647,11 +1648,11 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
             this->m_prof->push("reject");
 
         // move every cluster independently
-        for (unsigned int icluster = 0; icluster < m_clusters.size(); icluster++)
+        for (auto it_cluster = m_clusters.begin(); it_cluster != m_clusters.end(); it_cluster++)
             {
             // if any particle in the cluster is rejected, the cluster is not transformed
             bool reject = false;
-            for (auto it = m_clusters[icluster].begin(); it != m_clusters[icluster].end(); ++it)
+            for (auto it = it_cluster->second.begin(); it != it_cluster->second.end(); it++)
                 {
                 bool mpi = false;
                 #ifdef ENABLE_MPI
@@ -1671,7 +1672,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                 int n_A_old = 0, n_A_new = 0;
                 int n_B_old = 0, n_B_new = 0;
 
-                for (auto it = m_clusters[icluster].begin(); it != m_clusters[icluster].end(); ++it)
+                for (auto it = it_cluster->second.begin(); it != it_cluster->second.end(); it++)
                     {
                     unsigned int i = *it;
                     if (snap.type[i] == m_ab_types[0])
@@ -1693,7 +1694,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
             if (reject || !flip)
                 {
                 // revert cluster
-                for (auto it = m_clusters[icluster].begin(); it != m_clusters[icluster].end(); ++it)
+                for (auto it = it_cluster->second.begin(); it != it_cluster->second.end(); it++)
                     {
                     // particle index
                     unsigned int i = *it;
@@ -1722,7 +1723,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                 }
             else if (flip)
                 {
-                for (auto it = m_clusters[icluster].begin(); it != m_clusters[icluster].end(); ++it)
+                for (auto it = it_cluster->second.begin(); it != it_cluster->second.end(); it++)
                     {
                     // particle index
                     unsigned int i = *it;

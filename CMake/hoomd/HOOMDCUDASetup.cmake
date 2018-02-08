@@ -109,39 +109,4 @@ else()
     message(STATUS "Found cusolver: ${CUDA_cusolver_LIBRARY}")
 endif()
 
-# set NVGRAPH_AVAILABLE depending on CUDA Toolkit version
-if (ENABLE_CUDA)
-    if(${CUDA_VERSION} VERSION_LESS 9.0)
-        set(NVGRAPH_AVAILABLE FALSE)
-    else()
-        # CUDA 9.0 has the nvgraph version with the graph traversal API that we require
-        if (NOT ${CUDA_nvgraph_LIBRARY} STREQUAL "")
-            # CMake found it
-            set(NVGRAPH_AVAILABLE TRUE)
-        else()
-            # try finding it ourselves
-            find_library(CUDA_nvgraph_LIBRARY
-                         NAMES nvgraph
-                         PATHS "${CUDA_TOOLKIT_ROOT_DIR}/lib64"
-                               "${CUDA_TOOLKIT_ROOT_DIR}/lib"
-                         ENV CUDA_LIB_PATH
-                         DOC "nvGraph library"
-                         NO_DEFAULT_PATH
-                         )
-            if (${CUDA_nvgraph_LIBRARY})
-                set(NVGRAPH_AVAILABLE TRUE)
-            else()
-                set(NVGRAPH_AVAILABLE FALSE)
-            endif()
-        endif()
-    endif()
-endif(ENABLE_CUDA)
-
-if (NOT NVGRAPH_AVAILABLE)
-    message(STATUS "Could not find nvgraph library, hpmc.update.clusters() will be slower.")
-else()
-    message(STATUS "Found nvgraph: ${CUDA_nvgraph_LIBRARY}")
-endif()
-
-
 endif()

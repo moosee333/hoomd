@@ -6,15 +6,14 @@
     \brief Declaration of UpdaterBoxClusters
 */
 
-// nvgraph not stable yet
-//#undef NVGRAPH_AVAILABLE
-
 #ifdef ENABLE_CUDA
 
 #include "UpdaterClusters.h"
 #include "UpdaterClustersGPU.cuh"
 #include "hoomd/AABBTree.h"
 #include "BVHGPU.h"
+
+
 
 #include <cuda_runtime.h>
 
@@ -84,9 +83,7 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
 
         std::shared_ptr<BVH> m_bvh_gpu;     //!< Bounding volume hierarchy for locality search
 
-        #ifdef NVGRAPH_AVAILABLE
-        GPUVector<unsigned int> m_components;  //!< The connected component labels per particle
-        #endif
+        GPUVector<int> m_components;          //!< The connected component labels per particle
 
         std::unique_ptr<Autotuner> m_tuner_old_new_collisions;     //!< Autotuner for checking new against new (broad phase)
         std::unique_ptr<Autotuner> m_tuner_old_new_overlaps;       //!< Autotuner for checking new against new (narrow phase)
@@ -110,9 +107,9 @@ class UpdaterClustersGPU : public UpdaterClusters<Shape>
 
         //! Determine connected components of the interaction graph
         #ifdef ENABLE_TBB
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int, tbb::concurrent_vector<unsigned int> >& clusters);
         #else
-        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters);
+        virtual void findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int, std::vector<unsigned int> >& clusters);
         #endif
     };
 
@@ -135,9 +132,7 @@ UpdaterClustersGPU<Shape, BVH>::UpdaterClustersGPU(std::shared_ptr<SystemDefinit
     GPUArray<unsigned int>(1, this->m_exec_conf).swap(m_n_reject);
     GPUVector<unsigned int>(this->m_exec_conf).swap(m_reject);
 
-    #ifdef NVGRAPH_AVAILABLE
-    GPUVector<unsigned int>(this->m_exec_conf).swap(m_components);
-    #endif
+    GPUVector<int>(this->m_exec_conf).swap(m_components);
 
     // allocate memory for sweep and prune
     GPUVector<Scalar>(this->m_exec_conf).swap(m_begin);
@@ -592,9 +587,9 @@ void UpdaterClustersGPU<Shape, BVH>::findInteractions(unsigned int timestep, vec
 
 template<class Shape, class BVH>
 #ifdef ENABLE_TBB
-void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<tbb::concurrent_vector<unsigned int> >& clusters)
+void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int, tbb::concurrent_vector<unsigned int> >& clusters)
 #else
-void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::vector<std::vector<unsigned int> >& clusters)
+void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timestep, unsigned int N, bool line, bool swap, std::map<unsigned int, std::vector<unsigned int> >& clusters)
 #endif
     {
     // collect interactions on rank 0
@@ -683,11 +678,6 @@ void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timest
         this->m_ptl_reject.clear();
         this->m_local_reject.clear();
 
-        #ifndef NVGRAPH_AVAILABLE
-        // resize the number of graph nodes in place
-        this->m_G.resize(N);
-        #endif
-
         bool mpi = false;
         #ifdef ENABLE_MPI
         mpi = (bool) this->m_comm;
@@ -711,10 +701,6 @@ void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timest
             for (unsigned int i = 0; i < m_n_overlaps_new_new; ++i)
             #endif
                 {
-                #ifndef NVGRAPH_AVAILABLE
-                this->m_G.addEdge(h_overlaps.data[offs + i].x, h_overlaps.data[offs + i].y);
-                #endif
-
                 // add to list of rejected particles
                 this->m_local_reject.insert(h_overlaps.data[offs + i].x);
                 this->m_local_reject.insert(h_overlaps.data[offs + i].y);
@@ -724,25 +710,8 @@ void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timest
             #endif
             }
 
-        #ifndef NVGRAPH_AVAILABLE
-            {
-            ArrayHandle<uint2> h_overlaps(m_overlaps, access_location::host, access_mode::read);
-
-            #ifdef ENABLE_TBB
-            tbb::parallel_for((unsigned int) 0, m_n_overlaps_old_new, [&] (unsigned int i) {
-            #else
-            for (unsigned int i = 0; i < m_n_overlaps_old_new; ++i)
-            #endif
-                this->m_G.addEdge(h_overlaps.data[i].x, h_overlaps.data[i].y);
-            #ifdef ENABLE_TBB
-                });
-            #endif
-            }
-        #endif
-
         clusters.clear();
 
-        #ifdef NVGRAPH_AVAILABLE
         m_components.resize(N);
 
         // access edges of adajacency matrix
@@ -753,11 +722,7 @@ void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timest
 
             {
             // access the output array
-            ArrayHandle<unsigned int> d_components(m_components, access_location::device, access_mode::overwrite);
-
-            unsigned int max_iterations = 50;
-            float tol = 1e-10;
-            float jump_tol = 1; // tolerance with which we detect jumps of the eigenvector components
+            ArrayHandle<int> d_components(m_components, access_location::device, access_mode::overwrite);
 
             detail::gpu_connected_components(
                 d_overlaps.data,
@@ -765,10 +730,7 @@ void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timest
                 m_n_overlaps_old_new + m_n_overlaps_new_new,
                 d_components.data,
                 num_components,
-                m_stream,
-                max_iterations,
-                tol,
-                jump_tol,
+                this->m_exec_conf->dev_prop,
                 this->m_exec_conf->getCachedAllocator());
 
             if (this->m_exec_conf->isCUDAErrorCheckingEnabled())
@@ -776,16 +738,10 @@ void UpdaterClustersGPU<Shape, BVH>::findConnectedComponents(unsigned int timest
             }
 
         // copy to host
-        clusters.resize(num_components);
-        ArrayHandle<unsigned int> h_components(m_components, access_location::host, access_mode::read);
+        ArrayHandle<int> h_components(m_components, access_location::host, access_mode::read);
 
         for (unsigned int i = 0; i < N; ++i)
             clusters[h_components.data[i]].push_back(i);
-
-        #else
-        // compute connected components on CPU
-        this->m_G.connectedComponents(clusters);
-        #endif
         }
 
     if (this->m_prof)

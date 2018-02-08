@@ -35,8 +35,3 @@ add_definitions(-DEIGEN_MPL2_ONLY)
 if (CUSOLVER_AVAILABLE)
     add_definitions(-DCUSOLVER_AVAILABLE)
 endif()
-
-# export nvgraph availability
-if (NVGRAPH_AVAILABLE)
-    add_definitions(-DNVGRAPH_AVAILABLE)
-endif()

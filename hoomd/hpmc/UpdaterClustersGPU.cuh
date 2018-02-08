@@ -193,20 +193,15 @@ cudaError_t gpu_hpmc_clusters(const hpmc_clusters_args_t &args,
 template< class Shape >
 cudaError_t gpu_hpmc_clusters_overlaps(const hpmc_clusters_args_t &args, const typename Shape::param_type *d_params);
 
-#ifdef NVGRAPH_AVAILABLE
-//! Use nvGRAPH to find strongly connected components
+//! Find the connected components of the adjacency matrix
 cudaError_t gpu_connected_components(
     const uint2 *d_adj,
     unsigned int N,
     unsigned int n_elements,
-    unsigned int *d_components,
+    int *d_components,
     unsigned int &num_components,
-    cudaStream_t stream,
-    unsigned int max_ites,
-    float tol,
-    float jump_tol,
+    const cudaDeviceProp& dev_prop,
     const CachedAllocator& alloc);
-#endif
 
 #ifdef NVCC
 //! Texture for reading postype

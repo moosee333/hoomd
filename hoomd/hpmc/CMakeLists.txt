@@ -120,10 +120,10 @@ add_library (_hpmc SHARED ${_hpmc_sources} ${_CUDA_SEPARABLE_OBJECT}
 # link the library to its dependencies
 
 # link the library to its dependencies
-if (NVGRAPH_AVAILABLE)
-    target_link_libraries(_hpmc _hoomd ${HOOMD_COMMON_LIBS} ${CUDA_nvgraph_LIBRARY} ${CUDA_cublas_LIBRARY})
-else()
-    target_link_libraries(_hpmc _hoomd ${HOOMD_COMMON_LIBS})
+target_link_libraries(_hpmc _hoomd ${HOOMD_COMMON_LIBS})
+
+if(ENABLE_CUDA)
+    target_link_libraries(_hpmc ${CUDA_cusparse_LIBRARY})
 endif()
 
 if(ENABLE_CUDA)
