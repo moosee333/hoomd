@@ -34,15 +34,6 @@ namespace detail
         }\
     }
 
-#define check_cuda(a) \
-    {\
-    cudaError_t status = (a);\
-    if ((int)status != cudaSuccess)\
-        {\
-        return status;\
-        }\
-    }
-
 struct get_source : public thrust::unary_function<uint2, unsigned int>
     {
     __host__ __device__
@@ -61,18 +52,6 @@ struct get_destination : public thrust::unary_function<uint2, unsigned int>
         }
     };
 
-//! Generates edges such that the lower triangular adjacency matrix is filled
-struct sort_pair : public thrust::unary_function<uint2, uint2>
-    {
-    __device__
-    uint2 operator()(const uint2& p) const
-        {
-        unsigned int i = p.x;
-        unsigned int j = p.y;
-        return (j < i) ? make_uint2(i,j) : make_uint2(j,i);
-        }
-    };
-
 struct pair_less : public thrust::binary_function<uint2, uint2, bool>
     {
     __device__ bool operator()(const uint2 &lhs, const uint2 &rhs) const
@@ -80,15 +59,6 @@ struct pair_less : public thrust::binary_function<uint2, uint2, bool>
         return lhs.x < rhs.x || (lhs.x == rhs.x && lhs.y < rhs.y);
         }
     };
-
-struct pair_equal : public thrust::binary_function<uint2, uint2, bool>
-    {
-    __device__ bool operator()(const uint2 &lhs, const uint2 &rhs) const
-        {
-        return lhs.x == rhs.x && lhs.y == rhs.y;
-        }
-    };
-
 
 cudaError_t gpu_connected_components(
     const uint2 *d_adj,
@@ -100,20 +70,10 @@ cudaError_t gpu_connected_components(
     const CachedAllocator& alloc)
     {
     // make a copy of the input
-    uint2 *d_adj_copy;
-    check_cuda(cudaMalloc((void **)&d_adj_copy,n_elements*sizeof(uint2)));
-    check_cuda(cudaMemcpy(d_adj_copy, d_adj, sizeof(uint2)*n_elements,cudaMemcpyDeviceToDevice));
+    uint2 *d_adj_copy = alloc.getTemporaryBuffer<uint2>(n_elements);
+    cudaMemcpy(d_adj_copy, d_adj, sizeof(uint2)*n_elements,cudaMemcpyDeviceToDevice);
 
-    // fill sparse matrix and make it symmetric
     thrust::device_ptr<uint2> adj_copy(d_adj_copy);
-
-    // sort every pair
-    thrust::transform(
-        thrust::cuda::par(alloc),
-        adj_copy,
-        adj_copy + n_elements,
-        adj_copy,
-        sort_pair());
 
     // sort the list of pairs
     thrust::sort(
@@ -122,148 +82,27 @@ cudaError_t gpu_connected_components(
         adj_copy + n_elements,
         pair_less());
 
-    // remove duplicates
-    auto unique_end = thrust::unique(
-        thrust::cuda::par(alloc),
-        adj_copy,
-        adj_copy + n_elements,
-        pair_equal());
-
-    unsigned int n_unique = unique_end - adj_copy;
-
     auto source = thrust::make_transform_iterator(adj_copy, get_source());
     auto destination = thrust::make_transform_iterator(adj_copy, get_destination());
 
-    #if 0
-    // label all endpoints of edges
-    unsigned int *d_label;
-    check_cuda(cudaMalloc((void **)&d_label,N*sizeof(unsigned int)));
-    thrust::device_ptr<unsigned int> label(d_label);
-
-    auto one_it = thrust::constant_iterator<unsigned int>(1);
-    thrust::fill(
-        thrust::cuda::par(alloc),
-        label,
-        label + N,
-        0);
-
-    thrust::scatter(
-        thrust::cuda::par(alloc),
-        one_it,
-        one_it + n_unique,
-        source,
-        label);
-
-    thrust::scatter(
-        thrust::cuda::par(alloc),
-        one_it,
-        one_it + n_unique,
-        destination,
-        label);
-
-    // partition the vertices into trivial ones, i.e. those not connected to any edge, and connected ones
-    int *d_connected_vertices;
-    int *d_trivial_components;
-    check_cuda(cudaMalloc((void **)&d_connected_vertices,N*sizeof(int)));
-    thrust::device_ptr<int> connected_vertices(d_connected_vertices);
-
-    check_cuda(cudaMalloc((void **)&d_trivial_components,N*sizeof(int)));
-    thrust::device_ptr<int> trivial_components(d_trivial_components);
-
-    auto part = thrust::stable_partition_copy(
-        thrust::cuda::par(alloc),
-        thrust::counting_iterator<int>(0),
-        thrust::counting_iterator<int>(0)+N,
-        label,
-        connected_vertices,
-        trivial_components,
-        thrust::identity<int>()
-        );
-    unsigned int n_connected = part.first - connected_vertices;
-    unsigned int n_trivial = part.second - trivial_components;
-
-    // wrap the components output vector
-    thrust::device_ptr<unsigned int> components(d_components);
-
-    // already label the trivial components
-    thrust::scatter(
-        thrust::cuda::par(alloc),
-        thrust::counting_iterator<unsigned int>(0),
-        thrust::counting_iterator<unsigned int>(0)+n_trivial,
-        trivial_components,
-        components);
-
-    num_components = n_trivial;
-
-    if (!n_connected)
-        {
-        // return early
-        return cudaSuccess;
-        }
-    #endif
-
     // input matrix in COO format
-    int *d_rowidx;
-    int *d_colidx;
-
     unsigned int nverts = N;
-    unsigned int nedges = n_unique;
+    unsigned int nedges = n_elements;
 
-    check_cuda(cudaMalloc((void **)&d_rowidx,nedges*sizeof(int)));
-    check_cuda(cudaMalloc((void **)&d_colidx, nedges*sizeof(int)));
+    int *d_rowidx = alloc.getTemporaryBuffer<int>(nedges);
+    int *d_colidx = alloc.getTemporaryBuffer<int>(nedges);
 
     thrust::device_ptr<int> rowidx(d_rowidx);
     thrust::device_ptr<int> colidx(d_colidx);
 
-    thrust::copy(source, source+n_unique, rowidx);
-    thrust::copy(destination, destination+n_unique, colidx);
+    thrust::copy(source, source+nedges, rowidx);
+    thrust::copy(destination, destination+nedges, colidx);
 
     cusparseHandle_t handle;
     cusparseCreate(&handle);
 
-    #if 0
-    // transpose
-    thrust::copy(source, source+n_unique, coo_destination+n_unique);
-    thrust::copy(destination, destination+n_unique, coo_source+n_unique);
-    #endif
-
-    #if 0
-    check_cuda(cudaMalloc((void **)&d_P, nedges*sizeof(int)));
-
-    check_cusparse(cusparseCreateIdentityPermutation(
-        handle,
-        nedges,
-        d_P);
-
-    // get temporary buffer size
-    size_t buffer_size = 0;
-    check_cusparse(cusparseXcoosort_bufferSizeExt(
-        handle,
-        nvert,
-        nvert,
-        nedges,
-        d_rowidx,
-        d_colidx,
-        &buffer_size ));
-
-    void *d_buffer;
-    check_cuda(cudaMalloc((void **)&d_buffer, sizeof(char)*buffer_size));
-
-    // sort COO indices
-    check_cusparse(cusparseXcoosortByRow(
-        handle,
-        nvert,
-        nvert,
-        nedges,
-        d_rowidx,
-        d_colidx,
-        d_P,
-        d_buffer));
-    #endif
-
     // allocate CSR matrix topology
-    int *d_csr_rowptr;
-    check_cuda(cudaMalloc((void **)&d_csr_rowptr, (nverts+1)*sizeof(int)));
+    int *d_csr_rowptr = alloc.getTemporaryBuffer<int>(nverts+1);
 
     check_cusparse(cusparseXcoo2csr(handle,
         d_rowidx,
@@ -272,8 +111,7 @@ cudaError_t gpu_connected_components(
         d_csr_rowptr,
         CUSPARSE_INDEX_BASE_ZERO));
 
-    int *d_work;
-    check_cuda(cudaMalloc((void **)&d_work, sizeof(int)*nverts));
+    int *d_work = alloc.getTemporaryBuffer<int>(nverts);
 
     // compute the connected components
     ecl_connected_components(
@@ -309,17 +147,12 @@ cudaError_t gpu_connected_components(
 
     num_components = it.first - thrust::discard_iterator<int>();
 
-    // free device data
-    check_cuda(cudaFree(d_rowidx));
-    check_cuda(cudaFree(d_colidx));
-    check_cuda(cudaFree(d_csr_rowptr));
-//    check_cuda(cudaFree(d_P));
-//    check_cuda(cudaFree(d_buffer));
-    check_cuda(cudaFree(d_adj_copy));
-    check_cuda(cudaFree(d_work));
-//    check_cuda(cudaFree(d_label));
-//    check_cuda(cudaFree(d_connected_vertices));
-//    check_cuda(cudaFree(d_trivial_components));
+    // free temporary storage
+    alloc.deallocate((char *)d_adj_copy);
+    alloc.deallocate((char *)d_rowidx);
+    alloc.deallocate((char *)d_colidx);
+    alloc.deallocate((char *)d_csr_rowptr);
+    alloc.deallocate((char *)d_work);
 
     // clean cusparse
     cusparseDestroy(handle);
