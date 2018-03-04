@@ -11,6 +11,10 @@
 
 #include "hoomd/ManagedArray.h"
 
+#ifdef ENABLE_TBB
+#include <tbb/tbb.h>
+#endif
+
 #ifndef __SHAPE_UNION_H__
 #define __SHAPE_UNION_H__
 
@@ -27,7 +31,9 @@
 #include <iostream>
 #endif
 
-//#define SHAPE_UNION_LEAVES_AGAINST_TREE_TRAVERSAL
+#if defined(ENABLE_TBB) and !defined(NVCC)
+#define SHAPE_UNION_LEAVES_AGAINST_TREE_TRAVERSAL
+#endif
 
 namespace hpmc
 {
@@ -268,8 +274,20 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
 
     if (tree_a.getNumLeaves() <= tree_b.getNumLeaves())
         {
+        #ifdef ENABLE_TBB
+        return tbb::parallel_reduce(tbb::blocked_range<unsigned int>(0, tree_a.getNumLeaves()),
+            false,
+            [&](const tbb::blocked_range<unsigned int>& r, bool overlap)->float {
+            for (unsigned int cur_leaf_a = r.begin(); cur_leaf_a != r.end(); ++cur_leaf_a)
+        #else
         for (unsigned int cur_leaf_a = offset; cur_leaf_a < tree_a.getNumLeaves(); cur_leaf_a += stride)
+        #endif
             {
+            #ifdef ENABLE_TBB
+            if (overlap)
+                return true;
+            #endif
+
             unsigned int cur_node_a = tree_a.getLeafNode(cur_leaf_a);
             hpmc::detail::OBB obb_a = tree_a.getOBB(cur_node_a);
             // rotate and translate a's obb into b's body frame
@@ -283,11 +301,27 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
                 if (tree_b.queryNode(obb_a, cur_node_b) && test_narrow_phase_overlap(r_ab, a, b, cur_node_a, query_node)) return true;
                 }
             }
+        #ifdef ENABLE_TBB
+        return false;
+        }, [](bool x, bool y)->float { return x | y; } );
+        #endif
         }
     else
         {
+        #ifdef ENABLE_TBB
+        return tbb::parallel_reduce(tbb::blocked_range<unsigned int>(0, tree_b.getNumLeaves()),
+            false,
+            [&](const tbb::blocked_range<unsigned int>& r, bool overlap)->float {
+            for (unsigned int cur_leaf_b = r.begin(); cur_leaf_b != r.end(); ++cur_leaf_b)
+        #else
         for (unsigned int cur_leaf_b = offset; cur_leaf_b < tree_b.getNumLeaves(); cur_leaf_b += stride)
+        #endif
             {
+            #ifdef ENABLE_TBB
+            if (overlap)
+                return true;
+            #endif
+
             unsigned int cur_node_b = tree_b.getLeafNode(cur_leaf_b);
             hpmc::detail::OBB obb_b = tree_b.getOBB(cur_node_b);
 
@@ -302,6 +336,10 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab,
                 if (tree_a.queryNode(obb_b, cur_node_a) && test_narrow_phase_overlap(-r_ab, b, a, cur_node_b, query_node)) return true;
                 }
             }
+        #ifdef ENABLE_TBB
+        return false;
+        }, [](bool x, bool y)->float { return x | y; } );
+        #endif
         }
     #else
     // perform a tandem tree traversal

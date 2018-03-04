@@ -571,6 +571,10 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
             if (move_type_translate)
                 {
+                // skip overlap checks if move size is zero
+                if (h_d.data[typ_i] == 0.0)
+                    continue;
+
                 move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
 
                 #ifdef ENABLE_MPI
@@ -584,6 +588,9 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                 }
             else
                 {
+                if (h_a.data[typ_i] == 0.0)
+                    continue;
+
                 move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
                 }
 
