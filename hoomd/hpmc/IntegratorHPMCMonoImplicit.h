@@ -174,7 +174,7 @@ class IntegratorHPMCMonoImplicit : public IntegratorHPMCMono<Shape>
         virtual void update(unsigned int timestep);
 
         //! Test whether to reject the current particle move based on depletants
-        inline bool checkDepletant(unsigned int timestep, unsigned int i, vec3<Scalar> pos_i, Shape shape_i, unsigned int typ_i, Scalar d_max, Scalar d_min, ArrayHandle<Scalar4> h_postype, ArrayHandle<Scalar4> h_orientation, hpmc_counters_t& counters, hpmc_implicit_counters_t& implicit_counters);
+        inline bool checkDepletant(unsigned int timestep, unsigned int i, vec3<Scalar> pos_i, Shape shape_i, unsigned int typ_i, Scalar d_max, Scalar d_min, Scalar4 *h_postype, Scalar4 *h_orientation, unsigned int *h_overlaps, hpmc_counters_t& counters, hpmc_implicit_counters_t& implicit_counters);
 
         //! Initalize Poisson distribution parameters
         virtual void updatePoissonParameters();
@@ -189,6 +189,14 @@ class IntegratorHPMCMonoImplicit : public IntegratorHPMCMono<Shape>
         template<class RNG>
         inline void generateDepletant(RNG& rng, vec3<Scalar> pos_sphere, Scalar delta, Scalar d_min,
             vec3<Scalar>& pos, quat<Scalar>& orientation, const typename Shape::param_type& params_depletants);
+
+        /*! Generate a random depletant position in a region including the sphere around a particle,
+            restricted so that it does not intersect another sphere
+         */
+        template<class RNG>
+        inline void generateDepletantRestricted(RNG& rng, vec3<Scalar> pos_sphere, Scalar delta, Scalar delta_other,
+            vec3<Scalar>& pos, quat<Scalar>& orientation, const typename Shape::param_type& params_depletants,
+            vec3<Scalar> pos_sphere_other);
 
         //! Try inserting a depletant in a configuration such that it overlaps with the particle in the old (new) configuration
         inline bool insertDepletant(vec3<Scalar>& pos_depletant, const Shape& shape_depletant, unsigned int idx,
@@ -654,7 +662,7 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
             // The trial move is valid, so check if it is invalidated by depletants
             if (accept && h_overlaps.data[this->m_overlap_idx(m_type, typ_i)])
                 {
-                accept = checkDepletant(timestep, i, pos_i, shape_i, typ_i, h_d_max.data[typ_i], h_d_min.data[typ_i], h_postype, h_orientation, counters, implicit_counters);
+                accept = checkDepletant(timestep, i, pos_i, shape_i, typ_i, h_d_max.data[typ_i], h_d_min.data[typ_i], h_postype.data, h_orientation.data, h_overlaps.data, counters, implicit_counters);
                 } // end depletant placement
 
             // if the move is accepted
@@ -744,15 +752,16 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
     this->m_aabb_tree_invalid = true;
     }
 
-/*! \param unsigned int The current timestep (used to construct rng)
-    \param unsigned int The particle id in the list
-    \param vec3<Scalar> Particle position being tested
-    \param Shape Particle shape (including orientation) being tested
-    \param unsigned int Type of the particle being tested
-    \param d_min The minimum sphere for test depletant exclusion
-    \param d_max The maximum sphere in which depletants may be inserted
-    \param ArrayHandle Pointer to GPUArray containing particle positions
-    \param ArrayHandle Pointer to GPUArray containing particle orientations
+/*! \param timestep The current timestep (used to construct rng)
+    \param i The particle id in the list
+    \param pos_i Particle position being tested
+    \param shape_i Particle shape (including orientation) being tested
+    \param typ_i Type of the particle being tested
+    \param d_max The maximum sphere for test depletant exclusion
+    \param d_min The minimum sphere in which depletants may be inserted
+    \param h_postype Pointer to GPUArray containing particle positions
+    \param h_orientation Pointer to GPUArray containing particle orientations
+    \param h_overlaps Pointer to GPUArray containing interaction matrix
     \param hpmc_counters_t&  Pointer to current counters
     \param hpmc_implicit_counters_t&  Pointer to current implicit counters
 
@@ -763,9 +772,10 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
     */
 
 template<class Shape>
-inline bool IntegratorHPMCMonoImplicit<Shape>::checkDepletant(unsigned int timestep, unsigned int i, vec3<Scalar> pos_i, Shape shape_i, unsigned int typ_i, Scalar d_max, Scalar d_min, ArrayHandle<Scalar4> h_postype, ArrayHandle<Scalar4> h_orientation, hpmc_counters_t& counters, hpmc_implicit_counters_t& implicit_counters)
+inline bool IntegratorHPMCMonoImplicit<Shape>::checkDepletant(unsigned int timestep, unsigned int i, vec3<Scalar> pos_i, Shape shape_i, unsigned int typ_i, Scalar d_max, Scalar d_min, Scalar4 *h_postype, Scalar4 *h_orientation, unsigned int *h_overlaps, hpmc_counters_t& counters, hpmc_implicit_counters_t& implicit_counters)
     {
     // Whether or not any overlaps are detected
+	Scalar lnb(0.0);
     unsigned int zero = 0;
 
     // combine the three seeds
@@ -871,7 +881,7 @@ inline bool IntegratorHPMCMonoImplicit<Shape>::checkDepletant(unsigned int times
                 n_overlap_checks++;
 
                 // check circumsphere overlap
-                Shape shape_i_old(quat<Scalar>(h_orientation.data[i]), this->m_params[typ_i]);
+                Shape shape_i_old(quat<Scalar>(h_orientation[i]), this->m_params[typ_i]);
                 OverlapReal rsq = dot(r_ij,r_ij);
                 OverlapReal DaDb = shape_test.getCircumsphereDiameter() + shape_i_old.getCircumsphereDiameter();
                 bool circumsphere_overlap = (rsq*OverlapReal(4.0) <= DaDb * DaDb);
@@ -914,8 +924,8 @@ inline bool IntegratorHPMCMonoImplicit<Shape>::checkDepletant(unsigned int times
                                     Scalar4 orientation_j;
 
                                     // load the old position and orientation of the j particle
-                                    postype_j = h_postype.data[j];
-                                    orientation_j = h_orientation.data[j];
+                                    postype_j = h_postype[j];
+                                    orientation_j = h_orientation[j];
 
                                     // put particles in coordinate system of particle i
                                     vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_test_image;
@@ -969,12 +979,104 @@ inline bool IntegratorHPMCMonoImplicit<Shape>::checkDepletant(unsigned int times
                 }
             }
 
-        if (overlap_depletant)
+        if (overlap_depletant && !m_n_trial)
             {
             zero = 1;
             // break out of loop
             flag = true;
             }
+		else if (overlap_depletant && m_n_trial)
+			{
+			const typename Shape::param_type& params_depletant = this->m_params[m_type];
+
+			// Number of successful depletant insertions in new configuration
+			unsigned int n_success_new = 0;
+
+			// Number of allowed insertion trials (those which overlap with colloid at old position)
+			unsigned int n_overlap_shape_new = 0;
+
+			// diameter (around origin) in which we are guaruanteed to intersect with the shape
+			Scalar delta_insphere = Scalar(2.0)*shape_i.getInsphereRadius();
+
+			// same for old reverse move. Because we have already sampled one successful insertion
+			// that overlaps with the colloid at the new position, we increment by one (super-detailed
+			// balance)
+			unsigned int n_success_old = 1;
+			unsigned int n_overlap_shape_old = 1;
+
+			Scalar4& postype_i_old = h_postype[i];
+			vec3<Scalar> pos_i_old(postype_i_old);
+			quat<Scalar> orientation_i_old(h_orientation[i]);
+
+			for (unsigned int l = 0; l < m_n_trial; ++l)
+				{
+				// generate a random depletant position and orientation
+				// in both the old and the new configuration of the colloid particle
+				vec3<Scalar> pos_depletant_old, pos_depletant_new;
+				quat<Scalar> orientation_depletant_old, orientation_depletant_new;
+
+				// try moving the overlapping depletant in the excluded volume
+				// such that it overlaps with the particle at the old position
+				generateDepletantRestricted(m_rng_depletant[thread_idx], pos_i_old, d_max, delta_insphere,
+					pos_depletant_new, orientation_depletant_new, params_depletant, pos_i);
+
+				reinsert_count++;
+
+				Shape shape_depletant_new(orientation_depletant_new, params_depletant);
+				const typename Shape::param_type& params_i = this->m_params[__scalar_as_int(postype_i_old.w)];
+
+				bool overlap_shape = false;
+				if (insertDepletant(pos_depletant_new, shape_depletant_new, i, this->m_params.data(), h_overlaps, typ_i,
+					h_postype, h_orientation, pos_i, shape_i.orientation, params_i,
+					n_overlap_checks, overlap_err_count, overlap_shape, false))
+					{
+					n_success_new++;
+					}
+
+				if (overlap_shape)
+					{
+					// depletant overlaps with colloid at old position
+					n_overlap_shape_new++;
+					}
+
+				if (l >= 1)
+					{
+					// as above, in excluded volume sphere at new position
+					generateDepletantRestricted(m_rng_depletant[thread_idx], pos_i, d_max, delta_insphere,
+						pos_depletant_old, orientation_depletant_old, params_depletant, pos_i_old);
+					Shape shape_depletant_old(orientation_depletant_old, params_depletant);
+					if (insertDepletant(pos_depletant_old, shape_depletant_old, i, this->m_params.data(), h_overlaps, typ_i,
+						h_postype, h_orientation, pos_i, shape_i.orientation, params_i,
+						n_overlap_checks, overlap_err_count, overlap_shape, true))
+						{
+						n_success_old++;
+						}
+
+					if (overlap_shape)
+						{
+						// depletant overlaps with colloid at new position
+						n_overlap_shape_old++;
+						}
+					reinsert_count++;
+					}
+
+				n_overlap_checks += counters.overlap_checks;
+				overlap_err_count += counters.overlap_err_count;
+				} // end loop over re-insertion attempts
+
+			if (n_success_new != 0)
+				{
+				lnb += log((Scalar)n_success_new/(Scalar)n_overlap_shape_new);
+				lnb -= log((Scalar)n_success_old/(Scalar)n_overlap_shape_old);
+				}
+			else
+				{
+				zero = 1;
+				// break out of loop
+				flag = true;
+				}
+			} // end if depletant overlap
+
         } // end loop over depletants
 
     // increment counters
@@ -1022,6 +1124,98 @@ inline void IntegratorHPMCMonoImplicit<Shape>::generateDepletant(RNG& rng, vec3<
         orientation = generateRandomOrientation(rng);
         }
     pos = pos_depletant;
+    }
+
+/* \param rng The random number generator
+ * \param pos_sphere Center of sphere
+ * \param delta diameter of sphere
+ * \param delta_other diameter of other sphere
+ * \param pos Position of depletant (return value)
+ * \param orientation ion of depletant (return value)
+ * \param params_depletant Depletant parameters
+ * \params pos_sphere_other Center of other sphere
+ */
+template<class Shape>
+template<class RNG>
+inline void IntegratorHPMCMonoImplicit<Shape>::generateDepletantRestricted(RNG& rng, vec3<Scalar> pos_sphere, Scalar delta,
+    Scalar delta_other, vec3<Scalar>& pos, quat<Scalar>& orientation, const typename Shape::param_type& params_depletant,
+    vec3<Scalar> pos_sphere_other)
+    {
+    vec3<Scalar> r_ij = pos_sphere - pos_sphere_other;
+    Scalar d = fast::sqrt(dot(r_ij,r_ij));
+
+    Scalar rmin(0.0);
+    Scalar rmax = Scalar(0.5)*delta;
+
+    Scalar ctheta_min(-1.0);
+    bool do_rotate = false;
+    if (d > Scalar(0.0) && delta_other > Scalar(0.0))
+        {
+        // draw a random direction in the bounded sphereical shell
+        Scalar ctheta = (delta_other*delta_other+Scalar(4.0)*d*d-delta*delta)/(Scalar(4.0)*delta_other*d);
+        if (ctheta >= Scalar(-1.0) && ctheta < Scalar(1.0))
+            {
+            // true intersection, we can restrict angular sampling
+            ctheta_min = ctheta;
+            }
+
+        // is there an intersection?
+        if (Scalar(2.0)*d < delta+delta_other)
+            {
+            // sample in shell around smaller sphere
+            rmin = delta_other/Scalar(2.0);
+            rmax = d+delta/Scalar(2.0);
+            do_rotate = true;
+            }
+        }
+
+    // draw random radial coordinate in a spherical shell
+    Scalar r3 = rng.template s<Scalar>(fast::pow(rmin/rmax,Scalar(3.0)),Scalar(1.0));
+    Scalar r = rmax*fast::pow(r3,Scalar(1.0/3.0));
+
+    // random direction in spherical shell
+    Scalar z = rng.s(ctheta_min,Scalar(1.0));
+    Scalar phi = Scalar(2.0*M_PI)*rng.template s<Scalar>();
+    vec3<Scalar> n;
+    if (do_rotate)
+        {
+        vec3<Scalar> u(r_ij/d);
+
+        // normal vector
+        vec3<Scalar> v(cross(u,vec3<Scalar>(0,0,1)));
+        if (dot(v,v) < EPSILON)
+            {
+            v = cross(u,vec3<Scalar>(0,1,0));
+            }
+        v *= fast::rsqrt(dot(v,v));
+
+        quat<Scalar> q(quat<Scalar>::fromAxisAngle(u,phi));
+        n = z*u+(fast::sqrt(Scalar(1.0)-z*z))*rotate(q,v);
+        }
+    else
+        {
+        n = vec3<Scalar>(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(phi),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(phi),z);
+        }
+
+    // test depletant position
+    pos = r*n;
+
+    if (do_rotate)
+        {
+        // insert such that it potentially intersects the sphere, but not the other one
+        pos += pos_sphere_other;
+        }
+    else
+        {
+        // insert in sphere
+        pos += pos_sphere;
+        }
+
+    Shape shape_depletant(quat<Scalar>(), params_depletant);
+    if (shape_depletant.hasOrientation())
+        {
+        orientation = generateRandomOrientation(rng);
+        }
     }
 
 /*! \param pos_depletant Depletant position
