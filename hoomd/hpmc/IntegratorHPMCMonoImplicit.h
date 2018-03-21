@@ -709,7 +709,7 @@ inline bool IntegratorHPMCMonoImplicit<Shape>::checkDepletant(unsigned int times
         unsigned int thread_idx = 0;
         #endif
 
-        generateDepletant(m_rng_depletant[thread_idx], 
+        generateDepletant(m_rng_depletant[thread_idx],
                 pos_i, d_max, d_min, pos_test,
             orientation_test, this->m_params[m_type]);
         Shape shape_test(orientation_test, this->m_params[m_type]);
