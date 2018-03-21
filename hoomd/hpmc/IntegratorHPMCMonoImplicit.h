@@ -14,6 +14,11 @@
 #include <omp.h>
 #endif
 
+#ifdef ENABLE_TBB
+#include <tbb/tbb.h>
+#include <thread>
+#endif
+
 /*! \file IntegratorHPMCMonoImplicit.h
     \brief Defines the template class for HPMC with implicit generated depletant solvent
     \note This header cannot be compiled by nvcc
@@ -322,7 +327,8 @@ void IntegratorHPMCMonoImplicit< Shape >::updateCellWidth()
         Shape tmp(o, this->m_params[m_type]);
         this->m_nominal_width += tmp.getCircumsphereDiameter();
 
-        // update image list range
+        // extend the image list by the depletant diameter, since we're querying
+        // AABBs that are larger than the shape diameters themselves
         this->m_extra_image_width = tmp.getCircumsphereDiameter();
         }
     // Account for patch width
@@ -330,6 +336,8 @@ void IntegratorHPMCMonoImplicit< Shape >::updateCellWidth()
         {
         this->m_nominal_width = std::max(this->m_nominal_width, this->m_patch->getRCut());
         }
+    this->m_image_list_valid = false;
+    this->m_aabb_tree_invalid = true;
 
     this->m_exec_conf->msg->notice(5) << "IntegratorHPMCMonoImplicit: updating nominal width to " << this->m_nominal_width << std::endl;
     }
@@ -399,6 +407,22 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
     ArrayHandle<Scalar> h_d_min(m_d_min, access_location::host, access_mode::read);
     ArrayHandle<Scalar> h_d_max(m_d_max, access_location::host, access_mode::read);
 
+    // List of particles whose circumspheres intersect particle i's excluded-volume circumsphere
+    std::vector<unsigned int> intersect_i;
+
+    // List of particle images that intersect
+    std::vector<unsigned int> image_i;
+
+    #ifndef ENABLE_TBB
+    std::vector<unsigned int> seed_seq(4);
+    seed_seq[0] = this->m_seed;
+    seed_seq[1] = timestep;
+    seed_seq[2] = this->m_exec_conf->getRank();
+    seed_seq[3] = 0x91baff72;
+    std::seed_seq seed(seed_seq.begin(), seed_seq.end());
+    std::mt19937 rng_poisson(seed);
+    #endif
+
     // loop over local particles nselect times
     for (unsigned int i_nselect = 0; i_nselect < this->m_nselect; i_nselect++)
         {
@@ -446,6 +470,9 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
 
             if (move_type_translate)
                 {
+                // skip if moves are disabled
+                if (h_d.data[typ_i] == Scalar(0.0)) continue;
+
                 move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
 
                 #ifdef ENABLE_MPI
@@ -459,6 +486,9 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
                 }
             else
                 {
+                // skip if moves are disabled
+                if (h_a.data[typ_i] == Scalar(0.0)) continue;
+
                 move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
                 }
 
