@@ -407,12 +407,6 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
     ArrayHandle<Scalar> h_d_min(m_d_min, access_location::host, access_mode::read);
     ArrayHandle<Scalar> h_d_max(m_d_max, access_location::host, access_mode::read);
 
-    // List of particles whose circumspheres intersect particle i's excluded-volume circumsphere
-    std::vector<unsigned int> intersect_i;
-
-    // List of particle images that intersect
-    std::vector<unsigned int> image_i;
-
     #ifndef ENABLE_TBB
     std::vector<unsigned int> seed_seq(4);
     seed_seq[0] = this->m_seed;
@@ -804,6 +798,12 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
 template<class Shape>
 inline bool IntegratorHPMCMonoImplicit<Shape>::checkDepletant(unsigned int timestep, unsigned int i, vec3<Scalar> pos_i, Shape shape_i, unsigned int typ_i, Scalar d_max, Scalar d_min, Scalar4 *h_postype, Scalar4 *h_orientation, unsigned int *h_overlaps, hpmc_counters_t& counters, hpmc_implicit_counters_t& implicit_counters)
     {
+    // List of particles whose circumspheres intersect particle i's excluded-volume circumsphere
+    std::vector<unsigned int> intersect_i;
+
+    // List of particle images that intersect
+    std::vector<unsigned int> image_i;
+
     // Whether or not any overlaps are detected
 	Scalar lnb(0.0);
     unsigned int zero = 0;
