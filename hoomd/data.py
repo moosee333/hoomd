@@ -1161,6 +1161,8 @@ class particle_data_proxy(object):
         type (str): Particle type name.
         body (int): Rigid body id (-1 for free particles).
         orientation (tuple) : (w,x,y,z) (float, quaternion).
+        quat_l (tuple) : (w,x,y,z) (float, quaternion)
+        quat_r (tuple) : (w,x,y,z) (float, quaternion)
         net_force (tuple): Net force on particle (x, y, z) (float, in force units).
         net_energy (float): Net contribution of particle to the potential energy (in energy units).
         net_torque (tuple): Net torque on the particle (x, y, z) (float, in torque units).
@@ -1175,14 +1177,22 @@ class particle_data_proxy(object):
     def __init__(self, pdata, tag):
         self.pdata = pdata;
         self.tag = tag
+        self.bc = pdata.getBoundaryConditions()
 
     ## \internal
     # \brief Get an informal string representing the object
     def __str__(self):
         result = "";
-        result += "tag         : " + str(self.tag) + "\n"
-        result += "position    : " + str(self.position) + "\n";
-        result += "image       : " + str(self.image) + "\n";
+        if self.bc == pdata.boundary.periodic:
+            result += "tag         : " + str(self.tag) + "\n"
+            result += "position    : " + str(self.position) + "\n";
+            result += "image       : " + str(self.image) + "\n";
+        elif self.bc == pdata.boundary.hyperspherical:
+            result += "quat_l      : " + str(self.quat_l) + "\n";
+            result += "quat_r      : " + str(self.quat_r) + "\n";
+        else:
+            raise ValueError("Unknown boundary conditions.\n")
+
         result += "velocity    : " + str(self.velocity) + "\n";
         result += "acceleration: " + str(self.acceleration) + "\n";
         result += "charge      : " + str(self.charge) + "\n";
@@ -1342,6 +1352,38 @@ class particle_data_proxy(object):
         m.y = float(value[1]);
         m.z = float(value[2]);
         self.pdata.setMomentsOfInertia(self.tag, m);
+
+    @property
+    def quat_l(self):
+        q = self.pdata.getLeftQuaternion(self.tag)
+        return (q.x, q.y, q.z, q.w)
+
+    @quat_l.setter
+    def quat_l(self, value):
+        if len(value) != 4:
+            raise ValueError("The input value/quaternion should be exactly length 4.")
+        q = _hoomd.Scalar4();
+        q.x = float(value[0]);
+        q.y = float(value[1]);
+        q.z = float(value[2]);
+        q.w = float(value[3]);
+        self.pdata.setRightQuaternion(self.tag, q)
+
+    @property
+    def quat_r(self):
+        q = self.pdata.getRightQuaternion(self.tag)
+        return (q.x, q.y, q.z, q.w)
+
+    @quat_r.setter
+    def quat_r(self, value):
+        if len(value) != 4:
+            raise ValueError("The input value/quaternion should be exactly length 4.")
+        q = _hoomd.Scalar4();
+        q.x = float(value[0]);
+        q.y = float(value[1]);
+        q.z = float(value[2]);
+        q.w = float(value[3]);
+        self.pdata.setLeftQuaternion(self.tag, q)
 
     @property
     def net_force(self):
@@ -2317,8 +2359,11 @@ class SnapshotParticleData:
     Attributes:
         N (int): Number of particles in the snapshot
         types (list): List of string type names (assignable)
+
+        ** For use with periodic boundary conditions: **
         position (ndarray Nx3): numpy array containing the position of each particle (float or double)
         orientation (ndarray Nx4): numpy array containing the orientation quaternion of each particle (float or double)
+
         velocity (ndarray Nx3): numpy array containing the velocity of each particle (float or double)
         acceleration (ndarray Nx3): numpy array containing the acceleration of each particle (float or double)
         typeid (ndarray): N length numpy array containing the type id of each particle (32-bit unsigned int)
@@ -2329,6 +2374,10 @@ class SnapshotParticleData:
         body (ndarray): N length numpy array containing the body of each particle (32-bit unsigned int)
         moment_inertia (ndarray Nx3): numpy array containing the principal moments of inertia of each particle (float or double)
         angmom (ndarray Nx4): numpy array containing the angular momentum quaternion of each particle (float or double)
+
+        ** For use with hyperspherical boundary conditions: **
+        quat_l (ndarray Nx4): numpy array containing the left quaternion of each particle (float or double)
+        quat_r (ndarray Nx4): numpy array containing the right quaternion of each particle (float or double)
 
     See Also:
         :py:mod:`hoomd.data`

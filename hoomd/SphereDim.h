@@ -40,27 +40,27 @@
 struct __attribute__((visibility("default"))) SphereDim
     {
     public:
+        //! Default constructor
+        SphereDim()
+            : R(1.0), two_sphere(false)
+            { }
+
         /*! Define spherical boundary conditions
             \param R Radius of the (hyper-) sphere
          */
         SphereDim(Scalar _R, bool two_sphere)
             : R(_R) {}
 
-        /*! Project a hyperspherical particle coordinate back onto an equatatorial hyperplane,
-            using the stereographic projection
+        /*! Convert a hyperspherical coordinate into a cartesian one
 
             \param q_l The first unit quaternion specifying particle position and orientation
             \param q_r The second unit quaternion specifying particle position and orientation
-            \param lower if True, project around the lower pole [(-1,0,0,0) in 4d, (-1,0,0) in 3d], use
-                         upper pole otherwise
             \returns the projection as a 3-vector
          */
         template<class Real>
-        sphereToHyperplane(const quat<Real> q_l, const quat<Real> q_r, bool lower)
+        const quat<Real>& sphereToHyperplane(const quat<Real> q_l, const quat<Real> q_r)
             {
-            quat<Real> q = q_l*quat<Real>(R,vec3<Scalar>(0,0,0))*q_r;
-
-            return lower ? q.v/(Real(1.0)+q.s) : q.v/(Real(1.0)-q.s);
+            return q_l*quat<Real>(R,vec3<Scalar>(0,0,0))*q_r;
             }
 
     private:
