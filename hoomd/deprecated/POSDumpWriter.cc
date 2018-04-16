@@ -105,19 +105,28 @@ void POSDumpWriter::analyze(unsigned int timestep)
         throw runtime_error("Error writing pos dump file");
         }
 
+    unsigned int numtype;
+    numtype = snap.type_mapping.size();
+
+    m_file.precision(13);
+
     // Get the box information
     BoxDim box = m_pdata->getGlobalBox();
     vec3<Scalar> a1(box.getLatticeVector(0));
     vec3<Scalar> a2(box.getLatticeVector(1));
     vec3<Scalar> a3(box.getLatticeVector(2));
 
-    unsigned int numtype;
-    numtype = snap.type_mapping.size();
-
-    m_file.precision(13);
-    m_file << "boxMatrix "  << a1.x << " " << a2.x << " " << a3.x << " "
-                            << a1.y << " " << a2.y << " " << a3.y << " "
-                            << a1.z << " " << a2.z << " " << a3.z << "\n";
+    if (m_pdata->getBoundaryConditions() == ParticleData::periodic)
+        {
+        m_file << "boxMatrix "  << a1.x << " " << a2.x << " " << a3.x << " "
+                                << a1.y << " " << a2.y << " " << a3.y << " "
+                                << a1.z << " " << a2.z << " " << a3.z << "\n";
+        }
+    else if (m_pdata->getBoundaryConditions() == ParticleData::hyperspherical)
+        {
+        SphereDim sphere(m_pdata->getSphere());
+        m_file << "sphere true " << sphere.getR() << " true " << std::endl;
+        }
 
     for (unsigned int j = 0; j < numtype; j++)
         {
