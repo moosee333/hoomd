@@ -241,6 +241,13 @@ struct ShapeFacetedSphere
         : orientation(_orientation), params(_params)
         { }
 
+    //! Initialize a shape with a given left and right quaternion (hyperspherical coordinates)
+    DEVICE ShapeFacetedSphere(const quat<Scalar>& _quat_l, const quat<Scalar>& _quat_r, const param_type& _params)
+        : params(_params)
+        {
+        // not implemented
+        }
+
     //! Does this shape have an orientation
     DEVICE bool hasOrientation() { return params.N > 0; }
 

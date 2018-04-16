@@ -147,6 +147,13 @@ struct ShapePolyhedron
         {
         }
 
+    //! Initialize a shape with a given left and right quaternion (hyperspherical coordinates)
+    DEVICE ShapePolyhedron(const quat<Scalar>& _quat_l, const quat<Scalar>& _quat_r, const param_type& _params)
+        : data(_params), tree(_params.tree)
+        {
+        // not implemented
+        }
+
     //! Does this shape have an orientation
     DEVICE bool hasOrientation() { return data.n_verts > 1; }
 

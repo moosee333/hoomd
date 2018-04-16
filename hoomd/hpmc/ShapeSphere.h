@@ -3,6 +3,7 @@
 
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/BoxDim.h"
+#include "hoomd/SphereDim.h"
 #include "HPMCPrecisionSetup.h"
 #include "hoomd/VectorMath.h"
 #include "Moves.h"
@@ -153,9 +154,13 @@ struct ShapeSphere
     //! Define the parameter type
     typedef sph_params param_type;
 
-    //! Initialize a shape at a given position
+    //! Initialize a shape with a given orientation
     DEVICE ShapeSphere(const quat<Scalar>& _orientation, const param_type& _params)
         : orientation(_orientation), params(_params) {}
+
+    //! Initialize a shape with a given left and right quaternion (hyperspherical coordinates)
+    DEVICE ShapeSphere(const quat<Scalar>& _quat_l, const quat<Scalar>& _quat_r, const param_type& _params)
+        : quat_l(_quat_l), quat_r(_quat_r), params(_params) {}
 
     //! Does this shape have an orientation
     DEVICE bool hasOrientation() const
@@ -190,6 +195,9 @@ struct ShapeSphere
 
     quat<Scalar> orientation;    //!< Orientation of the sphere (unused)
 
+    quat<Scalar> quat_l;         //!< Left quaternion (for hyperspherical coordinates)
+    quat<Scalar> quat_r;         //!< Left quaternion (for hyperspherical coordinates)
+
     const sph_params &params;        //!< Sphere and ignore flags
     };
 
@@ -208,7 +216,7 @@ DEVICE inline bool check_circumsphere_overlap(const vec3<Scalar>& r_ab, const Sh
     return true;
     }
 
-//! Define the general overlap function
+//! Define the general overlap function (cartesian version)
 /*! This is just a convenient spot to put this to make sure it is defined early
     \param r_ab Vector defining the position of shape b relative to shape a (r_b - r_a)
     \param a first shape
@@ -218,6 +226,29 @@ DEVICE inline bool check_circumsphere_overlap(const vec3<Scalar>& r_ab, const Sh
 */
 template <class ShapeA, class ShapeB>
 DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab, const ShapeA &a, const ShapeB& b, unsigned int& err)
+    {
+    // default implementation returns true, will make it obvious if something calls this
+    return true;
+    }
+
+//! Returns true if the shape overlaps with itself
+template<class Shape>
+DEVICE inline bool test_overlap_self_sphere(const Shape& shape, const SphereDim& sphere)
+    {
+    // default implementation returns true, will make it obvious if something calls this
+    return true;
+    }
+
+//! Define the general overlap function (hyperspherical version)
+/*! This is just a convenient spot to put this to make sure it is defined early
+    \param a first shape
+    \param b second shape
+    \param sphere Boundary conditions
+    \param err Incremented if there is an error condition. Left unchanged otherwise.
+    \returns true when *a* and *b* overlap, and false when they are disjoint
+*/
+template <class ShapeA, class ShapeB>
+DEVICE inline bool test_overlap_sphere(const ShapeA& a, const ShapeB& b, const SphereDim& sphere, unsigned int& err)
     {
     // default implementation returns true, will make it obvious if something calls this
     return true;
@@ -240,6 +271,51 @@ DEVICE inline bool test_overlap<ShapeSphere, ShapeSphere>(const vec3<Scalar>& r_
     OverlapReal rsq = dot(dr,dr);
 
     if (rsq < (a.params.radius + b.params.radius)*(a.params.radius + b.params.radius))
+        {
+        return true;
+        }
+    else
+        {
+        return false;
+        }
+    }
+
+//! Returns true if the shape overlaps with itself
+DEVICE inline bool test_overlap_self_sphere(const ShapeSphere& shape, const SphereDim& sphere)
+    {
+    return shape.params.radius >= Scalar(M_PI)*sphere.getR();
+    }
+
+//! Sphere-Sphere overlap on a hypersphere
+/*!  \param a first shape
+    \param b second shape
+    \param sphere Boundary conditions
+    \param err in/out variable incremented when error conditions occur in the overlap test
+    \returns true when *a* and *b* overlap, and false when they are disjoint
+
+    \ingroup shape
+*/
+template <>
+DEVICE inline bool test_overlap_sphere<ShapeSphere, ShapeSphere>(const ShapeSphere& a, const ShapeSphere& b, const SphereDim& sphere, unsigned int& err)
+    {
+    // transform spherical coordinates into 4d-cartesian ones
+    quat<OverlapReal> pos_a = sphere.sphericalToCartesian(quat<OverlapReal>(a.quat_l),quat<OverlapReal>(a.quat_r));
+    quat<OverlapReal> pos_b = sphere.sphericalToCartesian(quat<OverlapReal>(b.quat_l),quat<OverlapReal>(b.quat_r));
+
+    // normalize
+    OverlapReal inv_norm_a = fast::rsqrt(dot(pos_a,pos_a));
+    OverlapReal inv_norm_b = fast::rsqrt(dot(pos_b,pos_b));
+
+    pos_a.s *= inv_norm_a;
+    pos_a.v *= inv_norm_a;
+
+    pos_b.s *= inv_norm_b;
+    pos_b.v *= inv_norm_b;
+
+    // arc-length along a geodesic
+    OverlapReal arc_length = sphere.getR()*fast::acos(dot(pos_a,pos_b));
+
+    if (arc_length < (a.params.radius + b.params.radius))
         {
         return true;
         }

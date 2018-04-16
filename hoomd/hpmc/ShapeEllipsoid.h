@@ -74,6 +74,13 @@ struct ShapeEllipsoid
         {
         }
 
+    //! Initialize a shape with a given left and right quaternion (hyperspherical coordinates)
+    DEVICE ShapeEllipsoid(const quat<Scalar>& _quat_l, const quat<Scalar>& _quat_r, const param_type& _params)
+        : axes(_params)
+        {
+        // not implemented
+        }
+
     //! Does this shape have an orientation
     DEVICE bool hasOrientation() const { return !(axes.x==axes.y&&axes.x==axes.z); }
 

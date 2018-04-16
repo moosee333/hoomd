@@ -112,6 +112,13 @@ struct ShapeSphinx
         volume = detail::initVolume(disjoint,r,n,d);
         }
 
+    //! Initialize a shape with a given left and right quaternion (hyperspherical coordinates)
+    DEVICE ShapeSphinx(const quat<Scalar>& _quat_l, const quat<Scalar>& _quat_r, const param_type& _params)
+        : spheres(_params)
+        {
+        // not implemented
+        }
+
     //! Does this shape have an orientation
     DEVICE static bool hasOrientation() { return true; }
 
