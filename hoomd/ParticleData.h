@@ -1277,6 +1277,7 @@ class PYBIND11_EXPORT ParticleData
 #ifndef NVCC
 //! Exports the BoxDim class to python
 void export_BoxDim(pybind11::module& m);
+void export_SphereDim(pybind11::module& m);
 //! Exports ParticleData to python
 void export_ParticleData(pybind11::module& m);
 //! Export SnapshotParticleData to python

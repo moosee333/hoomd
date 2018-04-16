@@ -74,10 +74,20 @@ SystemDefinition::SystemDefinition(std::shared_ptr< SnapshotSystemData<Real> > s
     {
     setNDimensions(snapshot->dimensions);
 
-    m_particle_data = std::shared_ptr<ParticleData>(new ParticleData(snapshot->particle_data,
-                 snapshot->global_box,
-                 exec_conf,
-                 decomposition));
+    if (snapshot->particle_data.uses_spherical_bc)
+        {
+        if (decomposition)
+            throw std::runtime_error("MPI is not supported with spherical boundary conditions.\n");
+
+        m_particle_data = std::shared_ptr<ParticleData>(new ParticleData(snapshot->particle_data,
+                     snapshot->sphere,
+                     exec_conf));
+        }
+    else
+        m_particle_data = std::shared_ptr<ParticleData>(new ParticleData(snapshot->particle_data,
+                     snapshot->global_box,
+                     exec_conf,
+                     decomposition));
 
     #ifdef ENABLE_MPI
     // in MPI simulations, broadcast dimensionality from rank zero
@@ -138,6 +148,7 @@ std::shared_ptr< SnapshotSystemData<Real> > SystemDefinition::takeSnapshot(bool 
     // always save dimensions and global box
     snap->dimensions = m_n_dimensions;
     snap->global_box = m_particle_data->getGlobalBox();
+    snap->sphere = m_particle_data->getSphere();
 
     if (particles)
         {
@@ -222,7 +233,11 @@ void SystemDefinition::initializeFromSnapshot(std::shared_ptr< SnapshotSystemDat
 
     if (snapshot->has_particle_data)
         {
-        m_particle_data->setGlobalBox(snapshot->global_box);
+        if (snapshot->particle_data.uses_spherical_bc)
+            m_particle_data->setSphere(snapshot->sphere);
+        else
+            m_particle_data->setGlobalBox(snapshot->global_box);
+
         m_particle_data->initializeFromSnapshot(snapshot->particle_data);
         }
 

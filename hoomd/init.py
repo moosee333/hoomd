@@ -339,8 +339,9 @@ def restore_getar(filename, modes={'any': 'any'}):
 # be done here. For example, setting up communication, registering the
 # SFCPackUpdater, initializing the log writer, etc...
 def _perform_common_init_tasks():
-    # create the sorter
-    hoomd.context.current.sorter = hoomd.update.sort();
+    if hoomd.context.current.system_definition.getParticleData().getBoudaryConditions() == _hoomd.ParticleData.periodic:
+        # create the sorter
+        hoomd.context.current.sorter = hoomd.update.sort();
 
     # create the default compute.thermo on the all group
     hoomd.util.quiet_status();

@@ -42,14 +42,26 @@ struct __attribute__((visibility("default"))) SphereDim
     public:
         //! Default constructor
         SphereDim()
-            : R(1.0), two_sphere(false)
+            : R(1.0)
             { }
 
         /*! Define spherical boundary conditions
             \param R Radius of the (hyper-) sphere
          */
-        SphereDim(Scalar _R, bool two_sphere)
+        SphereDim(Scalar _R)
             : R(_R) {}
+
+        //! Get the sphere radius
+        Scalar getR() const
+            {
+            return R;
+            }
+
+        //! Set the sphere radius
+        void setR(Scalar _R)
+            {
+            R = _R;
+            }
 
         /*! Convert a hyperspherical coordinate into a cartesian one
 
@@ -65,6 +77,5 @@ struct __attribute__((visibility("default"))) SphereDim
 
     private:
         Scalar R;        //!< Hypersphere radius
-        bool two_sphere; //!< True if this is a 2-sphere, false for 3-sphere
     };
 #undef HOSTDEVICE

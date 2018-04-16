@@ -31,6 +31,12 @@ SFCPackUpdater::SFCPackUpdater(std::shared_ptr<SystemDefinition> sysdef)
     // perform lots of sanity checks
     assert(m_pdata);
 
+    if (m_pdata->getBoundaryConditions() != ParticleData::periodic)
+        {
+        m_exec_conf->msg->error() << "Particle sorter only supports periodic boundary conditions." << std::endl;
+        throw std::runtime_error("Error initializing SFCPackUpdater\n");
+        }
+
     m_sort_order.resize(m_pdata->getMaxN());
     m_particle_bins.resize(m_pdata->getMaxN());
 

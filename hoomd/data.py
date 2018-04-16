@@ -723,6 +723,65 @@ class boxdim(hoomd.meta._metadata):
         data['V'] = self.get_volume()
         return data
 
+class spheredim(hoomd.meta._metadata):
+    R""" Define sphere dimension.
+
+    Args:
+        R (float): Radius of sphere
+        dimensions (int): Dimension of the n-sphere (2 or 3).
+        volume (float): Scale the given sphere up to the this volume (area if dimensions=2)
+
+    Simulations can be conducted on 2- and 3-spheres, which are embedded into three and four spatial dimensions,
+    respectively.
+
+    .. rubric:: Simulations on the two-sphere
+
+    TODO
+    """
+    def __init__(self, R=1.0, dimensions=3, volume=None):
+        self.R = R
+        self.dimensions = dimensions
+
+        if volume is not None:
+            self.set_volume(volume)
+
+        # base class constructor
+        hoomd.meta._metadata.__init__(self)
+
+    def set_volume(self, volume):
+        R""" Set the sphere volume.
+
+        Args:
+            volume (float): new sphere volume (area if dimensions=2)
+
+        Scale the sphere to the given volume (or area).
+
+        Returns:
+            A reference to the modified sphere.
+        """
+        import math
+
+        self.R = math.pow(volume*3/4/math.pi,1./3.)
+        return self
+
+    ## \internal
+    # \brief Get a C++ spheredim
+    def _getSphereDim(self):
+        s = _hoomd.SphereDim(self.R);
+        return s
+
+    def __str__(self):
+        return 'Sphere: R=' + str(self.R) + ' dimensions=' + str(self.dimensions);
+
+    ## \internal
+    # \brief Get a dictionary representation of the box dimensions
+    def get_metadata(self):
+        data = hoomd.meta._metadata.get_metadata(self)
+        data['d'] = self.dimensions
+        data['R'] = self.R
+        return data
+
+
 class system_data(hoomd.meta._metadata):
     R""" Access system data
 
@@ -2250,6 +2309,19 @@ def set_snapshot_box(snapshot, box):
     snapshot._dimensions = box.dimensions;
 
 ## \internal
+# Get a data.spheredim from a SnapshotSystemData
+def get_snapshot_sphere(snapshot):
+    s = snapshot.sphere
+    R = s.getR();
+    return spheredim(R=R, dimensions=snapshot._dimensions)
+
+## \internal
+# Set data.spheredim to a SnapshotSystemData
+def set_snapshot_sphere(snapshot, sphere):
+    snapshot.sphere = spere._getSphereDim()
+    snapshot._dimensions = sphere.dimensions
+
+## \internal
 # \brief Broadcast snapshot to all ranks
 def broadcast_snapshot(cpp_snapshot):
     hoomd.util.print_status_line();
@@ -2269,18 +2341,26 @@ def broadcast_snapshot_all(cpp_snapshot):
 _hoomd.SnapshotSystemData_float.box = property(get_snapshot_box, set_snapshot_box);
 _hoomd.SnapshotSystemData_double.box = property(get_snapshot_box, set_snapshot_box);
 
+# Inject a sphere property into SnapshotSystemData that provides and accepts spheredim objects
+_hoomd.SnapshotSystemData_float.sphere = property(get_snapshot_sphere, set_snapshot_sphere);
+_hoomd.SnapshotSystemData_double.sphere = property(get_snapshot_sphere, set_snapshot_sphere);
+
+
 # Inject broadcast methods into SnapshotSystemData
 _hoomd.SnapshotSystemData_float.broadcast = broadcast_snapshot
 _hoomd.SnapshotSystemData_double.broadcast = broadcast_snapshot
 _hoomd.SnapshotSystemData_float.broadcast_all = broadcast_snapshot_all
 _hoomd.SnapshotSystemData_double.broadcast_all = broadcast_snapshot_all
 
-def make_snapshot(N, box, particle_types=['A'], bond_types=[], angle_types=[], dihedral_types=[], improper_types=[], pair_types=[], dtype='float'):
+def make_snapshot(N, box=None, sphere=None,
+    particle_types=['A'], bond_types=[], angle_types=[], dihedral_types=[], improper_types=[],
+    pair_types=[], dtype='float', boundary = 'periodic'):
     R""" Make an empty snapshot.
 
     Args:
         N (int): Number of particles to create.
-        box (:py:class:`hoomd.data.boxdim`): Simulation box parameters.
+        box (:py:class:`hoomd.data.boxdim`): Simulation box parameters (for periodic boundary conditions)
+        sphere (:py:class:`hoomd.data.spheredim`): Simulation sphere parameters (for hyperspherical boundary conditions)
         particle_types (list): Particle type names (must not be zero length).
         bond_types (list): Bond type names (may be zero length).
         angle_types (list): Angle type names (may be zero length).
@@ -2289,6 +2369,7 @@ def make_snapshot(N, box, particle_types=['A'], bond_types=[], angle_types=[], d
         pair_types(list): Special pair type names (may be zero length).
             .. versionadded:: 2.1
         dtype (str): Data type for the real valued numpy arrays in the snapshot. Must be either 'float' or 'double'.
+        boundary (str): Type of boundary conditions. Must be either 'periodic' or 'hyperspherical'
 
     Examples::
 
@@ -2296,6 +2377,8 @@ def make_snapshot(N, box, particle_types=['A'], bond_types=[], angle_types=[], d
         snapshot = data.make_snapshot(N=64000, box=data.boxdim(L=1, dimensions=2, volume=1000), particle_types=['A', 'B'])
         snapshot = data.make_snapshot(N=64000, box=data.boxdim(L=20), bond_types=['polymer'], dihedral_types=['dihedralA', 'dihedralB'], improper_types=['improperA', 'improperB', 'improperC'])
         ... set properties in snapshot ...
+        snapshot = data.make_snapshot(N=1000, sphere=data.spheredim(R=10))
+        snapshot = data.make_snapshot(N=1000, sphere=data.spheredim(R=15, dimensions=2))
         init.read_snapshot(snapshot);
 
     :py:func:`hoomd.data.make_snapshot()` creates all particles with **default properties**. You must set reasonable
@@ -2311,6 +2394,8 @@ def make_snapshot(N, box, particle_types=['A'], bond_types=[], angle_types=[], d
     * charge 0
     * mass 1.0
     * diameter 1.0
+    * quat_l 1,0,0,0
+    * quat_r 1,0,0,0
 
     See Also:
         :py:func:`hoomd.init.read_snapshot()`
@@ -2322,7 +2407,18 @@ def make_snapshot(N, box, particle_types=['A'], bond_types=[], angle_types=[], d
     else:
         raise ValueError("dtype must be either float or double");
 
-    snapshot.box = box;
+    if boundary == 'periodic':
+        if box is None:
+            raise ValueError("box argument must be provided with periodic boundary conditions");
+        snapshot.box = box;
+    elif boundary == 'hyperspherical':
+        if sphere is None:
+            raise ValueError("sphere argument must be provided with (hyper-)spherical boundary conditions");
+        snapshot.sphere = sphere
+        snapshot.particles.uses_spherical_bc = True
+    else:
+        raise ValueError("bc must be either periodic or hyperspherical");
+
     if hoomd.comm.get_rank() == 0:
         snapshot.particles.resize(N);
 
