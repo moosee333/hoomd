@@ -425,6 +425,8 @@ class UpdaterClusters : public Updater
         detail::AABBTree m_aabb_tree_old;              //!< Locality lookup for old configuration
         std::vector<Scalar4> m_postype_backup;         //!< Old local positions
         std::vector<Scalar4> m_orientation_backup;     //!< Old local orientations
+        std::vector<Scalar4> m_quat_l_backup;          //!< Old left quaternions
+        std::vector<Scalar4> m_quat_r_backup;          //!< Old right quaternions
         std::vector<Scalar> m_diameter_backup;         //!< Old local diameters
         std::vector<Scalar> m_charge_backup;           //!< Old local charges
         std::vector<int3> m_image_backup;              //!< Old local images
@@ -558,9 +560,15 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
     // loop over local particles
     unsigned int nptl = m_pdata->getN();
 
+    auto boundary = m_pdata->getBoundaryConditions();
+    const SphereDim& sphere = m_pdata->getSphere();
+
     // access particle data
     ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
     ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+    ArrayHandle<Scalar4> h_quat_l(m_pdata->getLeftQuaternionArray(), access_location::host, access_mode::read);
+    ArrayHandle<Scalar4> h_quat_r(m_pdata->getRightQuaternionArray(), access_location::host, access_mode::read);
+
     ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
     ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
     ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
@@ -687,119 +695,35 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
         #endif
         }
 
-    // loop over new configuration
-    #ifdef ENABLE_TBB
-    tbb::parallel_for((unsigned int)0,nptl, [&](unsigned int i)
-    #else
-    for (unsigned int i = 0; i < nptl; ++i)
-    #endif
+    if (boundary == ParticleData::periodic)
         {
-        unsigned int typ_i = __scalar_as_int(h_postype.data[i].w);
-
-        vec3<Scalar> pos_i_new(h_postype.data[i]);
-        quat<Scalar> orientation_i_new(h_orientation.data[i]);
-
-        Shape shape_i(orientation_i_new, params[typ_i]);
-        Scalar r_excl_i = shape_i.getCircumsphereDiameter()/Scalar(2.0);
-
-        // check for overlap at mirrored position, with other particles in old configuration
-        detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
-
-        // All image boxes (including the primary)
-        const unsigned int n_images = image_list.size();
-
-        // check against old
-        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+        // loop over new configuration
+        #ifdef ENABLE_TBB
+        tbb::parallel_for((unsigned int)0,nptl, [&](unsigned int i)
+        #else
+        for (unsigned int i = 0; i < nptl; ++i)
+        #endif
             {
-            vec3<Scalar> pos_i_image = pos_i_new + image_list[cur_image];
+            unsigned int typ_i = __scalar_as_int(h_postype.data[i].w);
 
-            detail::AABB aabb_i_image = aabb_i_local;
-            aabb_i_image.translate(pos_i_image);
+            vec3<Scalar> pos_i_new(h_postype.data[i]);
+            quat<Scalar> orientation_i_new(h_orientation.data[i]);
 
-            // stackless search
-            for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
-                {
-                if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i_image))
-                    {
-                    if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
-                        {
-                        for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
-                            {
-                            // read in its position and orientation
-                            unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+            Shape shape_i(orientation_i_new, params[typ_i]);
+            Scalar r_excl_i = shape_i.getCircumsphereDiameter()/Scalar(2.0);
 
-                            unsigned int new_tag_j;
-                                {
-                                auto it = map.find(m_tag_backup[j]);
-                                assert(it != map.end());
-                                new_tag_j = it->second;
-                                }
+            // check for overlap at mirrored position, with other particles in old configuration
+            detail::AABB aabb_i_local = shape_i.getAABB(vec3<Scalar>(0,0,0));
 
-                            if (h_tag.data[i] == new_tag_j && cur_image == 0) continue;
+            // All image boxes (including the primary)
+            const unsigned int n_images = image_list.size();
 
-                            // load the position and orientation of the j particle
-                            vec3<Scalar> pos_j = vec3<Scalar>(m_postype_backup[j]);
-                            unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
-                            Shape shape_j(quat<Scalar>(m_orientation_backup[j]), params[typ_j]);
-
-                            // put particles in coordinate system of particle i
-                            vec3<Scalar> r_ij = pos_j - pos_i_image;
-
-                            // check for circumsphere overlap
-                            Scalar r_excl_j = shape_j.getCircumsphereDiameter()/Scalar(2.0);
-                            Scalar RaRb = r_excl_i + r_excl_j;
-                            Scalar rsq_ij = dot(r_ij, r_ij);
-
-                            unsigned int err = 0;
-                            if (rsq_ij <= RaRb*RaRb)
-                                {
-                                if (h_overlaps.data[overlap_idx(typ_i,typ_j)]
-                                    && test_overlap(r_ij, shape_i, shape_j, err))
-                                    {
-                                    int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - m_image_backup[j];
-                                    bool reject = (line &&!swap) && (delta_img.x || delta_img.y || delta_img.z);
-
-                                    if (swap && ((typ_i != m_ab_types[0] && typ_i != m_ab_types[1])
-                                        || (typ_j != m_ab_types[0] && typ_j != m_ab_types[1])))
-                                        reject = true;
-
-                                    // add connection
-                                    m_overlap.push_back(std::make_pair(h_tag.data[i],new_tag_j));
-
-                                    if (reject)
-                                        {
-                                        // if interaction across PBC, reject cluster move
-                                        m_local_reject.insert(h_tag.data[i]);
-                                        m_local_reject.insert(new_tag_j);
-                                        }
-                                    } // end if overlap
-                                }
-
-                            } // end loop over AABB tree leaf
-                        } // end is leaf
-                    } // end if overlap
-                else
-                    {
-                    // skip ahead
-                    cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
-                    }
-
-                } // end loop over nodes
-            } // end loop over images
-
-        if (patch)
-            {
-            // subtract minimum AABB extent from search radius
-            Scalar extent_i = 0.5*patch->getAdditiveCutoff(typ_i);
-            OverlapReal R_query = std::max(0.0,r_cut_patch+extent_i-min_core_diameter/(OverlapReal)2.0);
-            detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
-
-            // compute V(r'-r)
+            // check against old
             for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                 {
                 vec3<Scalar> pos_i_image = pos_i_new + image_list[cur_image];
 
-                detail::AABB aabb_i_image = aabb_local;
+                detail::AABB aabb_i_image = aabb_i_local;
                 aabb_i_image.translate(pos_i_image);
 
                 // stackless search
@@ -823,49 +747,44 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
 
                                 if (h_tag.data[i] == new_tag_j && cur_image == 0) continue;
 
-                                vec3<Scalar> pos_j(m_postype_backup[j]);
+                                // load the position and orientation of the j particle
+                                vec3<Scalar> pos_j = vec3<Scalar>(m_postype_backup[j]);
                                 unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+                                Shape shape_j(quat<Scalar>(m_orientation_backup[j]), params[typ_j]);
 
                                 // put particles in coordinate system of particle i
                                 vec3<Scalar> r_ij = pos_j - pos_i_image;
 
-                                // check for excluded volume sphere overlap
+                                // check for circumsphere overlap
+                                Scalar r_excl_j = shape_j.getCircumsphereDiameter()/Scalar(2.0);
+                                Scalar RaRb = r_excl_i + r_excl_j;
                                 Scalar rsq_ij = dot(r_ij, r_ij);
 
-                                Scalar rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
-
-                                if (rsq_ij <= rcut_ij*rcut_ij)
+                                unsigned int err = 0;
+                                if (rsq_ij <= RaRb*RaRb)
                                     {
-                                    auto p = std::make_pair(h_tag.data[i], new_tag_j);
-
-                                    // if particle interacts in different image already, add to that energy
-                                    float U = 0.0;
+                                    if (h_overlaps.data[overlap_idx(typ_i,typ_j)]
+                                        && test_overlap(r_ij, shape_i, shape_j, err))
                                         {
-                                        auto it_energy = m_energy_new_old.find(p);
-                                        if (it_energy != m_energy_new_old.end())
-                                            U = it_energy->second;
-                                        }
+                                        int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - m_image_backup[j];
+                                        bool reject = (line &&!swap) && (delta_img.x || delta_img.y || delta_img.z);
 
-                                    U += patch->energy(r_ij, typ_i,
-                                                            quat<float>(shape_i.orientation),
-                                                            h_diameter.data[i],
-                                                            h_charge.data[i],
-                                                            typ_j,
-                                                            quat<float>(m_orientation_backup[j]),
-                                                            m_diameter_backup[j],
-                                                            m_charge_backup[j]);
+                                        if (swap && ((typ_i != m_ab_types[0] && typ_i != m_ab_types[1])
+                                            || (typ_j != m_ab_types[0] && typ_j != m_ab_types[1])))
+                                            reject = true;
 
-                                    // update map
-                                    m_energy_new_old[p] = U;
+                                        // add connection
+                                        m_overlap.push_back(std::make_pair(h_tag.data[i],new_tag_j));
 
-                                    int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - m_image_backup[j];
-                                    if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
-                                        {
-                                        // if interaction across PBC, reject cluster move
-                                        m_local_reject.insert(h_tag.data[i]);
-                                        m_local_reject.insert(new_tag_j);
-                                        }
+                                        if (reject)
+                                            {
+                                            // if interaction across PBC, reject cluster move
+                                            m_local_reject.insert(h_tag.data[i]);
+                                            m_local_reject.insert(new_tag_j);
+                                            }
+                                        } // end if overlap
                                     }
+
                                 } // end loop over AABB tree leaf
                             } // end is leaf
                         } // end if overlap
@@ -876,15 +795,274 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                         }
 
                     } // end loop over nodes
-
                 } // end loop over images
-            } // end if patch
-        } // end loop over local particles
-    #ifdef ENABLE_TBB
-        );
-    #endif
 
-    if (line && !swap)
+            if (patch)
+                {
+                // subtract minimum AABB extent from search radius
+                Scalar extent_i = 0.5*patch->getAdditiveCutoff(typ_i);
+                OverlapReal R_query = std::max(0.0,r_cut_patch+extent_i-min_core_diameter/(OverlapReal)2.0);
+                detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
+
+                // compute V(r'-r)
+                for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                    {
+                    vec3<Scalar> pos_i_image = pos_i_new + image_list[cur_image];
+
+                    detail::AABB aabb_i_image = aabb_local;
+                    aabb_i_image.translate(pos_i_image);
+
+                    // stackless search
+                    for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
+                        {
+                        if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i_image))
+                            {
+                            if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
+                                {
+                                for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
+                                    {
+                                    // read in its position and orientation
+                                    unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+
+                                    unsigned int new_tag_j;
+                                        {
+                                        auto it = map.find(m_tag_backup[j]);
+                                        assert(it != map.end());
+                                        new_tag_j = it->second;
+                                        }
+
+                                    if (h_tag.data[i] == new_tag_j && cur_image == 0) continue;
+
+                                    vec3<Scalar> pos_j(m_postype_backup[j]);
+                                    unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+
+                                    // put particles in coordinate system of particle i
+                                    vec3<Scalar> r_ij = pos_j - pos_i_image;
+
+                                    // check for excluded volume sphere overlap
+                                    Scalar rsq_ij = dot(r_ij, r_ij);
+
+                                    Scalar rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
+
+                                    if (rsq_ij <= rcut_ij*rcut_ij)
+                                        {
+                                        auto p = std::make_pair(h_tag.data[i], new_tag_j);
+
+                                        // if particle interacts in different image already, add to that energy
+                                        float U = 0.0;
+                                            {
+                                            auto it_energy = m_energy_new_old.find(p);
+                                            if (it_energy != m_energy_new_old.end())
+                                                U = it_energy->second;
+                                            }
+
+                                        U += patch->energy(r_ij, typ_i,
+                                                                quat<float>(shape_i.orientation),
+                                                                h_diameter.data[i],
+                                                                h_charge.data[i],
+                                                                typ_j,
+                                                                quat<float>(m_orientation_backup[j]),
+                                                                m_diameter_backup[j],
+                                                                m_charge_backup[j]);
+
+                                        // update map
+                                        m_energy_new_old[p] = U;
+
+                                        int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - m_image_backup[j];
+                                        if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
+                                            {
+                                            // if interaction across PBC, reject cluster move
+                                            m_local_reject.insert(h_tag.data[i]);
+                                            m_local_reject.insert(new_tag_j);
+                                            }
+                                        }
+                                    } // end loop over AABB tree leaf
+                                } // end is leaf
+                            } // end if overlap
+                        else
+                            {
+                            // skip ahead
+                            cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
+                            }
+
+                        } // end loop over nodes
+
+                    } // end loop over images
+                } // end if patch
+            } // end loop over local particles
+        #ifdef ENABLE_TBB
+            );
+        #endif
+        }
+    else if (boundary == ParticleData::hyperspherical)
+        {
+        // loop over new configuration
+        #ifdef ENABLE_TBB
+        tbb::parallel_for((unsigned int)0,nptl, [&](unsigned int i)
+        #else
+        for (unsigned int i = 0; i < nptl; ++i)
+        #endif
+            {
+            unsigned int typ_i = __scalar_as_int(h_postype.data[i].w);
+
+            quat<Scalar> quat_l_i_new(h_quat_l.data[i]);
+            quat<Scalar> quat_r_i_new(h_quat_r.data[i]);
+
+            Shape shape_i(quat_l_i_new, quat_r_i_new, params[typ_i]);
+
+            detail::AABB aabb_i = shape_i.getAABB(sphere.sphericalToCartesian(quat_l_i_new, quat_r_i_new));
+
+            // stackless search
+            for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
+                {
+                if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i))
+                    {
+                    if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
+                        {
+                        for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
+                            {
+                            // read in its position and orientation
+                            unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+
+                            unsigned int new_tag_j;
+                                {
+                                auto it = map.find(m_tag_backup[j]);
+                                assert(it != map.end());
+                                new_tag_j = it->second;
+                                }
+
+                            // don't add self-references to cluster
+                            if (h_tag.data[i] == new_tag_j)
+                                continue;
+
+                            // load the spherical coordinates of the j particle
+                            quat<Scalar> quat_l_j(m_quat_l_backup[j]);
+                            quat<Scalar> quat_r_j(m_quat_r_backup[j]);
+                            unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+                            Shape shape_j(quat_l_j, quat_r_j, params[typ_j]);
+
+                            unsigned int err = 0;
+
+                            if (check_circumsphere_overlap_sphere(shape_i, shape_j, sphere)
+                                && h_overlaps.data[overlap_idx(typ_i,typ_j)]
+                                && test_overlap_sphere(shape_i, shape_j, sphere, err))
+                                {
+                                // add connection
+                                m_overlap.push_back(std::make_pair(h_tag.data[i],new_tag_j));
+                                } // end if overlap
+
+                            } // end loop over AABB tree leaf
+                        } // end is leaf
+                    } // end if overlap
+                else
+                    {
+                    // skip ahead
+                    cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
+                    }
+
+                } // end loop over nodes
+
+            #if 0
+            if (patch)
+                {
+                // subtract minimum AABB extent from search radius
+                Scalar extent_i = 0.5*patch->getAdditiveCutoff(typ_i);
+                OverlapReal R_query = std::max(0.0,r_cut_patch+extent_i-min_core_diameter/(OverlapReal)2.0);
+                detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
+
+                // compute V(r'-r)
+                for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                    {
+                    vec3<Scalar> pos_i_image = pos_i_new + image_list[cur_image];
+
+                    detail::AABB aabb_i_image = aabb_local;
+                    aabb_i_image.translate(pos_i_image);
+
+                    // stackless search
+                    for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
+                        {
+                        if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i_image))
+                            {
+                            if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
+                                {
+                                for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
+                                    {
+                                    // read in its position and orientation
+                                    unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+
+                                    unsigned int new_tag_j;
+                                        {
+                                        auto it = map.find(m_tag_backup[j]);
+                                        assert(it != map.end());
+                                        new_tag_j = it->second;
+                                        }
+
+                                    if (h_tag.data[i] == new_tag_j && cur_image == 0) continue;
+
+                                    vec3<Scalar> pos_j(m_postype_backup[j]);
+                                    unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+
+                                    // put particles in coordinate system of particle i
+                                    vec3<Scalar> r_ij = pos_j - pos_i_image;
+
+                                    // check for excluded volume sphere overlap
+                                    Scalar rsq_ij = dot(r_ij, r_ij);
+
+                                    Scalar rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
+
+                                    if (rsq_ij <= rcut_ij*rcut_ij)
+                                        {
+                                        auto p = std::make_pair(h_tag.data[i], new_tag_j);
+
+                                        // if particle interacts in different image already, add to that energy
+                                        float U = 0.0;
+                                            {
+                                            auto it_energy = m_energy_new_old.find(p);
+                                            if (it_energy != m_energy_new_old.end())
+                                                U = it_energy->second;
+                                            }
+
+                                        U += patch->energy(r_ij, typ_i,
+                                                                quat<float>(shape_i.orientation),
+                                                                h_diameter.data[i],
+                                                                h_charge.data[i],
+                                                                typ_j,
+                                                                quat<float>(m_orientation_backup[j]),
+                                                                m_diameter_backup[j],
+                                                                m_charge_backup[j]);
+
+                                        // update map
+                                        m_energy_new_old[p] = U;
+
+                                        int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - m_image_backup[j];
+                                        if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
+                                            {
+                                            // if interaction across PBC, reject cluster move
+                                            m_local_reject.insert(h_tag.data[i]);
+                                            m_local_reject.insert(new_tag_j);
+                                            }
+                                        }
+                                    } // end loop over AABB tree leaf
+                                } // end is leaf
+                            } // end if overlap
+                        else
+                            {
+                            // skip ahead
+                            cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
+                            }
+
+                        } // end loop over nodes
+
+                    } // end loop over images
+                } // end if patch
+            #endif
+            } // end loop over local particles
+        #ifdef ENABLE_TBB
+            );
+        #endif
+        }
+
+    if (boundary == ParticleData::periodic && line && !swap)
         {
         // locality data in new configuration
         const detail::AABBTree& aabb_tree = m_mc->buildAABBTree();
@@ -1012,8 +1190,22 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
     m_n_particles_old = m_pdata->getN();
 
     unsigned int nptl = m_pdata->getN()+m_pdata->getNGhosts();
-    m_postype_backup.resize(nptl);
-    m_orientation_backup.resize(nptl);
+
+    auto boundary = m_pdata->getBoundaryConditions();
+
+    if (boundary == ParticleData::periodic)
+        {
+        m_postype_backup.resize(nptl);
+        m_orientation_backup.resize(nptl);
+        }
+    else if (boundary == ParticleData::hyperspherical)
+        {
+        m_quat_l_backup.resize(nptl);
+        m_quat_r_backup.resize(nptl);
+        }
+    else
+        throw std::runtime_error("Unknown boundary conditions in UpdaterClusters\n");
+
     m_diameter_backup.resize(nptl);
     m_charge_backup.resize(nptl);
     m_tag_backup.resize(nptl);
@@ -1022,20 +1214,37 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
         {
         ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
         ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar4> h_quat_l(m_pdata->getLeftQuaternionArray(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar4> h_quat_r(m_pdata->getRightQuaternionArray(), access_location::host, access_mode::read);
         ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
         ArrayHandle<Scalar> h_charge(m_pdata->getDiameters(), access_location::host, access_mode::read);
         ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
         ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::read);
 
+        if (boundary == ParticleData::periodic)
+            {
+            for (unsigned int i = 0; i < nptl; ++i)
+                {
+                m_orientation_backup[i] = h_orientation.data[i];
+                // reset image
+                m_image_backup[i] = make_int3(0,0,0);
+                }
+            }
+        else if (boundary == ParticleData::hyperspherical)
+            {
+            for (unsigned int i = 0; i < nptl; ++i)
+                {
+                m_quat_l_backup[i] = h_quat_l.data[i];
+                m_quat_r_backup[i] = h_quat_r.data[i];
+                }
+            }
+
         for (unsigned int i = 0; i < nptl; ++i)
             {
             m_postype_backup[i] = h_postype.data[i];
-            m_orientation_backup[i] = h_orientation.data[i];
             m_diameter_backup[i] = h_diameter.data[i];
             m_charge_backup[i] = h_charge.data[i];
             m_tag_backup[i] = h_tag.data[i];
-            // reset image
-            m_image_backup[i] = make_int3(0,0,0);
             }
         }
 
@@ -1064,46 +1273,84 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
     bool line = !swap && (m_mc->hasOrientation() || (rng.template s<Scalar>() > m_move_ratio));
 
     quat<Scalar> q;
+    quat<Scalar> pl, pr;
+    bool parity = true;
 
-    if (line)
+    if (boundary == ParticleData::periodic)
         {
-        // random normalized vector
-        vec3<Scalar> n;
-
-        if (m_sysdef->getNDimensions() == 3)
+        if (line)
             {
+            // random normalized vector
+            vec3<Scalar> n;
+
+            if (m_sysdef->getNDimensions() == 3)
+                {
+                Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
+                Scalar z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
+                n = vec3<Scalar>(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
+                }
+            else
+                {
+                // reflection around z axis
+                n = vec3<Scalar>(0,0,1);
+                }
+
+            // line reflection
+            q = quat<Scalar>(0,n);
+            }
+        else
+            {
+            Scalar3 f;
+            f.x = rng.template s<Scalar>();
+            f.y = rng.template s<Scalar>();
+            if (m_sysdef->getNDimensions() == 3)
+                {
+                f.z = rng.template s<Scalar>();
+                }
+            else
+                {
+                f.z = 0.5;
+                }
+
+            pivot = vec3<Scalar>(box.makeCoordinates(f));
+            if (m_sysdef->getNDimensions() == 2)
+                {
+                // force z component to be zero
+                pivot.z = 0.0;
+                }
+            }
+        }
+    else if (boundary == ParticleData::hyperspherical)
+        {
+        if (line)
+            {
+            // draw a random unit vector on the two-sphere
             Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
             Scalar z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
-            n = vec3<Scalar>(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
+            vec3<Scalar> nl = vec3<Scalar>(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
+            pl = quat<Scalar>(0,nl);
+
+            if (m_sysdef->getNDimensions() == 3)
+                {
+                // draw a second normalized vector
+                theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
+                z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
+                vec3<Scalar> nr = vec3<Scalar>(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
+
+                pr = quat<Scalar>(0,nr);
+                }
+            else
+                {
+                // on the 2-sphere, a single vector describes the rotation
+                pr = conj(pl);
+                }
             }
         else
             {
-            // reflection around z axis
-            n = vec3<Scalar>(0,0,1);
-            }
-
-        // line reflection
-        q = quat<Scalar>(0,n);
-        }
-    else
-        {
-        Scalar3 f;
-        f.x = rng.template s<Scalar>();
-        f.y = rng.template s<Scalar>();
-        if (m_sysdef->getNDimensions() == 3)
-            {
-            f.z = rng.template s<Scalar>();
-            }
-        else
-            {
-            f.z = 0.5;
-            }
-
-        pivot = vec3<Scalar>(box.makeCoordinates(f));
-        if (m_sysdef->getNDimensions() == 2)
-            {
-            // force z component to be zero
-            pivot.z = 0.0;
+            // point reflection, generate random point on the 3-sphere to act as pivot
+            quat<Scalar> p = generateRandomOrientation(rng);
+            parity = false;
+            pl = pr = p;
             }
         }
 
@@ -1112,13 +1359,19 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
     // obtain particle data from all ranks
 
     // save origin information
-    Scalar3 origin = m_pdata->getOrigin();
-    int3 origin_image = m_pdata->getOriginImage();
+    Scalar3 origin;
+    int3 origin_image;
+
+    if (boundary == ParticleData::periodic)
+        {
+        origin = m_pdata->getOrigin();
+        origin_image = m_pdata->getOriginImage();
+
+        // reset origin, so that snapshot positions match AABB tree positions
+        m_pdata->resetOrigin();
+        }
 
     // take a snapshot, and save tag->snap idx mapping
-
-    // reset origin, so that snapshot positions match AABB tree positions
-    m_pdata->resetOrigin();
     auto map = m_pdata->takeSnapshot(snap);
 
     #ifdef ENABLE_MPI
@@ -1159,49 +1412,80 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
         BoxDim global_box_nonperiodic = box;
         global_box_nonperiodic.setPeriodic(m_pdata->getBox().getPeriodic());
 
-        for (unsigned int i = 0; i < snap.size; ++i)
+        if (boundary == ParticleData::periodic)
             {
-            // reset image
-            snap.image[i] = make_int3(0,0,0);
-
-            if (swap)
+            for (unsigned int i = 0; i < snap.size; ++i)
                 {
-                // swap move
-                if (snap.type[i] == m_ab_types[0])
-                    snap.type[i] = m_ab_types[1];
-                else if (snap.type[i] == m_ab_types[1])
-                    snap.type[i] = m_ab_types[0];
-                }
-            else
-                {
-                // if the particle falls outside the active volume of global_box_nonperiodic, reject
-                if (!isActive(vec_to_scalar3(snap.pos[i]), global_box_nonperiodic, range))
-                    {
-                    m_ptl_reject.insert(i);
-                    }
+                // reset image
+                snap.image[i] = make_int3(0,0,0);
 
-                if (!line)
+                if (swap)
                     {
-                    // point reflection
-                    snap.pos[i] = pivot-(snap.pos[i]-pivot);
+                    // swap move
+                    if (snap.type[i] == m_ab_types[0])
+                        snap.type[i] = m_ab_types[1];
+                    else if (snap.type[i] == m_ab_types[1])
+                        snap.type[i] = m_ab_types[0];
                     }
                 else
                     {
-                    // line reflection
-                    snap.pos[i] = lineReflection(snap.pos[i], pivot, q);
-                    Shape shape_i(snap.orientation[i], params[snap.type[i]]);
-                    if (shape_i.hasOrientation())
-                        snap.orientation[i] = q*snap.orientation[i];
-                    }
-                // reject if outside active volume of box at new position
-                if (!isActive(vec_to_scalar3(snap.pos[i]), global_box_nonperiodic, range))
-                    {
-                    m_ptl_reject.insert(i);
-                    }
+                    // if the particle falls outside the active volume of global_box_nonperiodic, reject
+                    if (!isActive(vec_to_scalar3(snap.pos[i]), global_box_nonperiodic, range))
+                        {
+                        m_ptl_reject.insert(i);
+                        }
 
-                // wrap particle back into box
-                snap.image[i] = box.getImage(snap.pos[i]);
-                snap.pos[i] = box.shift(snap.pos[i],-snap.image[i]);
+                    if (!line)
+                        {
+                        // point reflection
+                        snap.pos[i] = pivot-(snap.pos[i]-pivot);
+                        }
+                    else
+                        {
+                        // line reflection
+                        snap.pos[i] = lineReflection(snap.pos[i], pivot, q);
+                        Shape shape_i(snap.orientation[i], params[snap.type[i]]);
+                        if (shape_i.hasOrientation())
+                            snap.orientation[i] = q*snap.orientation[i];
+                        }
+                    // reject if outside active volume of box at new position
+                    if (!isActive(vec_to_scalar3(snap.pos[i]), global_box_nonperiodic, range))
+                        {
+                        m_ptl_reject.insert(i);
+                        }
+
+                    // wrap particle back into box
+                    snap.image[i] = box.getImage(snap.pos[i]);
+                    snap.pos[i] = box.shift(snap.pos[i],-snap.image[i]);
+                    }
+                }
+            }
+        else if (boundary == ParticleData::hyperspherical)
+            {
+            for (unsigned int i = 0; i < snap.size; ++i)
+                {
+                if (swap)
+                    {
+                    // swap move
+                    if (snap.type[i] == m_ab_types[0])
+                        snap.type[i] = m_ab_types[1];
+                    else if (snap.type[i] == m_ab_types[1])
+                        snap.type[i] = m_ab_types[0];
+                    }
+                else
+                    {
+                    // carry out the transformation
+                    if (parity)
+                        {
+                        snap.quat_l[i] = pl*snap.quat_l[i];
+                        snap.quat_r[i] = snap.quat_r[i]*pr;
+                        }
+                    else
+                        {
+                        snap.quat_l[i] = pl*conj(snap.quat_r[i]);
+                        snap.quat_r[i] = conj(snap.quat_l[i])*pr;
+                        }
+                    }
                 }
             }
         }
@@ -1686,10 +1970,19 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                     // particle index
                     unsigned int i = *it;
 
-                    snap.pos[i] = snap_old.pos[i];
-                    snap.orientation[i] = snap_old.orientation[i];
+                    if (boundary == ParticleData::periodic)
+                        {
+                        snap.pos[i] = snap_old.pos[i];
+                        snap.orientation[i] = snap_old.orientation[i];
+                        snap.image[i] = snap_old.image[i];
+                        }
+                    else if (boundary == ParticleData::hyperspherical)
+                        {
+                        snap.quat_l[i] = snap_old.quat_l[i];
+                        snap.quat_r[i] = snap_old.quat_r[i];
+                        }
+
                     snap.type[i] = snap_old.type[i];
-                    snap.image[i] = snap_old.image[i];
 
                     if (flip)
                         {
@@ -1740,60 +2033,63 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
     // finally re-initialize particle data
     m_pdata->initializeFromSnapshot(snap);
 
-    // restore origin, after initializing from translated positions
-    m_pdata->setOrigin(origin,origin_image);
-
     if (this->m_prof) this->m_prof->pop();
     if (m_prof) m_prof->pop(m_exec_conf);
 
-    // in MPI and GPU simulations the integrator takes care of the grid shift
-    bool grid_shift = true;
-    #ifdef ENABLE_CUDA
-    if (m_exec_conf->isCUDAEnabled())
-        grid_shift = false;
-    #endif
-
-    #ifdef ENABLE_MPI
-    if (m_comm)
-        grid_shift = false;
-    #endif
-
-    if (grid_shift)
+    if (boundary == ParticleData::periodic)
         {
-        if (m_prof) m_prof->push(m_exec_conf,"Grid shift");
+        // restore origin, after initializing from translated positions
+        m_pdata->setOrigin(origin,origin_image);
 
-        // nominal width may be larger than nearest plane distance, correct
-        Scalar max_shift = std::min(npd.x, std::min(npd.y,npd.z));
-        max_shift = std::min(max_shift, nominal_width);
+        // in MPI and GPU simulations the integrator takes care of the grid shift
+        bool grid_shift = true;
+        #ifdef ENABLE_CUDA
+        if (m_exec_conf->isCUDAEnabled())
+            grid_shift = false;
+        #endif
 
-        // perform the grid shift to compensate for the uncrossable boundaries
-        ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
-        ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::readwrite);
+        #ifdef ENABLE_MPI
+        if (m_comm)
+            grid_shift = false;
+        #endif
 
-        Scalar3 shift = make_scalar3(0,0,0);
-
-        shift.x = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
-        shift.y = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
-        if (this->m_sysdef->getNDimensions() == 3)
+        if (grid_shift)
             {
-            shift.z = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
+            if (m_prof) m_prof->push(m_exec_conf,"Grid shift");
+
+            // nominal width may be larger than nearest plane distance, correct
+            Scalar max_shift = std::min(npd.x, std::min(npd.y,npd.z));
+            max_shift = std::min(max_shift, nominal_width);
+
+            // perform the grid shift to compensate for the uncrossable boundaries
+            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
+            ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::readwrite);
+
+            Scalar3 shift = make_scalar3(0,0,0);
+
+            shift.x = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
+            shift.y = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
+            if (this->m_sysdef->getNDimensions() == 3)
+                {
+                shift.z = rng.s(-max_shift/Scalar(2.0),max_shift/Scalar(2.0));
+                }
+
+            for (unsigned int i = 0; i < m_pdata->getN(); i++)
+                {
+                // read in the current position and orientation
+                Scalar4 postype_i = h_postype.data[i];
+                vec3<Scalar> r_i = vec3<Scalar>(postype_i);
+                r_i += vec3<Scalar>(shift);
+                h_postype.data[i] = vec_to_scalar4(r_i, postype_i.w);
+                box.wrap(h_postype.data[i], h_image.data[i]);
+                }
+            this->m_pdata->translateOrigin(shift);
+
+            m_mc->invalidateAABBTree();
+
+            if (m_prof) m_prof->pop(m_exec_conf);
             }
-
-        for (unsigned int i = 0; i < m_pdata->getN(); i++)
-            {
-            // read in the current position and orientation
-            Scalar4 postype_i = h_postype.data[i];
-            vec3<Scalar> r_i = vec3<Scalar>(postype_i);
-            r_i += vec3<Scalar>(shift);
-            h_postype.data[i] = vec_to_scalar4(r_i, postype_i.w);
-            box.wrap(h_postype.data[i], h_image.data[i]);
-            }
-        this->m_pdata->translateOrigin(shift);
-
-        m_mc->invalidateAABBTree();
-
-        if (m_prof) m_prof->pop(m_exec_conf);
-        }
+        } // end if pbc
 
     if (m_prof) m_prof->pop(m_exec_conf);
 

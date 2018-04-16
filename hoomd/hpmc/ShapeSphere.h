@@ -201,7 +201,7 @@ struct ShapeSphere
     const sph_params &params;        //!< Sphere and ignore flags
     };
 
-//! Check if circumspheres overlap
+//! Check if circumspheres overlap (cartesian coordinates)
 /*! \param r_ab Vector defining the position of shape b relative to shape a (r_b - r_a)
     \param a first shape
     \param b second shape
@@ -215,6 +215,35 @@ DEVICE inline bool check_circumsphere_overlap(const vec3<Scalar>& r_ab, const Sh
     // for now, always return true
     return true;
     }
+
+//! Check if circumspheres overlap (hyperspherical coordinates)
+/*! \param a first shape
+    \param b second shape
+    \returns true if the circumspheres of both shapes overlap
+
+    \ingroup shape
+*/
+template<class Shape>
+DEVICE inline bool check_circumsphere_overlap_sphere(const Shape& a, const Shape &b, const SphereDim& sphere)
+    {
+    // default implementation returns true, other shapes will have to implement this for broad-phase
+    return true;
+    }
+
+//! Check if circumspheres overlap (hyperspherical coordinates)
+/*! \param a first shape
+    \param b second shape
+    \returns true if the circumspheres of both shapes overlap
+
+    \ingroup shape
+*/
+template<>
+DEVICE inline bool check_circumsphere_overlap_sphere(const ShapeSphere& a, const ShapeSphere &b, const SphereDim& sphere)
+    {
+    // for now, always return true
+    return true;
+    }
+
 
 //! Define the general overlap function (cartesian version)
 /*! This is just a convenient spot to put this to make sure it is defined early
@@ -233,7 +262,7 @@ DEVICE inline bool test_overlap(const vec3<Scalar>& r_ab, const ShapeA &a, const
 
 //! Returns true if the shape overlaps with itself
 template<class Shape>
-DEVICE inline bool test_overlap_self_sphere(const Shape& shape, const SphereDim& sphere)
+DEVICE inline bool test_self_overlap_sphere(const Shape& shape, const SphereDim& sphere)
     {
     // default implementation returns true, will make it obvious if something calls this
     return true;
@@ -281,7 +310,7 @@ DEVICE inline bool test_overlap<ShapeSphere, ShapeSphere>(const vec3<Scalar>& r_
     }
 
 //! Returns true if the shape overlaps with itself
-DEVICE inline bool test_overlap_self_sphere(const ShapeSphere& shape, const SphereDim& sphere)
+DEVICE inline bool test_self_overlap_sphere(const ShapeSphere& shape, const SphereDim& sphere)
     {
     return shape.params.radius >= Scalar(M_PI)*sphere.getR();
     }
