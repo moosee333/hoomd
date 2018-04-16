@@ -1462,16 +1462,19 @@ const detail::AABBTree& IntegratorHPMCMono<Shape>::buildAABBTree()
         {
         m_exec_conf->msg->notice(8) << "Building AABB tree: " << m_pdata->getN() << " ptls " << m_pdata->getNGhosts() << " ghosts" << std::endl;
         if (this->m_prof) this->m_prof->push(this->m_exec_conf, "AABB tree build");
-        // build the AABB tree
-            {
-            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
-            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
 
-            // grow the AABB list to the needed size
-            unsigned int n_aabb = m_pdata->getN()+m_pdata->getNGhosts();
-            if (n_aabb > 0)
+        // grow the AABB list to the needed size
+        unsigned int n_aabb = m_pdata->getN()+m_pdata->getNGhosts();
+        if (n_aabb > 0)
+            {
+            growAABBList(n_aabb);
+
+            if (m_pdata->getBoundaryConditions() == ParticleData::periodic)
                 {
-                growAABBList(n_aabb);
+                // load particles
+                ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
+                ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::read);
+
                 for (unsigned int cur_particle = 0; cur_particle < n_aabb; cur_particle++)
                     {
                     unsigned int i = cur_particle;
@@ -1487,10 +1490,40 @@ const detail::AABBTree& IntegratorHPMCMono<Shape>::buildAABBTree()
                         m_aabbs[i] = detail::AABB(vec3<Scalar>(h_postype.data[i]), radius);
                         }
                     }
-                m_aabb_tree.buildTree(m_aabbs, n_aabb);
                 }
-            }
+            else if (m_pdata->getBoundaryConditions() == ParticleData::hyperspherical)
+                {
+                // build a 4d tree
+                ArrayHandle<Scalar4> h_quat_l(m_pdata->getLeftQuaternionArray(), access_location::host, access_mode::read);
+                ArrayHandle<Scalar4> h_quat_r(m_pdata->getRightQuaternionArray(), access_location::host, access_mode::read);
+                ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
 
+                const SphereDim& sphere = m_pdata->getSphere();
+                for (unsigned int cur_particle = 0; cur_particle < n_aabb; cur_particle++)
+                    {
+                    unsigned int i = cur_particle;
+                    unsigned int typ_i = __scalar_as_int(h_postype.data[i].w);
+                    Shape shape(quat<Scalar>(), m_params[typ_i]);
+
+                    quat<Scalar> pos4 = sphere.sphericalToCartesian(quat<Scalar>(h_quat_l.data[i]),
+                        quat<Scalar>(h_quat_r.data[i]));
+
+                    if (!this->m_patch)
+                        m_aabbs[i] = shape.getAABB(pos4);
+                    else
+                        {
+                        Scalar radius = std::max(0.5*shape.getCircumsphereDiameter(),
+                            0.5*this->m_patch->getAdditiveCutoff(typ_i));
+                        m_aabbs[i] = detail::AABB(pos4, radius);
+                        }
+                    }
+                }
+            else
+                throw std::runtime_error("Unknown boundary conditions in buildAABBTree()");
+
+            // build the tree
+            m_aabb_tree.buildTree(m_aabbs, n_aabb);
+            }
         if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
         }
 

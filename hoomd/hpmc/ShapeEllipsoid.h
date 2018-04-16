@@ -105,7 +105,8 @@ struct ShapeEllipsoid
         }
 
     //! Return the bounding box of the shape in world coordinates
-    DEVICE detail::AABB getAABB(const vec3<Scalar>& pos) const
+    template<class T>
+    DEVICE detail::AABB getAABB(const T& pos) const
         {
         OverlapReal max_axis = detail::max(axes.x, detail::max(axes.y, axes.z));
 

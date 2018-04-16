@@ -288,6 +288,28 @@ struct __attribute__((visibility("default"))) AABB
         #endif
         }
 
+    //! Get the AABB's position (4d)
+    DEVICE quat<Scalar> getPosition4d() const
+        {
+        #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
+        double half = 0.5;
+        __m256d half_v = _mm256_broadcast_sd(&half);
+        __m256d pos_v = _mm256_mul_pd(half_v, _mm256_add_pd(lower_v, upper_v));
+        return sse_unload_quat_double(pos_v);
+
+        #elif defined(__SSE__) && defined(SINGLE_PRECISION) && !defined(NVCC)
+        float half = 0.5f;
+        __m128 half_v = _mm_load_ps1(&half);
+        __m128 pos_v = _mm_mul_ps(half_v, _mm_add_ps(lower_v, upper_v));
+        return sse_unload_quat_float(pos_v);
+
+        #else
+        return quat<Scalar>((lower.s+upper.s)/Scalar(2.0),(lower.v + upper.v) / Scalar(2));
+
+        #endif
+        }
+
+
     //! Get the AABB's lower point
     DEVICE vec3<Scalar> getLower() const
         {
@@ -314,6 +336,36 @@ struct __attribute__((visibility("default"))) AABB
 
         #else
         return upper.v;
+
+        #endif
+        }
+
+    //! Get the AABB's lower point (4d)
+    DEVICE quat<Scalar> getLower4d() const
+        {
+        #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
+        return sse_unload_quat_double(lower_v);
+
+        #elif defined(__SSE__) && defined(SINGLE_PRECISION) && !defined(NVCC)
+        return sse_unload_quat_float(lower_v);
+
+        #else
+        return lower;
+
+        #endif
+        }
+
+    //! Get the AABB's upper point (4d)
+    DEVICE quat<Scalar> getUpper4d() const
+        {
+        #if defined(__AVX__) && !defined(SINGLE_PRECISION) && !defined(NVCC) && 0
+        return sse_unload_quat_double(upper_v);
+
+        #elif defined(__SSE__) && defined(SINGLE_PRECISION) && !defined(NVCC)
+        return sse_unload_quat_float(upper_v);
+
+        #else
+        return upper;
 
         #endif
         }

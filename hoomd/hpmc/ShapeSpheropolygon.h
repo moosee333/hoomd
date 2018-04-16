@@ -122,7 +122,8 @@ struct ShapeSpheropolygon
         }
 
     //! Return the bounding box of the shape in world coordinates
-    DEVICE detail::AABB getAABB(const vec3<Scalar>& pos) const
+    template<class T>
+    DEVICE detail::AABB getAABB(const T& pos) const
         {
         return detail::AABB(pos, verts.diameter/Scalar(2));
         }

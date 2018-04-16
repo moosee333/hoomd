@@ -28,7 +28,7 @@
     On the 3-sphere, coordinates are stored as a set of two unit quaternions (q_l and q_r), which transform a four vector, such as a particle
     director or a particle center position  v, like this:
 
-        trans_q(v) = q_l*v*q_r,
+        q'(v) = q_l*v*q_r,
 
     where * is the quaternion multiplication.
 
@@ -70,7 +70,7 @@ struct __attribute__((visibility("default"))) SphereDim
             \returns the projection as a 3-vector
          */
         template<class Real>
-        const quat<Real>& sphereToHyperplane(const quat<Real> q_l, const quat<Real> q_r)
+        quat<Real> sphericalToCartesian(const quat<Real>& q_l, const quat<Real>& q_r) const
             {
             return q_l*quat<Real>(R,vec3<Scalar>(0,0,0))*q_r;
             }
