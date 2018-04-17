@@ -48,6 +48,10 @@ namespace detail
     template <class Real>
     HOSTDEVICE Real get_bounding_sphere_radius_4d(const Real R_circumsphere, const Real R, const unsigned int dim)
         {
+        return R_circumsphere;
+
+        #if 0
+        // doesn't seem to work in 4d
         // rotate the bounding sphere center by an arc of length R_circumsphere, around the x-axis
         Real phi = R_circumsphere/R;
 
@@ -67,6 +71,7 @@ namespace detail
         quat<Real> dr(v1.s-v0.s, v1.v-v0.v);
 
         return fast::sqrt(norm2(dr));
+        #endif
         }
 
     // !helper to call CPU or GPU signbit
