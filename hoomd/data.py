@@ -2311,14 +2311,14 @@ def set_snapshot_box(snapshot, box):
 ## \internal
 # Get a data.spheredim from a SnapshotSystemData
 def get_snapshot_sphere(snapshot):
-    s = snapshot.sphere
+    s = snapshot._sphere
     R = s.getR();
     return spheredim(R=R, dimensions=snapshot._dimensions)
 
 ## \internal
 # Set data.spheredim to a SnapshotSystemData
 def set_snapshot_sphere(snapshot, sphere):
-    snapshot.sphere = spere._getSphereDim()
+    snapshot._sphere = sphere._getSphereDim()
     snapshot._dimensions = sphere.dimensions
 
 ## \internal
@@ -2369,7 +2369,6 @@ def make_snapshot(N, box=None, sphere=None,
         pair_types(list): Special pair type names (may be zero length).
             .. versionadded:: 2.1
         dtype (str): Data type for the real valued numpy arrays in the snapshot. Must be either 'float' or 'double'.
-        boundary (str): Type of boundary conditions. Must be either 'periodic' or 'hyperspherical'
 
     Examples::
 
@@ -2407,17 +2406,17 @@ def make_snapshot(N, box=None, sphere=None,
     else:
         raise ValueError("dtype must be either float or double");
 
-    if boundary == 'periodic':
-        if box is None:
-            raise ValueError("box argument must be provided with periodic boundary conditions");
+    if box is not None:
+        if sphere is not None:
+            raise ValueError("Cannot simultaneously use periodic and spherical boundary conditions.\n");
         snapshot.box = box;
-    elif boundary == 'hyperspherical':
-        if sphere is None:
-            raise ValueError("sphere argument must be provided with (hyper-)spherical boundary conditions");
+    if sphere is not None:
+        if box is not None:
+            raise ValueError("Cannot simultaneously use periodic and spherical boundary conditions.\n");
         snapshot.sphere = sphere
         snapshot.particles.uses_spherical_bc = True
-    else:
-        raise ValueError("bc must be either periodic or hyperspherical");
+    if box is None and sphere is None:
+        raise ValueError("Must provide either box or sphere for periodic or hyperspherical boundary conditions");
 
     if hoomd.comm.get_rank() == 0:
         snapshot.particles.resize(N);

@@ -3473,6 +3473,7 @@ void export_SnapshotParticleData(py::module& m)
     .def("resize", &SnapshotParticleData<float>::resize)
     .def("insert", &SnapshotParticleData<float>::insert)
     .def_readonly("is_accel_set", &SnapshotParticleData<float>::is_accel_set)
+    .def_readwrite("uses_spherical_bc", &SnapshotParticleData<float>::uses_spherical_bc)
     ;
 
     py::class_<SnapshotParticleData<double>, std::shared_ptr<SnapshotParticleData<double> > >(m,"SnapshotParticleData_double")
@@ -3497,5 +3498,6 @@ void export_SnapshotParticleData(py::module& m)
     .def("resize", &SnapshotParticleData<double>::resize)
     .def("insert", &SnapshotParticleData<double>::insert)
     .def_readonly("is_accel_set", &SnapshotParticleData<double>::is_accel_set)
+    .def_readwrite("uses_spherical_bc", &SnapshotParticleData<double>::uses_spherical_bc)
     ;
    }
