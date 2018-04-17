@@ -74,7 +74,7 @@ struct __attribute__((visibility("default"))) SphereDim
         template<class Real>
         quat<Real> sphericalToCartesian(const quat<Real>& q_l, const quat<Real>& q_r) const
             {
-            return q_l*quat<Real>(R,vec3<Scalar>(0,0,0))*q_r;
+            return q_l*quat<Real>(0,vec3<Scalar>(0,0,R))*q_r;
             }
 
     private:
