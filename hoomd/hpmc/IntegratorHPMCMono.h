@@ -1240,6 +1240,10 @@ void IntegratorHPMCMono<Shape>::setOverlapChecks(unsigned int typi, unsigned int
 template <class Shape>
 inline const std::vector<vec3<Scalar> >& IntegratorHPMCMono<Shape>::updateImageList()
     {
+    // only with periodic boundary conditions
+    if (m_pdata->getBoundaryConditions() != ParticleData::periodic)
+        return m_image_list;
+
     // cancel if the image list is up to date
     if (m_image_list_valid)
         return m_image_list;
