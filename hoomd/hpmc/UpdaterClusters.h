@@ -1270,7 +1270,9 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
         }
 
     // is this a line reflection?
-    bool line = !swap && (m_mc->hasOrientation() || (rng.template s<Scalar>() > m_move_ratio));
+    bool line = !swap && (m_mc->hasOrientation()
+        || (boundary == ParticleData::hyperspherical && m_sysdef->getNDimensions() == 3)
+        || (rng.template s<Scalar>() > m_move_ratio));
 
     quat<Scalar> q;
     quat<Scalar> pl, pr;
@@ -1352,6 +1354,9 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                 // point reflection, generate random point on the 3-sphere to act as pivot
                 quat<Scalar> p = generateRandomOrientation(rng);
                 pl = pr = p;
+
+                // we shouldn't get here, since we don't support inversions on the 3sphere
+                assert(false);
                 }
             else
                 {
@@ -1492,7 +1497,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                         snap.quat_l[i] = pl*conj(snap.quat_r[i]);
                         snap.quat_r[i] = conj(snap.quat_l[i])*pr;
 
-                        // always assign scalar sign of transformation to left quaternion
+                        // on the two-sphere, we just absorb the parity into the left tranformation
                         snap.quat_l[i].v *= -1.0;
                         snap.quat_l[i].s *= -1.0;
                         }
