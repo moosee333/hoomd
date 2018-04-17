@@ -125,7 +125,7 @@ void POSDumpWriter::analyze(unsigned int timestep)
     else if (m_pdata->getBoundaryConditions() == ParticleData::hyperspherical)
         {
         SphereDim sphere(m_pdata->getSphere());
-        m_file << "hypersphere true " << sphere.getR() << std::endl;
+        m_file << "hypersphere true " << m_sysdef->getNDimensions() << " " << sphere.getR() << std::endl;
         }
 
     for (unsigned int j = 0; j < numtype; j++)
