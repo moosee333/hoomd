@@ -1481,7 +1481,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                     }
                 else
                     {
-                    // carry out the transformation
+                    // apply the transformation
                     if (parity)
                         {
                         snap.quat_l[i] = pl*snap.quat_l[i];
@@ -1496,6 +1496,15 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                         snap.quat_l[i].v *= -1.0;
                         snap.quat_l[i].s *= -1.0;
                         }
+
+                    // renormalize
+                    Scalar norm_l_inv = fast::rsqrt(dot(snap.quat_l[i], snap.quat_l[i]));
+                    snap.quat_l[i].s *= norm_l_inv;
+                    snap.quat_l[i].v *= norm_l_inv;
+
+                    Scalar norm_r_inv = fast::rsqrt(dot(snap.quat_r[i], snap.quat_r[i]));
+                    snap.quat_r[i].s *= norm_r_inv;
+                    snap.quat_r[i].v *= norm_r_inv;
                     }
                 }
             }
