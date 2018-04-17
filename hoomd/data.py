@@ -231,7 +231,7 @@ Warning:
     The performance of the proxy access is very slow. Use snapshots to access the whole system configuration
     efficiently.
 
-.. rubric:: Simulation box
+.. rubric:: Simulation box or sphere
 
 You can access the simulation box::
 
@@ -246,6 +246,17 @@ and can change it::
 
 **All** particles must **always** remain inside the box. If a box is set in this way such that a particle ends up outside of the box, expect
 errors to be thrown or for hoomd to just crash. The dimensionality of the system cannot change after initialization.
+
+Similarly, for simulations with hyperspherical boundary conditions, you can access the boundary like this::
+
+    >>> print(system.sphere)
+    Sphere: R=10 dimensions=2
+
+and can change it::
+
+    >> system.sphere = data.dataspheredim(R=15.0)
+    >>> print(system.sphere)
+    Sphere: R=15 dimensions=2
 
 .. rubric:: Particle properties<
 
@@ -731,10 +742,8 @@ class spheredim(hoomd.meta._metadata):
         dimensions (int): Dimension of the n-sphere (2 or 3).
         volume (float): Scale the given sphere up to the this volume (area if dimensions=2)
 
-    Simulations can be conducted on 2- and 3-spheres, which are embedded into three and four spatial dimensions,
+    You can run simulations on the 2- or 3-sphere, which are embedded into three and four spatial dimensions,
     respectively.
-
-    .. rubric:: Simulations on the two-sphere
 
     TODO
     """
@@ -747,6 +756,19 @@ class spheredim(hoomd.meta._metadata):
 
         # base class constructor
         hoomd.meta._metadata.__init__(self)
+
+    def scale(self,s):
+        R""" Scale sphere dimensions.
+
+        Args:
+            s (float): scale factor for radius
+
+        Returns:
+            A reference to the modified sphere.
+        """
+        self.R *= s
+
+        return self
 
     def set_volume(self, volume):
         R""" Set the sphere volume.
@@ -790,6 +812,7 @@ class system_data(hoomd.meta._metadata):
 
     Attributes:
         box (:py:class:`hoomd.data.boxdim`)
+        sphere (:py:class:`hoomd.data.spheredim`)
         particles (:py:class:`hoomd.data.particle_data_proxy`)
         bonds (:py:class:`hoomd.data.bond_data_proxy`)
         angles (:py:class:`hoomd.data.angle_data_proxy`)
@@ -977,6 +1000,8 @@ class system_data(hoomd.meta._metadata):
     ## Get the system box
     @property
     def box(self):
+        if not self.sysdef.getParticleData().getBoundaryConditions() == _hoomd.ParticleData.periodic:
+            raise ValueError('box is only available with periodic boundary conditions.')
         b = self.sysdef.getParticleData().getGlobalBox();
         L = b.getL();
         return boxdim(Lx=L.x, Ly=L.y, Lz=L.z, xy=b.getTiltFactorXY(), xz=b.getTiltFactorXZ(), yz=b.getTiltFactorYZ(), dimensions=self.sysdef.getNDimensions());
@@ -985,10 +1010,32 @@ class system_data(hoomd.meta._metadata):
     # \param value The new boundaries (a data.boxdim object)
     @box.setter
     def box(self, value):
+        if not self.sysdef.getParticleData().getBoundaryConditions() == _hoomd.ParticleData.periodic:
+            raise ValueError('box can only be set with periodic boundary conditions.')
+
         if not isinstance(value, boxdim):
             raise TypeError('box must be a data.boxdim object');
         self.sysdef.getParticleData().setGlobalBox(value._getBoxDim());
 
+    ## Get the boundary sphere
+    @property
+    def sphere(self):
+        if not self.sysdef.getParticleData().getBoundaryConditions() == _hoomd.ParticleData.hyperspherical:
+            raise ValueError('sphere is only available with hyperspherical boundary conditions.')
+
+        s = self.sysdef.getParticleData().getSphere();
+        R = s.getR();
+        return spheredim(R, dimensions=self.sysdef.getNDimensions());
+
+    ## Set the boundary sphere
+    # \param value The new boundaries (a data.spheredim object)
+    @sphere.setter
+    def sphere(self, value):
+        if not isinstance(value, spheredim):
+            raise TypeError('sphere must be a data.spheredim object');
+        if not self.sysdef.getParticleData().getBoundaryConditions() == _hoomd.ParticleData.hyperspherical:
+            raise ValueError('sphere can only be set with periodic hyperspherical conditions.')
+        self.sysdef.getParticleData().setSphere(value._getSphereDim());
 
 ## \internal
 # \brief Access the list of types
