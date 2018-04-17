@@ -34,6 +34,8 @@
 
     On the 2-sphere, we only need a single quaternion, and we take q_l = conj(q_r) = q.
 
+    Improper transformations (reflections) are accounted for by a negative sign of the left quaternion.
+
     For more details, see Sinkovits, Barr and Luijten JCP 136, 144111 (2012).
  */
 

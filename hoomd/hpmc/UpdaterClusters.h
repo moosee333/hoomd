@@ -1347,10 +1347,17 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
             }
         else
             {
-            // point reflection, generate random point on the 3-sphere to act as pivot
-            quat<Scalar> p = generateRandomOrientation(rng);
+            if (m_sysdef->getNDimensions() == 3)
+                {
+                // point reflection, generate random point on the 3-sphere to act as pivot
+                quat<Scalar> p = generateRandomOrientation(rng);
+                pl = pr = p;
+                }
+            else
+                {
+                pl = pr = quat<Scalar>(1,vec3<Scalar>(0,0,0));
+                }
             parity = false;
-            pl = pr = p;
             }
         }
 
@@ -1484,6 +1491,10 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                         {
                         snap.quat_l[i] = pl*conj(snap.quat_r[i]);
                         snap.quat_r[i] = conj(snap.quat_l[i])*pr;
+
+                        // always assign scalar sign of transformation to left quaternion
+                        snap.quat_l[i].v *= -1.0;
+                        snap.quat_l[i].s *= -1.0;
                         }
                     }
                 }
