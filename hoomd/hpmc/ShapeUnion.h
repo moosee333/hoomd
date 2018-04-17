@@ -178,6 +178,8 @@ struct ShapeUnion
         }
 
     quat<Scalar> orientation;    //!< Orientation of the particle
+    quat<Scalar> quat_l;         //!< Left quaternion of spherical coordinate
+    quat<Scalar> quat_r;         //!< Right quaternion of spherical coordinate
 
     const param_type& members;     //!< member data
     };

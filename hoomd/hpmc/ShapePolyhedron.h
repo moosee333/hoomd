@@ -198,6 +198,8 @@ struct ShapePolyhedron
         }
 
     quat<Scalar> orientation;    //!< Orientation of the polyhedron
+    quat<Scalar> quat_l;         //!< Left quaternion of spherical coordinate
+    quat<Scalar> quat_r;         //!< Right quaternion of spherical coordinate
 
     const detail::poly3d_data& data;     //!< Vertices
     const detail::GPUTree &tree;           //!< Tree for particle features

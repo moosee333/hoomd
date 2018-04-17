@@ -150,6 +150,8 @@ struct ShapeSphinx
     HOSTDEVICE static bool isParallel() {return false; }
 
     quat<Scalar> orientation;                   //!< Orientation of the sphinx
+    quat<Scalar> quat_l;         //!< Left quaternion of spherical coordinate
+    quat<Scalar> quat_r;         //!< Right quaternion of spherical coordinate
 
     unsigned int n;              //!< Number of spheres
     bool convex;

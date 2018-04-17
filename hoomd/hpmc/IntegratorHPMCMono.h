@@ -532,7 +532,6 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
         {
         // access particle data and system box
         ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
-        ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
         ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
         ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
 
@@ -540,183 +539,93 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
         ArrayHandle<Scalar> h_d(m_d, access_location::host, access_mode::read);
         ArrayHandle<Scalar> h_a(m_a, access_location::host, access_mode::read);
 
-        // loop through N particles in a shuffled order
-        for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
+        if (m_pdata->getBoundaryConditions() == ParticleData::periodic)
             {
-            unsigned int i = m_update_order[cur_particle];
+            ArrayHandle<Scalar4> h_orientation(m_pdata->getOrientationArray(), access_location::host, access_mode::readwrite);
 
-            // read in the current position and orientation
-            Scalar4 postype_i = h_postype.data[i];
-            Scalar4 orientation_i = h_orientation.data[i];
-            vec3<Scalar> pos_i = vec3<Scalar>(postype_i);
-
-            #ifdef ENABLE_MPI
-            if (m_comm)
+            // loop through N particles in a shuffled order
+            for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
                 {
-                // only move particle if active
-                if (!isActive(make_scalar3(postype_i.x, postype_i.y, postype_i.z), box, ghost_fraction))
-                    continue;
-                }
-            #endif
+                unsigned int i = m_update_order[cur_particle];
 
-            // make a trial move for i
-            hoomd::detail::Saru rng_i(i, m_seed + m_exec_conf->getRank()*m_nselect + i_nselect, timestep);
-            int typ_i = __scalar_as_int(postype_i.w);
-            Shape shape_i(quat<Scalar>(orientation_i), m_params[typ_i]);
-            unsigned int move_type_select = rng_i.u32() & 0xffff;
-            bool move_type_translate = !shape_i.hasOrientation() || (move_type_select < m_move_ratio);
-
-            Shape shape_old(quat<Scalar>(orientation_i), m_params[typ_i]);
-            vec3<Scalar> pos_old = pos_i;
-
-            if (move_type_translate)
-                {
-                // skip if no overlap check is required
-                if (h_d.data[typ_i] == 0.0)
-                    {
-                    counters.translate_accept_count++;
-                    continue;
-                    }
-
-                move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
+                // read in the current position and orientation
+                Scalar4 postype_i = h_postype.data[i];
+                Scalar4 orientation_i = h_orientation.data[i];
+                vec3<Scalar> pos_i = vec3<Scalar>(postype_i);
 
                 #ifdef ENABLE_MPI
                 if (m_comm)
                     {
-                    // check if particle has moved into the ghost layer, and skip if it is
-                    if (!isActive(vec_to_scalar3(pos_i), box, ghost_fraction))
+                    // only move particle if active
+                    if (!isActive(make_scalar3(postype_i.x, postype_i.y, postype_i.z), box, ghost_fraction))
                         continue;
                     }
                 #endif
-                }
-            else
-                {
-                if (h_a.data[typ_i] == 0.0)
+
+                // make a trial move for i
+                hoomd::detail::Saru rng_i(i, m_seed + m_exec_conf->getRank()*m_nselect + i_nselect, timestep);
+                int typ_i = __scalar_as_int(postype_i.w);
+                Shape shape_i(quat<Scalar>(orientation_i), m_params[typ_i]);
+                unsigned int move_type_select = rng_i.u32() & 0xffff;
+                bool move_type_translate = !shape_i.hasOrientation() || (move_type_select < m_move_ratio);
+
+                Shape shape_old(quat<Scalar>(orientation_i), m_params[typ_i]);
+                vec3<Scalar> pos_old = pos_i;
+
+                if (move_type_translate)
                     {
-                    counters.rotate_accept_count++;
-                    continue;
+                    // skip if no overlap check is required
+                    if (h_d.data[typ_i] == 0.0)
+                        {
+                        counters.translate_accept_count++;
+                        continue;
+                        }
+
+                    move_translate(pos_i, rng_i, h_d.data[typ_i], ndim);
+
+                    #ifdef ENABLE_MPI
+                    if (m_comm)
+                        {
+                        // check if particle has moved into the ghost layer, and skip if it is
+                        if (!isActive(vec_to_scalar3(pos_i), box, ghost_fraction))
+                            continue;
+                        }
+                    #endif
+                    }
+                else
+                    {
+                    if (h_a.data[typ_i] == 0.0)
+                        {
+                        counters.rotate_accept_count++;
+                        continue;
+                        }
+
+                    move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
                     }
 
-                move_rotate(shape_i.orientation, rng_i, h_a.data[typ_i], ndim);
-                }
 
+                bool overlap=false;
+                OverlapReal r_cut_patch = 0;
 
-            bool overlap=false;
-            OverlapReal r_cut_patch = 0;
-
-            if (m_patch && !m_patch_log)
-                {
-                r_cut_patch = m_patch->getRCut() + 0.5*m_patch->getAdditiveCutoff(typ_i);
-                }
-
-            // subtract minimum AABB extent from search radius
-            OverlapReal R_query = std::max(shape_i.getCircumsphereDiameter()/OverlapReal(2.0),
-                r_cut_patch-getMinCoreDiameter()/(OverlapReal)2.0);
-            detail::AABB aabb_i_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
-
-            // patch + field interaction deltaU
-            double patch_field_energy_diff = 0;
-
-            // check for overlaps with neighboring particle's positions (also calculate the new energy)
-            // All image boxes (including the primary)
-            const unsigned int n_images = m_image_list.size();
-            for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
-                {
-                vec3<Scalar> pos_i_image = pos_i + m_image_list[cur_image];
-                detail::AABB aabb = aabb_i_local;
-                aabb.translate(pos_i_image);
-
-                // stackless search
-                for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree.getNumNodes(); cur_node_idx++)
+                if (m_patch && !m_patch_log)
                     {
-                    if (detail::overlap(m_aabb_tree.getNodeAABB(cur_node_idx), aabb))
-                        {
-                        if (m_aabb_tree.isNodeLeaf(cur_node_idx))
-                            {
-                            for (unsigned int cur_p = 0; cur_p < m_aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
-                                {
-                                // read in its position and orientation
-                                unsigned int j = m_aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+                    r_cut_patch = m_patch->getRCut() + 0.5*m_patch->getAdditiveCutoff(typ_i);
+                    }
 
-                                Scalar4 postype_j;
-                                Scalar4 orientation_j;
+                // subtract minimum AABB extent from search radius
+                OverlapReal R_query = std::max(shape_i.getCircumsphereDiameter()/OverlapReal(2.0),
+                    r_cut_patch-getMinCoreDiameter()/(OverlapReal)2.0);
+                detail::AABB aabb_i_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
 
-                                // handle j==i situations
-                                if ( j != i )
-                                    {
-                                    // load the position and orientation of the j particle
-                                    postype_j = h_postype.data[j];
-                                    orientation_j = h_orientation.data[j];
-                                    }
-                                else
-                                    {
-                                    if (cur_image == 0)
-                                        {
-                                        // in the first image, skip i == j
-                                        continue;
-                                        }
-                                    else
-                                        {
-                                        // If this is particle i and we are in an outside image, use the translated position and orientation
-                                        postype_j = make_scalar4(pos_i.x, pos_i.y, pos_i.z, postype_i.w);
-                                        orientation_j = quat_to_scalar4(shape_i.orientation);
-                                        }
-                                    }
+                // patch + field interaction deltaU
+                double patch_field_energy_diff = 0;
 
-                                // put particles in coordinate system of particle i
-                                vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
-
-                                unsigned int typ_j = __scalar_as_int(postype_j.w);
-                                Shape shape_j(quat<Scalar>(orientation_j), m_params[typ_j]);
-
-                                Scalar rcut = 0.0;
-                                if (m_patch)
-                                    rcut = r_cut_patch + 0.5 * m_patch->getAdditiveCutoff(typ_j);
-
-                                counters.overlap_checks++;
-                                if (h_overlaps.data[m_overlap_idx(typ_i, typ_j)]
-                                    && check_circumsphere_overlap(r_ij, shape_i, shape_j)
-                                    && test_overlap(r_ij, shape_i, shape_j, counters.overlap_err_count))
-                                    {
-                                    overlap = true;
-                                    break;
-                                    }
-                                else if (m_patch && !m_patch_log && dot(r_ij,r_ij) <= rcut*rcut) // If there is no overlap and m_patch is not NULL, calculate energy
-                                    {
-                                    // deltaU = U_old - U_new: subtract energy of new configuration
-                                    patch_field_energy_diff -= m_patch->energy(r_ij, typ_i,
-                                                               quat<float>(shape_i.orientation),
-                                                               h_diameter.data[i],
-                                                               h_charge.data[i],
-                                                               typ_j,
-                                                               quat<float>(orientation_j),
-                                                               h_diameter.data[j],
-                                                               h_charge.data[j]
-                                                               );
-                                    }
-                                }
-                            }
-                        }
-                    else
-                        {
-                        // skip ahead
-                        cur_node_idx += m_aabb_tree.getNodeSkip(cur_node_idx);
-                        }
-
-                    if (overlap)
-                        break;
-                    }  // end loop over AABB nodes
-
-                if (overlap)
-                    break;
-                } // end loop over images
-
-            // calculate old patch energy only if m_patch not NULL and no overlaps
-            if (m_patch && !m_patch_log && !overlap)
-                {
+                // check for overlaps with neighboring particle's positions (also calculate the new energy)
+                // All image boxes (including the primary)
+                const unsigned int n_images = m_image_list.size();
                 for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
                     {
-                    vec3<Scalar> pos_i_image = pos_old + m_image_list[cur_image];
+                    vec3<Scalar> pos_i_image = pos_i + m_image_list[cur_image];
                     detail::AABB aabb = aabb_i_local;
                     aabb.translate(pos_i_image);
 
@@ -752,29 +661,42 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                         else
                                             {
                                             // If this is particle i and we are in an outside image, use the translated position and orientation
-                                            postype_j = make_scalar4(pos_old.x, pos_old.y, pos_old.z, postype_i.w);
-                                            orientation_j = quat_to_scalar4(shape_old.orientation);
+                                            postype_j = make_scalar4(pos_i.x, pos_i.y, pos_i.z, postype_i.w);
+                                            orientation_j = quat_to_scalar4(shape_i.orientation);
                                             }
                                         }
 
                                     // put particles in coordinate system of particle i
                                     vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+
                                     unsigned int typ_j = __scalar_as_int(postype_j.w);
                                     Shape shape_j(quat<Scalar>(orientation_j), m_params[typ_j]);
 
-                                    Scalar rcut = r_cut_patch + 0.5 * m_patch->getAdditiveCutoff(typ_j);
+                                    Scalar rcut = 0.0;
+                                    if (m_patch)
+                                        rcut = r_cut_patch + 0.5 * m_patch->getAdditiveCutoff(typ_j);
 
-                                    // deltaU = U_old - U_new: add energy of old configuration
-                                    if (dot(r_ij,r_ij) <= rcut*rcut)
-                                        patch_field_energy_diff += m_patch->energy(r_ij,
-                                                                   typ_i,
-                                                                   quat<float>(orientation_i),
+                                    counters.overlap_checks++;
+                                    if (h_overlaps.data[m_overlap_idx(typ_i, typ_j)]
+                                        && check_circumsphere_overlap(r_ij, shape_i, shape_j)
+                                        && test_overlap(r_ij, shape_i, shape_j, counters.overlap_err_count))
+                                        {
+                                        overlap = true;
+                                        break;
+                                        }
+                                    else if (m_patch && !m_patch_log && dot(r_ij,r_ij) <= rcut*rcut) // If there is no overlap and m_patch is not NULL, calculate energy
+                                        {
+                                        // deltaU = U_old - U_new: subtract energy of new configuration
+                                        patch_field_energy_diff -= m_patch->energy(r_ij, typ_i,
+                                                                   quat<float>(shape_i.orientation),
                                                                    h_diameter.data[i],
                                                                    h_charge.data[i],
                                                                    typ_j,
                                                                    quat<float>(orientation_j),
                                                                    h_diameter.data[j],
-                                                                   h_charge.data[j]);
+                                                                   h_charge.data[j]
+                                                                   );
+                                        }
                                     }
                                 }
                             }
@@ -783,56 +705,400 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                             // skip ahead
                             cur_node_idx += m_aabb_tree.getNodeSkip(cur_node_idx);
                             }
+
+                        if (overlap)
+                            break;
                         }  // end loop over AABB nodes
+
+                    if (overlap)
+                        break;
                     } // end loop over images
-                } // end if (m_patch)
 
-            // Add external energetic contribution
-            if (m_external)
-                {
-                patch_field_energy_diff += m_external->energydiff(i, pos_old, shape_old, pos_i, shape_i);
-                }
-
-            // If no overlaps and Metropolis criterion is met, accept
-            // trial move and update positions  and/or orientations.
-            if (!overlap && rng_i.d() < slow::exp(patch_field_energy_diff))
-                {
-                // increment accept counter and assign new position
-                if (!shape_i.ignoreStatistics())
+                // calculate old patch energy only if m_patch not NULL and no overlaps
+                if (m_patch && !m_patch_log && !overlap)
                     {
-                    if (move_type_translate)
-                        counters.translate_accept_count++;
-                    else
-                        counters.rotate_accept_count++;
+                    for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                        {
+                        vec3<Scalar> pos_i_image = pos_old + m_image_list[cur_image];
+                        detail::AABB aabb = aabb_i_local;
+                        aabb.translate(pos_i_image);
+
+                        // stackless search
+                        for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree.getNumNodes(); cur_node_idx++)
+                            {
+                            if (detail::overlap(m_aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                                {
+                                if (m_aabb_tree.isNodeLeaf(cur_node_idx))
+                                    {
+                                    for (unsigned int cur_p = 0; cur_p < m_aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                                        {
+                                        // read in its position and orientation
+                                        unsigned int j = m_aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                                        Scalar4 postype_j;
+                                        Scalar4 orientation_j;
+
+                                        // handle j==i situations
+                                        if ( j != i )
+                                            {
+                                            // load the position and orientation of the j particle
+                                            postype_j = h_postype.data[j];
+                                            orientation_j = h_orientation.data[j];
+                                            }
+                                        else
+                                            {
+                                            if (cur_image == 0)
+                                                {
+                                                // in the first image, skip i == j
+                                                continue;
+                                                }
+                                            else
+                                                {
+                                                // If this is particle i and we are in an outside image, use the translated position and orientation
+                                                postype_j = make_scalar4(pos_old.x, pos_old.y, pos_old.z, postype_i.w);
+                                                orientation_j = quat_to_scalar4(shape_old.orientation);
+                                                }
+                                            }
+
+                                        // put particles in coordinate system of particle i
+                                        vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+                                        unsigned int typ_j = __scalar_as_int(postype_j.w);
+                                        Shape shape_j(quat<Scalar>(orientation_j), m_params[typ_j]);
+
+                                        Scalar rcut = r_cut_patch + 0.5 * m_patch->getAdditiveCutoff(typ_j);
+
+                                        // deltaU = U_old - U_new: add energy of old configuration
+                                        if (dot(r_ij,r_ij) <= rcut*rcut)
+                                            patch_field_energy_diff += m_patch->energy(r_ij,
+                                                                       typ_i,
+                                                                       quat<float>(orientation_i),
+                                                                       h_diameter.data[i],
+                                                                       h_charge.data[i],
+                                                                       typ_j,
+                                                                       quat<float>(orientation_j),
+                                                                       h_diameter.data[j],
+                                                                       h_charge.data[j]);
+                                        }
+                                    }
+                                }
+                            else
+                                {
+                                // skip ahead
+                                cur_node_idx += m_aabb_tree.getNodeSkip(cur_node_idx);
+                                }
+                            }  // end loop over AABB nodes
+                        } // end loop over images
+                    } // end if (m_patch)
+
+                // Add external energetic contribution
+                if (m_external)
+                    {
+                    patch_field_energy_diff += m_external->energydiff(i, pos_old, shape_old, pos_i, shape_i);
                     }
 
-                // update the position of the particle in the tree for future updates
-                detail::AABB aabb = aabb_i_local;
-                aabb.translate(pos_i);
-                m_aabb_tree.update(i, aabb);
-
-                // update position of particle
-                h_postype.data[i] = make_scalar4(pos_i.x,pos_i.y,pos_i.z,postype_i.w);
-
-                if (shape_i.hasOrientation())
+                // If no overlaps and Metropolis criterion is met, accept
+                // trial move and update positions  and/or orientations.
+                if (!overlap && rng_i.d() < slow::exp(patch_field_energy_diff))
                     {
-                    h_orientation.data[i] = quat_to_scalar4(shape_i.orientation);
+                    // increment accept counter and assign new position
+                    if (!shape_i.ignoreStatistics())
+                        {
+                        if (move_type_translate)
+                            counters.translate_accept_count++;
+                        else
+                            counters.rotate_accept_count++;
+                        }
+
+                    // update the position of the particle in the tree for future updates
+                    detail::AABB aabb = aabb_i_local;
+                    aabb.translate(pos_i);
+                    m_aabb_tree.update(i, aabb);
+
+                    // update position of particle
+                    h_postype.data[i] = make_scalar4(pos_i.x,pos_i.y,pos_i.z,postype_i.w);
+
+                    if (shape_i.hasOrientation())
+                        {
+                        h_orientation.data[i] = quat_to_scalar4(shape_i.orientation);
+                        }
+                    }
+                else
+                    {
+                    if (!shape_i.ignoreStatistics())
+                        {
+                        // increment reject counter
+                        if (move_type_translate)
+                            counters.translate_reject_count++;
+                        else
+                            counters.rotate_reject_count++;
+                        }
+                    }
+                } // end loop over all particles
+            } else if (m_pdata->getBoundaryConditions() == ParticleData::hyperspherical)
+                {
+                ArrayHandle<Scalar4> h_quat_l(m_pdata->getLeftQuaternionArray(), access_location::host, access_mode::readwrite);
+                ArrayHandle<Scalar4> h_quat_r(m_pdata->getRightQuaternionArray(), access_location::host, access_mode::readwrite);
+
+                const SphereDim& sphere = m_pdata->getSphere();
+
+                // loop through N particles in a shuffled order
+                for (unsigned int cur_particle = 0; cur_particle < m_pdata->getN(); cur_particle++)
+                    {
+                    unsigned int i = m_update_order[cur_particle];
+
+                    // read in the current position and orientation
+                    Scalar4 postype_i = h_postype.data[i];
+                    quat<Scalar> quat_l_i(h_quat_l.data[i]);
+                    quat<Scalar> quat_r_i(h_quat_r.data[i]);
+
+                    // make a trial move for i
+                    hoomd::detail::Saru rng_i(i, m_seed + m_exec_conf->getRank()*m_nselect + i_nselect, timestep);
+                    int typ_i = __scalar_as_int(postype_i.w);
+                    Shape shape_i(quat_l_i, quat_r_i, m_params[typ_i]);
+                    unsigned int move_type_select = rng_i.u32() & 0xffff;
+                    bool move_type_translate = !shape_i.hasOrientation() || (move_type_select < m_move_ratio);
+
+                    #if 0
+                    Shape shape_old(quat_l_i, quat_r_i, m_params[typ_i]);
+                    #endif
+
+                    if (move_type_translate)
+                        {
+                        // skip if no overlap check is required
+                        if (h_d.data[typ_i] == 0.0)
+                            {
+                            counters.translate_accept_count++;
+                            continue;
+                            }
+
+                        move_translate_sphere(shape_i.quat_l, shape_i.quat_r, rng_i, h_d.data[typ_i], ndim, sphere);
+                        }
+                    else
+                        {
+                        if (h_a.data[typ_i] == 0.0)
+                            {
+                            counters.rotate_accept_count++;
+                            continue;
+                            }
+
+                        move_rotate_sphere(shape_i.quat_l, shape_i.quat_r, rng_i, h_a.data[typ_i], ndim);
+                        }
+
+                    bool overlap=false;
+
+                    #if 0
+                    OverlapReal r_cut_patch = 0;
+
+                    if (m_patch && !m_patch_log)
+                        {
+                        r_cut_patch = m_patch->getRCut() + 0.5*m_patch->getAdditiveCutoff(typ_i);
+                        }
+
+                    // subtract minimum AABB extent from search radius
+                    OverlapReal R_query = std::max(shape_i.getCircumsphereDiameter()/OverlapReal(2.0),
+                        r_cut_patch-getMinCoreDiameter()/(OverlapReal)2.0);
+                    detail::AABB aabb_i_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
+                    #endif
+
+                    detail::AABB aabb_i = shape_i.getAABB(sphere.sphericalToCartesian(shape_i.quat_l, shape_i.quat_r));
+
+                    #if 0
+                    // patch + field interaction deltaU
+                    double patch_field_energy_diff = 0;
+                    #endif
+
+                    // stackless search
+                    for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree.getNumNodes(); cur_node_idx++)
+                        {
+                        if (detail::overlap(m_aabb_tree.getNodeAABB(cur_node_idx), aabb_i))
+                            {
+                            if (m_aabb_tree.isNodeLeaf(cur_node_idx))
+                                {
+                                for (unsigned int cur_p = 0; cur_p < m_aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                                    {
+                                    // read in its position and orientation
+                                    unsigned int j = m_aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                                    // handle j==i situations
+                                    if ( j == i && test_self_overlap_sphere(shape_i, sphere))
+                                        {
+                                        overlap = true;
+                                        break;
+                                        }
+
+                                    Scalar4 postype_j = h_postype.data[j];
+                                    quat<Scalar> quat_l_j(h_quat_l.data[j]);
+                                    quat<Scalar> quat_r_j(h_quat_r.data[j]);
+
+                                    unsigned int typ_j = __scalar_as_int(postype_j.w);
+                                    Shape shape_j(quat_l_i, quat_r_j, m_params[typ_j]);
+
+                                    #if 0
+                                    Scalar rcut = 0.0;
+                                    if (m_patch)
+                                        rcut = r_cut_patch + 0.5 * m_patch->getAdditiveCutoff(typ_j);
+                                    #endif
+
+                                    counters.overlap_checks++;
+                                    if (h_overlaps.data[m_overlap_idx(typ_i, typ_j)]
+                                        && check_circumsphere_overlap_sphere(shape_i, shape_j, sphere)
+                                        && test_overlap_sphere(shape_i, shape_j, sphere, counters.overlap_err_count))
+                                        {
+                                        overlap = true;
+                                        break;
+                                        }
+                                    #if 0
+                                    else if (m_patch && !m_patch_log && dot(r_ij,r_ij) <= rcut*rcut) // If there is no overlap and m_patch is not NULL, calculate energy
+                                        {
+                                        // deltaU = U_old - U_new: subtract energy of new configuration
+                                        patch_field_energy_diff -= m_patch->energy(r_ij, typ_i,
+                                                                   quat<float>(shape_i.orientation),
+                                                                   h_diameter.data[i],
+                                                                   h_charge.data[i],
+                                                                   typ_j,
+                                                                   quat<float>(orientation_j),
+                                                                   h_diameter.data[j],
+                                                                   h_charge.data[j]
+                                                                   );
+                                        }
+                                    #endif
+                                    }
+                                }
+                            }
+                        else
+                            {
+                            // skip ahead
+                            cur_node_idx += m_aabb_tree.getNodeSkip(cur_node_idx);
+                            }
+
+                        if (overlap)
+                            break;
+                        }  // end loop over AABB nodes
+
+                    #if 0
+                    // calculate old patch energy only if m_patch not NULL and no overlaps
+                    if (m_patch && !m_patch_log && !overlap)
+                        {
+                        for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                            {
+                            vec3<Scalar> pos_i_image = pos_old + m_image_list[cur_image];
+                            detail::AABB aabb = aabb_i_local;
+                            aabb.translate(pos_i_image);
+
+                            // stackless search
+                            for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree.getNumNodes(); cur_node_idx++)
+                                {
+                                if (detail::overlap(m_aabb_tree.getNodeAABB(cur_node_idx), aabb))
+                                    {
+                                    if (m_aabb_tree.isNodeLeaf(cur_node_idx))
+                                        {
+                                        for (unsigned int cur_p = 0; cur_p < m_aabb_tree.getNodeNumParticles(cur_node_idx); cur_p++)
+                                            {
+                                            // read in its position and orientation
+                                            unsigned int j = m_aabb_tree.getNodeParticle(cur_node_idx, cur_p);
+
+                                            Scalar4 postype_j;
+                                            Scalar4 orientation_j;
+
+                                            // handle j==i situations
+                                            if ( j != i )
+                                                {
+                                                // load the position and orientation of the j particle
+                                                postype_j = h_postype.data[j];
+                                                orientation_j = h_orientation.data[j];
+                                                }
+                                            else
+                                                {
+                                                if (cur_image == 0)
+                                                    {
+                                                    // in the first image, skip i == j
+                                                    continue;
+                                                    }
+                                                else
+                                                    {
+                                                    // If this is particle i and we are in an outside image, use the translated position and orientation
+                                                    postype_j = make_scalar4(pos_old.x, pos_old.y, pos_old.z, postype_i.w);
+                                                    orientation_j = quat_to_scalar4(shape_old.orientation);
+                                                    }
+                                                }
+
+                                            // put particles in coordinate system of particle i
+                                            vec3<Scalar> r_ij = vec3<Scalar>(postype_j) - pos_i_image;
+                                            unsigned int typ_j = __scalar_as_int(postype_j.w);
+                                            Shape shape_j(quat<Scalar>(orientation_j), m_params[typ_j]);
+
+                                            Scalar rcut = r_cut_patch + 0.5 * m_patch->getAdditiveCutoff(typ_j);
+
+                                            // deltaU = U_old - U_new: add energy of old configuration
+                                            if (dot(r_ij,r_ij) <= rcut*rcut)
+                                                patch_field_energy_diff += m_patch->energy(r_ij,
+                                                                           typ_i,
+                                                                           quat<float>(orientation_i),
+                                                                           h_diameter.data[i],
+                                                                           h_charge.data[i],
+                                                                           typ_j,
+                                                                           quat<float>(orientation_j),
+                                                                           h_diameter.data[j],
+                                                                           h_charge.data[j]);
+                                            }
+                                        }
+                                    }
+                                else
+                                    {
+                                    // skip ahead
+                                    cur_node_idx += m_aabb_tree.getNodeSkip(cur_node_idx);
+                                    }
+                                }  // end loop over AABB nodes
+                            } // end loop over images
+                        } // end if (m_patch)
+
+                    // Add external energetic contribution
+                    if (m_external)
+                        {
+                        patch_field_energy_diff += m_external->energydiff(i, pos_old, shape_old, pos_i, shape_i);
+                        }
+
+                    // If no overlaps and Metropolis criterion is met, accept
+                    // trial move and update positions  and/or orientations.
+                    if (!overlap && rng_i.d() < slow::exp(patch_field_energy_diff))
+                    #endif
+
+                    if (!overlap)
+                        {
+                        // increment accept counter and assign new position
+                        if (!shape_i.ignoreStatistics())
+                            {
+                            if (move_type_translate)
+                                counters.translate_accept_count++;
+                            else
+                                counters.rotate_accept_count++;
+                            }
+
+                        // update the position of the particle in the tree for future updates
+                        m_aabb_tree.update(i, aabb_i);
+
+                        // update spherical coordinates of particle
+                        h_quat_l.data[i] = quat_to_scalar4(shape_i.quat_l);
+                        h_quat_r.data[i] = quat_to_scalar4(shape_i.quat_r);
+                        }
+                    else
+                        {
+                        if (!shape_i.ignoreStatistics())
+                            {
+                            // increment reject counter
+                            if (move_type_translate)
+                                counters.translate_reject_count++;
+                            else
+                                counters.rotate_reject_count++;
+                            }
+                        }
                     }
                 }
             else
-                {
-                if (!shape_i.ignoreStatistics())
-                    {
-                    // increment reject counter
-                    if (move_type_translate)
-                        counters.translate_reject_count++;
-                    else
-                        counters.rotate_reject_count++;
-                    }
-                }
-            } // end loop over all particles
+                throw std::runtime_error("Unknown boundary conditions in IntegratorHPMCMono");
         } // end loop over nselect
 
+    if (m_pdata->getBoundaryConditions() == ParticleData::periodic)
         {
         ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
         ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::readwrite);
@@ -841,36 +1107,36 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
             {
             box.wrap(h_postype.data[i], h_image.data[i]);
             }
-        }
 
-    // perform the grid shift
-    #ifdef ENABLE_MPI
-    if (m_comm)
-        {
-        ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
-        ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::readwrite);
+        // perform the grid shift
+        #ifdef ENABLE_MPI
+        if (m_comm)
+            {
+            ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::readwrite);
+            ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::readwrite);
 
-        // precalculate the grid shift
-        hoomd::detail::Saru rng(timestep, this->m_seed, 0xf4a3210e);
-        Scalar3 shift = make_scalar3(0,0,0);
-        shift.x = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
-        shift.y = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
-        if (this->m_sysdef->getNDimensions() == 3)
-            {
-            shift.z = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
+            // precalculate the grid shift
+            hoomd::detail::Saru rng(timestep, this->m_seed, 0xf4a3210e);
+            Scalar3 shift = make_scalar3(0,0,0);
+            shift.x = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
+            shift.y = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
+            if (this->m_sysdef->getNDimensions() == 3)
+                {
+                shift.z = rng.s(-m_nominal_width/Scalar(2.0),m_nominal_width/Scalar(2.0));
+                }
+            for (unsigned int i = 0; i < m_pdata->getN(); i++)
+                {
+                // read in the current position and orientation
+                Scalar4 postype_i = h_postype.data[i];
+                vec3<Scalar> r_i = vec3<Scalar>(postype_i); // translation from local to global coordinates
+                r_i += vec3<Scalar>(shift);
+                h_postype.data[i] = vec_to_scalar4(r_i, postype_i.w);
+                box.wrap(h_postype.data[i], h_image.data[i]);
+                }
+            this->m_pdata->translateOrigin(shift);
             }
-        for (unsigned int i = 0; i < m_pdata->getN(); i++)
-            {
-            // read in the current position and orientation
-            Scalar4 postype_i = h_postype.data[i];
-            vec3<Scalar> r_i = vec3<Scalar>(postype_i); // translation from local to global coordinates
-            r_i += vec3<Scalar>(shift);
-            h_postype.data[i] = vec_to_scalar4(r_i, postype_i.w);
-            box.wrap(h_postype.data[i], h_image.data[i]);
-            }
-        this->m_pdata->translateOrigin(shift);
+        #endif
         }
-    #endif
 
     if (this->m_prof) this->m_prof->pop(this->m_exec_conf);
 

@@ -142,6 +142,8 @@ struct ShapeEllipsoid
     HOSTDEVICE static bool isParallel() { return false; }
 
     quat<Scalar> orientation;    //!< Orientation of the polygon
+    quat<Scalar> quat_l;         //!< Left quaternion of spherical coordinate
+    quat<Scalar> quat_r;         //!< Right quaternion of spherical coordinate
 
     ell_params axes;     //!< Radii of major axesI
     };

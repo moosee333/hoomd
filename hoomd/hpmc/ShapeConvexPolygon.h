@@ -335,6 +335,8 @@ struct ShapeConvexPolygon
     HOSTDEVICE static bool isParallel() { return false; }
 
     quat<Scalar> orientation;    //!< Orientation of the polygon
+    quat<Scalar> quat_l;         //!< Left quaternion of spherical coordinate
+    quat<Scalar> quat_r;         //!< Right quaternion of spherical coordinate
 
     const detail::poly2d_verts& verts;     //!< Vertices
     };

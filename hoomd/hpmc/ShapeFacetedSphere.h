@@ -380,6 +380,8 @@ struct ShapeFacetedSphere
         }
 
     quat<Scalar> orientation;    //!< Orientation of the sphere (unused)
+    quat<Scalar> quat_l;         //!< Left quaternion of spherical coordinate
+    quat<Scalar> quat_r;         //!< Right quaternion of spherical coordinate
 
     const param_type& params;           //!< Faceted sphere parameters
     };

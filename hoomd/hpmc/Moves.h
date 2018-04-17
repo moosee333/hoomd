@@ -3,6 +3,7 @@
 
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/VectorMath.h"
+#include "hoomd/SphereDim.h"
 
 /*! \file Moves.h
     \brief Trial move generators
@@ -47,6 +48,49 @@ DEVICE inline void move_translate(vec3<Scalar>& v, RNG& rng, Scalar d, unsigned 
     // apply the move vector
     v += dr;
     }
+
+//! Pure translation move on the sphere along a geodesic
+/*! \param quat_l Left quaternion of sphere coordinate to translate (in/out)
+    \param quat_r Right quaternion of sphere coordinate to translate (in/out)
+    \param rng Saru RNG to utilize in the move
+    \param d Maximum arc-length (in distance units)
+    \param dim Dimension
+    \param sphere The sphere boundary
+
+    See Sinkovits et al JCP 2011 for a definition.
+
+    When \a dim == 2, translation is performed on the 2-sphere
+*/
+template <class RNG>
+DEVICE inline void move_translate_sphere(quat<Scalar>& quat_l, quat<Scalar>& quat_r, RNG& rng, Scalar d, unsigned int dim, const SphereDim& sphere)
+    {
+    // Generate a random angle between 0 and d/R
+    Scalar phi = rng.template s<Scalar>(0.0,d/sphere.getR());
+
+    vec3<Scalar> b;
+
+    if (dim == 3)
+        {
+        //! Generate a direction (3d unit vector) for the translation
+        Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
+        Scalar z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
+        b = vec3<Scalar>(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
+        }
+    else
+        {
+        // generate a unit vector on the equatorial circle normal to the standard position
+        Scalar theta = rng.template s<Scalar>(Scalar(0.0), Scalar(2.0*M_PI));
+        b = vec3<Scalar>(fast::cos(theta),fast::sin(theta),0);
+        }
+
+    // the transformation quaternion
+    quat<Scalar> p(fast::cos(0.5*phi),fast::sin(0.5*phi)*b);
+
+    // apply the translation in the standard position, transforming back and forth
+    quat_l = quat_l*p*conj(quat_l);
+    quat_r = conj(quat_r)*p*quat_r;
+    }
+
 
 //! Rotation move
 /*! \param orientation Quaternion to rotate (in/out)
@@ -98,6 +142,46 @@ DEVICE void move_rotate(quat<Scalar>& orientation, RNG& rng, Scalar a, unsigned 
         // renormalize
         orientation = orientation * (fast::rsqrt(norm2(orientation)));
         }
+    }
+
+//! Pure rotation move on the sphere around a randomly chosen axis
+/*! \param quat_l Left quaternion of sphere coordinate to translate (in/out)
+    \param quat_r Right quaternion of sphere coordinate to translate (in/out)
+    \param rng Saru RNG to utilize in the move
+    \param a Maximum rotation angle, in radians
+    \param dim Dimension
+
+    See Sinkovits et al JCP 2011 for a definition.
+
+    When \a dim == 2, the rotation is performed on the 2-sphere
+*/
+template <class RNG>
+DEVICE inline void move_rotate_sphere(quat<Scalar>& quat_l, quat<Scalar>& quat_r, RNG& rng, Scalar a, unsigned int dim)
+    {
+    // Generate a random angle between 0 and a
+    Scalar phi = rng.template s<Scalar>(0.0,a);
+
+    vec3<Scalar> b;
+
+    if (dim == 3)
+        {
+        //! Generate a direction (3d unit vector) for the translation
+        Scalar theta = rng.template s<Scalar>(Scalar(0.0),Scalar(2.0*M_PI));
+        Scalar z = rng.template s<Scalar>(Scalar(-1.0),Scalar(1.0));
+        b = vec3<Scalar>(fast::sqrt(Scalar(1.0)-z*z)*fast::cos(theta),fast::sqrt(Scalar(1.0)-z*z)*fast::sin(theta),z);
+        }
+    else
+        {
+        // the rotation is always around the z axis (standard position)
+        b = vec3<Scalar>(0,0,1);
+        }
+
+    // the transformation quaternion
+    quat<Scalar> p(fast::cos(0.5*phi),fast::sin(0.5*phi)*b);
+
+    // apply the rotation in the standard position, transforming back and forth
+    quat_l = quat_l*p*conj(quat_l);
+    quat_r = conj(quat_r)*conj(p)*quat_r;
     }
 
 //! Select a random index
