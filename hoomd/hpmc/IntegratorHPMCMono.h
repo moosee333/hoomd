@@ -512,10 +512,14 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
     // update the AABB Tree
     buildAABBTree();
-    // limit m_d entries so that particles cannot possibly wander more than one box image in one time step
-    limitMoveDistances();
-    // update the image list
-    updateImageList();
+
+    if (m_pdata->getBoundaryConditions() == ParticleData::periodic)
+        {
+        // limit m_d entries so that particles cannot possibly wander more than one box image in one time step
+        limitMoveDistances();
+        // update the image list
+        updateImageList();
+        }
 
     if (this->m_prof) this->m_prof->push(this->m_exec_conf, "HPMC update");
 
