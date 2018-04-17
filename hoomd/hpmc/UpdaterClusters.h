@@ -1195,8 +1195,8 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
 
     if (boundary == ParticleData::periodic)
         {
-        m_postype_backup.resize(nptl);
         m_orientation_backup.resize(nptl);
+        m_image_backup.resize(nptl);
         }
     else if (boundary == ParticleData::hyperspherical)
         {
@@ -1206,10 +1206,10 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
     else
         throw std::runtime_error("Unknown boundary conditions in UpdaterClusters\n");
 
+    m_postype_backup.resize(nptl);
     m_diameter_backup.resize(nptl);
     m_charge_backup.resize(nptl);
     m_tag_backup.resize(nptl);
-    m_image_backup.resize(nptl);
 
         {
         ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
