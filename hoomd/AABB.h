@@ -473,7 +473,7 @@ DEVICE inline AABB merge(const AABB& a, const AABB& b)
     new_aabb.upper.v.x = std::max(a.upper.v.x, b.upper.v.x);
     new_aabb.upper.v.y = std::max(a.upper.v.y, b.upper.v.y);
     new_aabb.upper.v.z = std::max(a.upper.v.z, b.upper.v.z);
-    new_aabb.upper.s = std::min(a.upper.s, b.upper.s);
+    new_aabb.upper.s = std::max(a.upper.s, b.upper.s);
 
     #endif
 
