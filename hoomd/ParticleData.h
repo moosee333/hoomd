@@ -464,6 +464,9 @@ class PYBIND11_EXPORT ParticleData
         void setSphere(const SphereDim& sphere)
             {
             m_sphere = sphere;
+
+            // using this signal for boxes and spheres
+            m_boxchange_signal.emit();
             }
 
         //! Set the global simulation box
