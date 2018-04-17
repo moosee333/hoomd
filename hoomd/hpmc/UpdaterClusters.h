@@ -562,6 +562,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
 
     auto boundary = m_pdata->getBoundaryConditions();
     const SphereDim& sphere = m_pdata->getSphere();
+    const unsigned int ndim = m_sysdef->getNDimensions();
 
     // access particle data
     ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
@@ -910,7 +911,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
 
             Shape shape_i(quat_l_i_new, quat_r_i_new, params[typ_i]);
 
-            detail::AABB aabb_i = shape_i.getAABB(sphere.sphericalToCartesian(quat_l_i_new, quat_r_i_new));
+            detail::AABB aabb_i = shape_i.getAABBSphere(sphere, ndim);
 
             // stackless search
             for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)

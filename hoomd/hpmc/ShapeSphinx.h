@@ -137,10 +137,16 @@ struct ShapeSphinx
 
 
     //! Return the bounding box of the shape in world coordinates
-    template<class T>
-    DEVICE detail::AABB getAABB(const T& pos) const
+    DEVICE detail::AABB getAABB(const vec3<Scalar>& pos) const
         {
         return detail::AABB(pos, getCircumsphereDiameter()/Scalar(2.0));
+        }
+
+    //! Return the bounding box of the shape, defined on the hypersphere, in world coordinates
+    DEVICE detail::AABB getAABBSphere(const SphereDim& sphere, unsigned int ndim)
+        {
+        return detail::AABB(sphere.sphericalToCartesian(quat_l, quat_r),
+            detail::get_bounding_sphere_radius_4d(getCircumsphereDiameter()/Scalar(2.0), sphere.getR(), ndim));
         }
 
     //!Ignore flag for acceptance statistics

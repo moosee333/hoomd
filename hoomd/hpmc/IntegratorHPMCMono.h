@@ -843,6 +843,8 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                 ArrayHandle<Scalar4> h_quat_l(m_pdata->getLeftQuaternionArray(), access_location::host, access_mode::readwrite);
                 ArrayHandle<Scalar4> h_quat_r(m_pdata->getRightQuaternionArray(), access_location::host, access_mode::readwrite);
 
+                ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
+
                 const SphereDim& sphere = m_pdata->getSphere();
 
                 // loop through N particles in a shuffled order
@@ -904,7 +906,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                     detail::AABB aabb_i_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
                     #endif
 
-                    detail::AABB aabb_i = shape_i.getAABB(sphere.sphericalToCartesian(shape_i.quat_l, shape_i.quat_r));
+                    detail::AABB aabb_i = shape_i.getAABBSphere(sphere,ndim);
 
                     #if 0
                     // patch + field interaction deltaU
@@ -924,10 +926,15 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                     unsigned int j = m_aabb_tree.getNodeParticle(cur_node_idx, cur_p);
 
                                     // handle j==i situations
-                                    if ( j == i && test_self_overlap_sphere(shape_i, sphere))
+                                    if (j == i)
                                         {
-                                        overlap = true;
-                                        break;
+                                        if (test_self_overlap_sphere(shape_i, sphere))
+                                            {
+                                            overlap = true;
+                                            break;
+                                            }
+                                        else
+                                            continue;
                                         }
 
                                     Scalar4 postype_j = h_postype.data[j];
@@ -935,7 +942,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                     quat<Scalar> quat_r_j(h_quat_r.data[j]);
 
                                     unsigned int typ_j = __scalar_as_int(postype_j.w);
-                                    Shape shape_j(quat_l_i, quat_r_j, m_params[typ_j]);
+                                    Shape shape_j(quat_l_j, quat_r_j, m_params[typ_j]);
 
                                     #if 0
                                     Scalar rcut = 0.0;
@@ -1278,6 +1285,7 @@ unsigned int IntegratorHPMCMono<Shape>::countOverlaps(unsigned int timestep, boo
         ArrayHandle<Scalar4> h_quat_r(m_pdata->getRightQuaternionArray(), access_location::host, access_mode::read);
 
         const SphereDim& sphere = m_pdata->getSphere();
+        const unsigned int ndim = m_sysdef->getNDimensions();
 
         // Loop over all particles
         for (unsigned int i = 0; i < m_pdata->getN(); i++)
@@ -1300,7 +1308,7 @@ unsigned int IntegratorHPMCMono<Shape>::countOverlaps(unsigned int timestep, boo
                 }
 
             // Check particle against AABB tree for neighbors
-            detail::AABB aabb_i = shape_i.getAABB(sphere.sphericalToCartesian(quat_l_i, quat_r_i));
+            detail::AABB aabb_i = shape_i.getAABBSphere(sphere, ndim);
 
             // stackless search
             for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree.getNumNodes(); cur_node_idx++)
@@ -1331,6 +1339,7 @@ unsigned int IntegratorHPMCMono<Shape>::countOverlaps(unsigned int timestep, boo
                                 && test_overlap_sphere(shape_i, shape_j, sphere, err_count))
                                 {
                                 overlap_count++;
+
                                 if (early_exit)
                                     {
                                     // exit early from loop over neighbor particles
@@ -1831,6 +1840,7 @@ const detail::AABBTree& IntegratorHPMCMono<Shape>::buildAABBTree()
 
         // grow the AABB list to the needed size
         unsigned int n_aabb = m_pdata->getN()+m_pdata->getNGhosts();
+
         if (n_aabb > 0)
             {
             growAABBList(n_aabb);
@@ -1865,22 +1875,23 @@ const detail::AABBTree& IntegratorHPMCMono<Shape>::buildAABBTree()
                 ArrayHandle<Scalar4> h_postype(m_pdata->getPositions(), access_location::host, access_mode::read);
 
                 const SphereDim& sphere = m_pdata->getSphere();
+                const unsigned int ndim = m_sysdef->getNDimensions();
+
                 for (unsigned int cur_particle = 0; cur_particle < n_aabb; cur_particle++)
                     {
                     unsigned int i = cur_particle;
                     unsigned int typ_i = __scalar_as_int(h_postype.data[i].w);
-                    Shape shape(quat<Scalar>(), quat<Scalar>(), m_params[typ_i]);
-
-                    quat<Scalar> pos4 = sphere.sphericalToCartesian(quat<Scalar>(h_quat_l.data[i]),
-                        quat<Scalar>(h_quat_r.data[i]));
+                    Shape shape(quat<Scalar>(h_quat_l.data[i]), quat<Scalar>(h_quat_r.data[i]), m_params[typ_i]);
 
                     if (!this->m_patch)
-                        m_aabbs[i] = shape.getAABB(pos4);
+                        m_aabbs[i] = shape.getAABBSphere(sphere, ndim);
                     else
                         {
+                        #if 0
                         Scalar radius = std::max(0.5*shape.getCircumsphereDiameter(),
                             0.5*this->m_patch->getAdditiveCutoff(typ_i));
                         m_aabbs[i] = detail::AABB(pos4, radius);
+                        #endif
                         }
                     }
                 }

@@ -112,8 +112,7 @@ struct ShapeEllipsoid
         }
 
     //! Return the bounding box of the shape in world coordinates
-    template<class T>
-    DEVICE detail::AABB getAABB(const T& pos) const
+    DEVICE detail::AABB getAABB(const vec3<Scalar>& pos) const
         {
         OverlapReal max_axis = detail::max(axes.x, detail::max(axes.y, axes.z));
 
@@ -136,6 +135,13 @@ struct ShapeEllipsoid
         // return detail::AABB(lower, upper);
         // ^^^^^^^^^ The above method is slow, just use the circumsphere
         return detail::AABB(pos, max_axis);
+        }
+
+    //! Return the bounding box of the shape, defined on the hypersphere, in world coordinates
+    DEVICE detail::AABB getAABBSphere(const SphereDim& sphere, unsigned int ndim)
+        {
+        return detail::AABB(sphere.sphericalToCartesian(quat_l, quat_r),
+            detail::get_bounding_sphere_radius_4d(getCircumsphereDiameter()/Scalar(2.0), sphere.getR(), ndim));
         }
 
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x

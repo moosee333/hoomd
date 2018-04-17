@@ -64,8 +64,8 @@ DEVICE inline void move_translate(vec3<Scalar>& v, RNG& rng, Scalar d, unsigned 
 template <class RNG>
 DEVICE inline void move_translate_sphere(quat<Scalar>& quat_l, quat<Scalar>& quat_r, RNG& rng, Scalar d, unsigned int dim, const SphereDim& sphere)
     {
-    // Generate a random angle between 0 and d/R
-    Scalar phi = rng.template s<Scalar>(0.0,d/sphere.getR());
+    // Generate a random arc of maximum length d
+    Scalar phi = rng.template s<Scalar>(-d,d)/sphere.getR();
 
     vec3<Scalar> b;
 
@@ -86,9 +86,26 @@ DEVICE inline void move_translate_sphere(quat<Scalar>& quat_l, quat<Scalar>& qua
     // the transformation quaternion
     quat<Scalar> p(fast::cos(0.5*phi),fast::sin(0.5*phi)*b);
 
-    // apply the translation in the standard position, transforming back and forth
-    quat_l = quat_l*p*conj(quat_l);
-    quat_r = conj(quat_r)*p*quat_r;
+    // apply the translation in the standard position
+    quat_l = quat_l*p;
+
+    // renormalize
+    Scalar norm_l_inv = fast::rsqrt(dot(quat_l, quat_l));
+    quat_l.s *= norm_l_inv;
+    quat_l.v *= norm_l_inv;
+
+    if (dim == 3)
+        {
+        quat_r = p*quat_r;
+
+        Scalar norm_r_inv = fast::rsqrt(dot(quat_r, quat_r));
+        quat_r.s *= norm_r_inv;
+        quat_r.v *= norm_r_inv;
+        }
+    else
+        {
+        quat_r = conj(quat_l);
+        }
     }
 
 
@@ -158,8 +175,8 @@ DEVICE void move_rotate(quat<Scalar>& orientation, RNG& rng, Scalar a, unsigned 
 template <class RNG>
 DEVICE inline void move_rotate_sphere(quat<Scalar>& quat_l, quat<Scalar>& quat_r, RNG& rng, Scalar a, unsigned int dim)
     {
-    // Generate a random angle between 0 and a
-    Scalar phi = rng.template s<Scalar>(0.0,a);
+    // Generate a random angle between -a/2 and a/2
+    Scalar phi = rng.template s<Scalar>(-a,a);
 
     vec3<Scalar> b;
 
@@ -179,9 +196,22 @@ DEVICE inline void move_rotate_sphere(quat<Scalar>& quat_l, quat<Scalar>& quat_r
     // the transformation quaternion
     quat<Scalar> p(fast::cos(0.5*phi),fast::sin(0.5*phi)*b);
 
-    // apply the rotation in the standard position, transforming back and forth
-    quat_l = quat_l*p*conj(quat_l);
-    quat_r = conj(quat_r)*conj(p)*quat_r;
+    // apply the rotation in the standard position
+    quat_l = quat_l*p;
+
+    if (dim == 3)
+        quat_r = conj(p)*quat_r;
+    else
+        quat_r = conj(quat_l);
+
+    // renormalize
+    Scalar norm_l_inv = fast::rsqrt(dot(quat_l, quat_l));
+    quat_l.s *= norm_l_inv;
+    quat_l.v *= norm_l_inv;
+
+    Scalar norm_r_inv = fast::rsqrt(dot(quat_r, quat_r));
+    quat_r.s *= norm_r_inv;
+    quat_r.v *= norm_r_inv;
     }
 
 //! Select a random index

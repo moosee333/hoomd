@@ -34,8 +34,7 @@
 
     On the 2-sphere, we only need a single quaternion, and we take q_l = conj(q_r) = q.
 
-    The standard position is, by convention, (0,0,0,R), around which we define pure rotations on the 2-sphere as rotations around
-    the z axis.
+    The standard position is, by definition, (0,0,0,R), i.e., parallel to the z-axis.
 
     Improper transformations (reflections) on the two-sphere are accounted for by a negative sign of the left quaternion.
     On the three-sphere, improper transformations would require storing an extra parity bit and are currently not implemented.

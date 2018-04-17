@@ -36,6 +36,39 @@ namespace hpmc
 // put a few misc math functions here as they don't have any better home
 namespace detail
     {
+
+    //! Compute the bounding sphere of a hypersphere cap on the 2 or 3-sphere
+    /*! \param R_circumsphere radius of circum-circle/sphere, defined on 2-/3-sphere
+        \param R radius of sphere
+        \param dim Sphere dimensionality, 2 or 3
+
+        The sphere radius that we compute takes into account the curvature of the supporting hypersphere, which results in a more
+        optimal bounding sphere in 4d for large curvature
+     */
+    template <class Real>
+    HOSTDEVICE Real get_bounding_sphere_radius_4d(const Real R_circumsphere, const Real R, const unsigned int dim)
+        {
+        // rotate the bounding sphere center by an arc of length R_circumsphere, around the x-axis
+        Real phi = R_circumsphere/R;
+
+        // the transformation quaternion
+        quat<Real> p(fast::cos(Real(0.5)*phi),fast::sin(Real(0.5)*phi)*vec3<Real>(1,0,0));
+
+        // apply the translation to the standard position
+        quat<Real> v0 = quat<Real>(0,vec3<Real>(0,0,R));
+        quat<Real> v1;
+        if (dim == 3)
+            v1 = p*v0*p;
+        else
+            v1 = p*v0*conj(p);
+
+        // v1 is the outermost extent of the hypersphere cap in 4d space
+        // fit a 3-sphere of radius R around the surface center v0 containing v1
+        quat<Real> dr(v1.s-v0.s, v1.v-v0.v);
+
+        return fast::sqrt(norm2(dr));
+        }
+
     // !helper to call CPU or GPU signbit
     template <class T> HOSTDEVICE inline int signbit(const T& a)
         {
@@ -184,10 +217,16 @@ struct ShapeSphere
         }
 
     //! Return the bounding box of the shape in world coordinates
-    template<class T>
-    DEVICE detail::AABB getAABB(const T& pos) const
+    DEVICE detail::AABB getAABB(const vec3<Scalar>& pos) const
         {
         return detail::AABB(pos, params.radius);
+        }
+
+    //! Return the bounding box of the shape, defined on the hypersphere, in world coordinates
+    DEVICE detail::AABB getAABBSphere(const SphereDim& sphere, unsigned int ndim)
+        {
+        return detail::AABB(sphere.sphericalToCartesian(quat_l, quat_r),
+            detail::get_bounding_sphere_radius_4d((Scalar)params.radius, sphere.getR(), ndim));
         }
 
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x

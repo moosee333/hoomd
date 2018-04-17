@@ -129,10 +129,16 @@ struct ShapeSpheropolygon
         }
 
     //! Return the bounding box of the shape in world coordinates
-    template<class T>
-    DEVICE detail::AABB getAABB(const T& pos) const
+    DEVICE detail::AABB getAABB(const vec3<Scalar>& pos) const
         {
         return detail::AABB(pos, verts.diameter/Scalar(2));
+        }
+
+    //! Return the bounding box of the shape, defined on the hypersphere, in world coordinates
+    DEVICE detail::AABB getAABBSphere(const SphereDim& sphere, unsigned int ndim)
+        {
+        return detail::AABB(sphere.sphericalToCartesian(quat_l, quat_r),
+            detail::get_bounding_sphere_radius_4d(verts.diameter/Scalar(2.0), sphere.getR(), ndim));
         }
 
     //! Returns true if this shape splits the overlap check over several threads of a warp using threadIdx.x
