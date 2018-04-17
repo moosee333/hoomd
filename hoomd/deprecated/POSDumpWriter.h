@@ -42,6 +42,11 @@ class PYBIND11_EXPORT POSDumpWriter : public Analyzer
         //! Set whether rigid body coordinates should be written out wrapped or unwrapped.
         void setUnwrapRigid(bool enable)
             {
+            if (enable && m_pdata->getBoundaryConditions() != ParticleData::periodic)
+                {
+                throw std::runtime_error("unwrap_rigid only supported with periodic boundary conditions.\n");
+                }
+
             m_unwrap_rigid = enable;
             }
 
