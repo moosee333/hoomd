@@ -93,15 +93,15 @@ class user(object):
 
         # with hyperspherical boundary conditions
         square_well_hyphersphere = """
-              quat<Scalar> vi(0,vec3<Scalar>(0,0,1)); // director of particle i
-              vi = quat_l*vi*quat_r;                  // apply the transformation to particle i
-              quat<Scalar> vj(0,vec3<Scalar>(0,0,1)); // director of particle j
-              vj = quat_l*vi*quat_r;                  // apply the transformation to particle j
+              quat<float> vi(0,vec3<float>(0,0,1)); // director of particle i
+              vi = quat_l_i*vi*quat_r_i;                  // apply the transformation to particle i
+              quat<float> vj(0,vec3<float>(0,0,1)); // director of particle j
+              vj = quat_l_j*vj*quat_r_j;                  // apply the transformation to particle j
 
               // compute the arc-length on the hypersphere
-              float r = R*fast::acos(dot(vi,vj));
+              float arc_length = R*fast::acos(dot(vi,vj));
 
-              if (r < 1.23f)
+              if (arc_length < 1.23f)
                   return -1.0f;
               else
                   return 0.0f;
@@ -125,8 +125,8 @@ class user(object):
                    const quat<float>& q_j,
                    float d_j,
                    float charge_j,
-                   const quat<float>& quat_l_i,
-                   const quat<float>& quat_r_i,
+                   const quat<float>& quat_l_j,
+                   const quat<float>& quat_r_j,
                    float R);
 
     ``vec3`` and ``quat`` are defined in HOOMDMath.h.
@@ -200,7 +200,7 @@ float eval(const vec3<float>& r_ij,
     float charge_j,
     const quat<float>& quat_l_j,
     const quat<float>& quat_r_j,
-    float R
+    float R)
     {
 """
         cpp_function += code
