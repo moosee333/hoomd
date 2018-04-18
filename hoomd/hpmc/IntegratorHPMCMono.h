@@ -957,7 +957,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
                                     OverlapReal arc_length(0.0);
 
-                                    if (m_patch)
+                                    if (m_patch && !m_patch_log)
                                         arc_length = detail::get_arclength_sphere(shape_i.quat_l, shape_i.quat_r,
                                             quat_l_j, quat_r_j, sphere);
 
@@ -1004,7 +1004,8 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                     // calculate old patch energy only if m_patch not NULL and no overlaps
                     if (m_patch && !m_patch_log && !overlap)
                         {
-                        detail::AABB aabb_i_old = detail::AABB(sphere.sphericalToCartesian(quat_l_i_old, quat_r_i_old),R_query);
+                        detail::AABB aabb_i_old = detail::AABB(sphere.sphericalToCartesian(quat_l_i_old, quat_r_i_old),
+                            r_cut_patch-getMinCoreDiameter()/(OverlapReal)2.0);
 
                         // stackless search
                         for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree.getNumNodes(); cur_node_idx++)
@@ -1035,6 +1036,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
 
                                         // deltaU = U_old - U_new: add energy of old configuration
                                         if (arc_length <= rcut)
+                                            {
                                             patch_field_energy_diff += m_patch->energy(vec3<float>(0,0,0), // r_ij
                                                                        typ_i,
                                                                        quat<float>(), // orientation_i
@@ -1049,6 +1051,7 @@ void IntegratorHPMCMono<Shape>::update(unsigned int timestep)
                                                                        quat<float>(quat_l_j),
                                                                        quat<float>(quat_r_j),
                                                                        sphere.getR());
+                                            }
                                         }
                                     }
                                 }

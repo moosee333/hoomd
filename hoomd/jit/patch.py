@@ -182,6 +182,8 @@ class user(object):
         .. versionadded:: 2.3
         '''
         cpp_function = """
+#include <stdio.h>
+
 #include "hoomd/HOOMDMath.h"
 #include "hoomd/VectorMath.h"
 
