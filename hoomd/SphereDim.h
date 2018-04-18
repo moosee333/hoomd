@@ -36,8 +36,7 @@
 
     The standard position is, by definition, (0,0,0,R), i.e., parallel to the z-axis.
 
-    Improper transformations (reflections) on the two-sphere are accounted for by a negative sign of the left quaternion.
-    On the three-sphere, improper transformations would require storing an extra parity bit and are currently not implemented.
+    On the hypersphere, improper transformations would require storing an extra parity bit and are currently not implemented.
 
     For more details, see Sinkovits, Barr and Luijten JCP 136, 144111 (2012).
  */

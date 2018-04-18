@@ -1382,12 +1382,11 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
 
     // is this a line reflection?
     bool line = !swap && (m_mc->hasOrientation()
-        || (boundary == ParticleData::hyperspherical && m_sysdef->getNDimensions() == 3)
+        || (boundary == ParticleData::hyperspherical)
         || (rng.template s<Scalar>() > m_move_ratio));
 
     quat<Scalar> q;
     quat<Scalar> pl, pr;
-    bool parity = true;
 
     if (boundary == ParticleData::periodic)
         {
@@ -1452,28 +1451,11 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
 
                 pr = quat<Scalar>(0,nr);
                 }
-            else
-                {
-                // on the 2-sphere, a single vector describes the rotation
-                pr = conj(pl);
-                }
             }
         else
             {
-            if (m_sysdef->getNDimensions() == 3)
-                {
-                // point reflection, generate random point on the 3-sphere to act as pivot
-                quat<Scalar> p = generateRandomOrientation(rng);
-                pl = pr = p;
-
-                // we shouldn't get here, since we don't support inversions on the 3sphere
-                assert(false);
-                }
-            else
-                {
-                pl = pr = quat<Scalar>(1,vec3<Scalar>(0,0,0));
-                }
-            parity = false;
+            // we shouldn't get here
+            throw std::runtime_error("point reflections on sphere not supported.\n");
             }
         }
 
@@ -1585,6 +1567,8 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
             }
         else if (boundary == ParticleData::hyperspherical)
             {
+            const unsigned int ndim = m_sysdef->getNDimensions();
+
             for (unsigned int i = 0; i < snap.size; ++i)
                 {
                 if (swap)
@@ -1598,29 +1582,23 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                 else
                     {
                     // apply the transformation
-                    if (parity)
-                        {
-                        snap.quat_l[i] = pl*snap.quat_l[i];
-                        snap.quat_r[i] = snap.quat_r[i]*pr;
-                        }
-                    else
-                        {
-                        snap.quat_l[i] = pl*conj(snap.quat_r[i]);
-                        snap.quat_r[i] = conj(snap.quat_l[i])*pr;
-
-                        // on the two-sphere, we just absorb the parity into the left tranformation
-                        snap.quat_l[i].v *= -1.0;
-                        snap.quat_l[i].s *= -1.0;
-                        }
+                    snap.quat_l[i] = pl*snap.quat_l[i];
 
                     // renormalize
                     Scalar norm_l_inv = fast::rsqrt(dot(snap.quat_l[i], snap.quat_l[i]));
                     snap.quat_l[i].s *= norm_l_inv;
                     snap.quat_l[i].v *= norm_l_inv;
 
-                    Scalar norm_r_inv = fast::rsqrt(dot(snap.quat_r[i], snap.quat_r[i]));
-                    snap.quat_r[i].s *= norm_r_inv;
-                    snap.quat_r[i].v *= norm_r_inv;
+                    if (ndim == 3)
+                        {
+                        snap.quat_r[i] = snap.quat_r[i]*pr;
+
+                        Scalar norm_r_inv = fast::rsqrt(dot(snap.quat_r[i], snap.quat_r[i]));
+                        snap.quat_r[i].s *= norm_r_inv;
+                        snap.quat_r[i].v *= norm_r_inv;
+                        }
+                    else
+                        snap.quat_r[i] = conj(snap.quat_l[i]);
                     }
                 }
             }
