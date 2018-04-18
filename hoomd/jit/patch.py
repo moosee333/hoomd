@@ -47,30 +47,42 @@ class user(object):
                    const quat<float>& q_i,
                    float d_i,
                    float charge_i,
+                   const quat<float>& quat_l_i,
+                   const quat<float>& quat_r_i,
                    unsigned int type_j,
                    const quat<float>& q_j,
                    float d_j,
-                   float charge_j)
+                   float charge_j,
+                   const quat<float>& quat_l_j,
+                   const quat<float>& quat_r_j,
+                   float R)
 
     * ``vec3`` and ``quat`` are defined in HOOMDMath.h.
-    * *r_ij* is a vector pointing from the center of particle *i* to the center of particle *j*.
+    * *r_ij* is a vector pointing from the center of particle *i* to the center of particle *j* (for periodic boundary conditions, (0,0,0) otherwise)
     * *type_i* is the integer type of particle *i*
-    * *q_i* is the quaternion orientation of particle *i*
+    * *q_i* is the quaternion orientation of particle *i* (for periodic boundary conditions, (1,0,0,0) otherwise)
     * *d_i* is the diameter of particle *i*
     * *charge_i* is the charge of particle *i*
+    * *quat_l_i* is the left quaternion of particle *i*  (for hyperspherical boundary conditions, (1,0,0,0) otherwise)
+    * *quat_r_i* is the right quaternion of particle *i*  (for hyperspherical boundary conditions, (1,0,0,0) otherwise))
     * *type_j* is the integer type of particle *j*
     * *q_j* is the quaternion orientation of particle *j*
     * *d_j* is the diameter of particle *j*
     * *charge_j* is the charge of particle *j*
+    * *quat_l_j* is the left quaternion of particle *j*  (for hyperspherical boundary conditions, (1,0,0,0) otherwise)
+    * *quat_r_j* is the right quaternion of particle *j*  (for hyperspherical boundary conditions, (1,0,0,0) otherwise)
+    * *R* is the radius of the bounding sphere (for hyperspherical boundary conditions, 0 otherwise)
     * Your code *must* return a value.
     * When \|r_ij\| is greater than *r_cut*, the energy *must* be 0. This *r_cut* is applied between
-      the centers of the two particles: compute it accordingly based on the maximum range of the anisotropic
+      the centers of the two particles (euclidean distance with periodic boundary conditions, arc-length with
+      hyperspherical boundary conditions): compute it accordingly based on the maximum range of the anisotropic
       interaction that you implement.
 
     Example:
 
     .. code-block:: python
 
+        # for periodic boundary conditions
         square_well = """float rsq = dot(r_ij, r_ij);
                             if (rsq < 1.21f)
                                 return -1.0f;
@@ -78,6 +90,22 @@ class user(object):
                                 return 0.0f;
                       """
         patch = hoomd.jit.patch.user(mc=mc, r_cut=1.1, code=square_well)
+
+        # with hyperspherical boundary conditions
+        square_well_hyphersphere = """
+              quat<Scalar> vi(0,vec3<Scalar>(0,0,1)); // director of particle i
+              vi = quat_l*vi*quat_r;                  // apply the transformation to particle i
+              quat<Scalar> vj(0,vec3<Scalar>(0,0,1)); // director of particle j
+              vj = quat_l*vi*quat_r;                  // apply the transformation to particle j
+
+              // compute the arc-length on the hypersphere
+              float r = R*fast::acos(dot(vi,vj));
+
+              if (r < 1.23f)
+                  return -1.0f;
+              else
+                  return 0.0f;
+        """
 
     .. rubric:: LLVM IR code
 
@@ -91,10 +119,15 @@ class user(object):
                    const quat<float>& q_i,
                    float d_i,
                    float charge_i,
+                   const quat<float>& quat_l_i,
+                   const quat<float>& quat_r_i,
                    unsigned int type_j,
                    const quat<float>& q_j,
                    float d_j,
-                   float charge_j)
+                   float charge_j,
+                   const quat<float>& quat_l_i,
+                   const quat<float>& quat_r_i,
+                   float R);
 
     ``vec3`` and ``quat`` are defined in HOOMDMath.h.
 
@@ -159,10 +192,15 @@ float eval(const vec3<float>& r_ij,
     const quat<float>& q_i,
     float d_i,
     float charge_i,
+    const quat<float>& quat_l_i,
+    const quat<float>& quat_r_i,
     unsigned int type_j,
     const quat<float>& q_j,
     float d_j,
-    float charge_j)
+    float charge_j,
+    const quat<float>& quat_l_j,
+    const quat<float>& quat_r_j,
+    float R
     {
 """
         cpp_function += code

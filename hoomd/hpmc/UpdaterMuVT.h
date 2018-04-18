@@ -1377,10 +1377,16 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
                         quat<float>(orientation),
                         diameter,
                         charge,
+                        quat<float>(), // quat_l_i
+                        quat<float>(), // quat_r_i
                         type,
                         quat<float>(orientation),
                         diameter,
-                        charge);
+                        charge,
+                        quat<float>(), // quat_l_j
+                        quat<float>(), // quat_r_j
+                        0.0 // R
+                        );
                     }
                 }
 
@@ -1419,10 +1425,16 @@ bool UpdaterMuVT<Shape>::tryRemoveParticle(unsigned int timestep, unsigned int t
                                     quat<float>(orientation),
                                     diameter,
                                     charge,
+                                    quat<float>(), // quat_l_i
+                                    quat<float>(), // quat_r_i
                                     typ_j,
                                     quat<float>(orientation_j),
                                     h_diameter.data[j],
-                                    h_charge.data[j]);
+                                    h_charge.data[j],
+                                    quat<float>(), // quat_l_j
+                                    quat<float>(), // quat_r_j
+                                    0.0 // R
+                                    );
                                 }
                             }
                         }
@@ -1524,10 +1536,15 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
                         quat<float>(orientation),
                         1.0, // diameter i
                         0.0, // charge i
+                        quat<float>(), //quat_l_i
+                        quat<float>(), //quat_r_i
                         type,
                         quat<float>(orientation),
                         1.0, // diameter i
-                        0.0 // charge i
+                        0.0, // charge i
+                        quat<float>(), //quat_l_j
+                        quat<float>(), //quat_r_j
+                        0.0 // R
                         );
                     }
                 }
@@ -1590,10 +1607,16 @@ bool UpdaterMuVT<Shape>::tryInsertParticle(unsigned int timestep, unsigned int t
                                         quat<float>(orientation),
                                         1.0, // diameter i
                                         0.0, // charge i
+                                        quat<float>(), // quat_l_i
+                                        quat<float>(), // quat_r_i
                                         typ_j,
                                         quat<float>(orientation_j),
                                         h_diameter.data[j],
-                                        h_charge.data[j]);
+                                        h_charge.data[j],
+                                        quat<float>(), // quat_l_j
+                                        quat<float>(), // quat_r_j
+                                        0.0
+                                        );
                                     }
                                 }
                             }

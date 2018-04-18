@@ -74,6 +74,29 @@ namespace detail
         #endif
         }
 
+        //! Compute the arc-length between two positions on the hypersphere
+        /* \param quat_l_a left quaternion of position a
+           \param quat_r_a right quaternion of position a
+           \param quat_l_b left quaternion of position b
+           \param quat_r_b left quaternion of position b
+           \param sphere Bounding sphere
+
+           \param returns the arc-length
+         */
+        HOSTDEVICE inline OverlapReal get_arclength_sphere(const quat<Scalar>& quat_l_a, const quat<Scalar>& quat_r_a,
+            const quat<Scalar>& quat_l_b, const quat<Scalar>& quat_r_b, const SphereDim& sphere)
+            {
+            // transform spherical coordinates into 4d-cartesian ones
+            quat<OverlapReal> pos_a = sphere.sphericalToCartesian(quat<OverlapReal>(quat_l_a),quat<OverlapReal>(quat_r_a));
+            quat<OverlapReal> pos_b = sphere.sphericalToCartesian(quat<OverlapReal>(quat_l_b),quat<OverlapReal>(quat_r_b));
+
+            // normalize
+            OverlapReal inv_norm_a = fast::rsqrt(dot(pos_a,pos_a));
+            OverlapReal inv_norm_b = fast::rsqrt(dot(pos_b,pos_b));
+
+            return sphere.getR()*fast::acos(dot(pos_a,pos_b)*inv_norm_a*inv_norm_b);
+            }
+
     // !helper to call CPU or GPU signbit
     template <class T> HOSTDEVICE inline int signbit(const T& a)
         {
@@ -369,24 +392,11 @@ DEVICE inline bool test_self_overlap_sphere(const ShapeSphere& shape, const Sphe
     \ingroup shape
 */
 template <>
-DEVICE inline bool test_overlap_sphere<ShapeSphere, ShapeSphere>(const ShapeSphere& a, const ShapeSphere& b, const SphereDim& sphere, unsigned int& err)
+DEVICE inline bool test_overlap_sphere<ShapeSphere, ShapeSphere>(const ShapeSphere& a, const ShapeSphere& b,
+    const SphereDim& sphere, unsigned int& err)
     {
-    // transform spherical coordinates into 4d-cartesian ones
-    quat<OverlapReal> pos_a = sphere.sphericalToCartesian(quat<OverlapReal>(a.quat_l),quat<OverlapReal>(a.quat_r));
-    quat<OverlapReal> pos_b = sphere.sphericalToCartesian(quat<OverlapReal>(b.quat_l),quat<OverlapReal>(b.quat_r));
-
-    // normalize
-    OverlapReal inv_norm_a = fast::rsqrt(dot(pos_a,pos_a));
-    OverlapReal inv_norm_b = fast::rsqrt(dot(pos_b,pos_b));
-
-    pos_a.s *= inv_norm_a;
-    pos_a.v *= inv_norm_a;
-
-    pos_b.s *= inv_norm_b;
-    pos_b.v *= inv_norm_b;
-
     // arc-length along a geodesic
-    OverlapReal arc_length = sphere.getR()*fast::acos(dot(pos_a,pos_b));
+    OverlapReal arc_length = detail::get_arclength_sphere(a.quat_l,a.quat_r,b.quat_l,b.quat_r, sphere);
 
     if (arc_length < (a.params.radius + b.params.radius))
         {

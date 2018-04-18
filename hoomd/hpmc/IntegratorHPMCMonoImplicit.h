@@ -561,14 +561,20 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
                                 // If there is no overlap and m_patch is not NULL, calculate energy
                                 else if (this->m_patch && !this->m_patch_log && rsq <= r_cut_ij*r_cut_ij)
                                     {
-                                    patch_field_energy_diff -= this->m_patch->energy(r_ij, typ_i,
+                                    patch_field_energy_diff -= this->m_patch->energy(r_ij,
+                                                               typ_i,
                                                                quat<float>(shape_i.orientation),
                                                                h_diameter.data[i],
                                                                h_charge.data[i],
+                                                               quat<float>(), // quat_l_i
+                                                               quat<float>(), // quat_r_i
                                                                typ_j,
                                                                quat<float>(orientation_j),
                                                                h_diameter.data[j],
-                                                               h_charge.data[j]
+                                                               h_charge.data[j],
+                                                               quat<float>(), // quat_l_j
+                                                               quat<float>(), // quat_r_j
+                                                               0.0 //R
                                                                );
                                     }
                                 }
@@ -651,10 +657,16 @@ void IntegratorHPMCMonoImplicit< Shape >::update(unsigned int timestep)
                                                                    quat<float>(orientation_i),
                                                                    h_diameter.data[i],
                                                                    h_charge.data[i],
+                                                                   quat<float>(), // quat_l_i
+                                                                   quat<float>(), // quat_r_i
                                                                    typ_j,
                                                                    quat<float>(orientation_j),
                                                                    h_diameter.data[j],
-                                                                   h_charge.data[j]);
+                                                                   h_charge.data[j],
+                                                                   quat<float>(), // quat_l_j
+                                                                   quat<float>(), // quat_r_j
+                                                                   0.0 // R
+                                                                   );
                                     }
                                 }
                             }

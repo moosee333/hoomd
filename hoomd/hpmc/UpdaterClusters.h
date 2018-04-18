@@ -575,129 +575,136 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
     ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
     ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::read);
 
-    if (patch)
-        {
-        // test old configuration against itself
-        #ifdef ENABLE_TBB
-        tbb::parallel_for((unsigned int)0,m_n_particles_old, [&](unsigned int i)
-        #else
-        for (unsigned int i = 0; i < m_n_particles_old; ++i)
-        #endif
-            {
-            unsigned int typ_i = __scalar_as_int(m_postype_backup[i].w);
-
-            vec3<Scalar> pos_i(m_postype_backup[i]);
-            quat<Scalar> orientation_i(m_orientation_backup[i]);
-
-            Scalar d_i(m_diameter_backup[i]);
-            Scalar charge_i(m_charge_backup[i]);
-
-            // subtract minimum AABB extent from search radius
-            Scalar extent_i = 0.5*patch->getAdditiveCutoff(typ_i);
-            OverlapReal R_query = std::max(0.0,r_cut_patch+extent_i-min_core_diameter/(OverlapReal)2.0);
-            detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
-
-            const unsigned int n_images = image_list.size();
-
-            for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
-                {
-                vec3<Scalar> pos_i_image = pos_i + image_list[cur_image];
-
-                detail::AABB aabb_i_image = aabb_local;
-                aabb_i_image.translate(pos_i_image);
-
-                // stackless search
-                for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
-                    {
-                    if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i_image))
-                        {
-                        if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
-                            {
-                            for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
-                                {
-                                // read in its position and orientation
-                                unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
-
-                                if (m_tag_backup[i] == m_tag_backup[j] && cur_image == 0) continue;
-
-                                // load the position and orientation of the j particle
-                                vec3<Scalar> pos_j = vec3<Scalar>(m_postype_backup[j]);
-                                unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
-
-                                // put particles in coordinate system of particle i
-                                vec3<Scalar> r_ij = pos_j - pos_i_image;
-                                Scalar rsq_ij = dot(r_ij, r_ij);
-
-                                Scalar rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
-
-                                if (rsq_ij <= rcut_ij*rcut_ij)
-                                    {
-                                    // the particle pair
-                                    unsigned int new_tag_i;
-                                        {
-                                        auto it = map.find(m_tag_backup[i]);
-                                        assert(it != map.end());
-                                        new_tag_i = it->second;
-                                        }
-
-                                    unsigned int new_tag_j;
-                                        {
-                                        auto it = map.find(m_tag_backup[j]);
-                                        assert(it!=map.end());
-                                        new_tag_j = it->second;
-                                        }
-                                    auto p = std::make_pair(new_tag_i,new_tag_j);
-
-                                    // if particle interacts in different image already, add to that energy
-                                    float U = 0.0;
-                                        {
-                                        auto it_energy = m_energy_old_old.find(p);
-                                        if (it_energy != m_energy_old_old.end())
-                                            U = it_energy->second;
-                                        }
-
-                                    U += patch->energy(r_ij, typ_i,
-                                                        quat<float>(orientation_i),
-                                                        d_i,
-                                                        charge_i,
-                                                        typ_j,
-                                                        quat<float>(m_orientation_backup[j]),
-                                                        m_diameter_backup[j],
-                                                        m_charge_backup[j]);
-
-                                    // update map
-                                    m_energy_old_old[p] = U;
-
-                                    int3 delta_img = -image_hkl[cur_image] + m_image_backup[i] - m_image_backup[j];
-                                    if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
-                                        {
-                                        // if interaction across PBC, reject cluster move
-                                        m_local_reject.insert(new_tag_i);
-                                        m_local_reject.insert(new_tag_j);
-                                        }
-                                    } // end if overlap
-
-                                } // end loop over AABB tree leaf
-                            } // end is leaf
-                        } // end if overlap
-                    else
-                        {
-                        // skip ahead
-                        cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
-                        }
-
-                    } // end loop over nodes
-
-                } // end loop over images
-
-            } // end loop over old configuration
-        #ifdef ENABLE_TBB
-            );
-        #endif
-        }
-
     if (boundary == ParticleData::periodic)
         {
+        if (patch)
+            {
+            // test old configuration against itself
+            #ifdef ENABLE_TBB
+            tbb::parallel_for((unsigned int)0,m_n_particles_old, [&](unsigned int i)
+            #else
+            for (unsigned int i = 0; i < m_n_particles_old; ++i)
+            #endif
+                {
+                unsigned int typ_i = __scalar_as_int(m_postype_backup[i].w);
+
+                vec3<Scalar> pos_i(m_postype_backup[i]);
+                quat<Scalar> orientation_i(m_orientation_backup[i]);
+
+                Scalar d_i(m_diameter_backup[i]);
+                Scalar charge_i(m_charge_backup[i]);
+
+                // subtract minimum AABB extent from search radius
+                Scalar extent_i = 0.5*patch->getAdditiveCutoff(typ_i);
+                OverlapReal R_query = std::max(0.0,r_cut_patch+extent_i-min_core_diameter/(OverlapReal)2.0);
+                detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
+
+                const unsigned int n_images = image_list.size();
+
+                for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                    {
+                    vec3<Scalar> pos_i_image = pos_i + image_list[cur_image];
+
+                    detail::AABB aabb_i_image = aabb_local;
+                    aabb_i_image.translate(pos_i_image);
+
+                    // stackless search
+                    for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
+                        {
+                        if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i_image))
+                            {
+                            if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
+                                {
+                                for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
+                                    {
+                                    // read in its position and orientation
+                                    unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+
+                                    if (m_tag_backup[i] == m_tag_backup[j] && cur_image == 0) continue;
+
+                                    // load the position and orientation of the j particle
+                                    vec3<Scalar> pos_j = vec3<Scalar>(m_postype_backup[j]);
+                                    unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+
+                                    // put particles in coordinate system of particle i
+                                    vec3<Scalar> r_ij = pos_j - pos_i_image;
+                                    Scalar rsq_ij = dot(r_ij, r_ij);
+
+                                    Scalar rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
+
+                                    if (rsq_ij <= rcut_ij*rcut_ij)
+                                        {
+                                        // the particle pair
+                                        unsigned int new_tag_i;
+                                            {
+                                            auto it = map.find(m_tag_backup[i]);
+                                            assert(it != map.end());
+                                            new_tag_i = it->second;
+                                            }
+
+                                        unsigned int new_tag_j;
+                                            {
+                                            auto it = map.find(m_tag_backup[j]);
+                                            assert(it!=map.end());
+                                            new_tag_j = it->second;
+                                            }
+                                        auto p = std::make_pair(new_tag_i,new_tag_j);
+
+                                        // if particle interacts in different image already, add to that energy
+                                        float U = 0.0;
+                                            {
+                                            auto it_energy = m_energy_old_old.find(p);
+                                            if (it_energy != m_energy_old_old.end())
+                                                U = it_energy->second;
+                                            }
+
+                                        U += patch->energy(r_ij,
+                                                            typ_i,
+                                                            quat<float>(orientation_i),
+                                                            d_i,
+                                                            charge_i,
+                                                            quat<float>(), // quat_l_i
+                                                            quat<float>(), // quat_r_i
+                                                            typ_j,
+                                                            quat<float>(m_orientation_backup[j]),
+                                                            m_diameter_backup[j],
+                                                            m_charge_backup[j],
+                                                            quat<float>(), // quat_l_j,
+                                                            quat<float>(), // quat_r_j,
+                                                            0.0 //R
+                                                            );
+
+                                        // update map
+                                        m_energy_old_old[p] = U;
+
+                                        int3 delta_img = -image_hkl[cur_image] + m_image_backup[i] - m_image_backup[j];
+                                        if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
+                                            {
+                                            // if interaction across PBC, reject cluster move
+                                            m_local_reject.insert(new_tag_i);
+                                            m_local_reject.insert(new_tag_j);
+                                            }
+                                        } // end if overlap
+
+                                    } // end loop over AABB tree leaf
+                                } // end is leaf
+                            } // end if overlap
+                        else
+                            {
+                            // skip ahead
+                            cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
+                            }
+
+                        } // end loop over nodes
+
+                    } // end loop over images
+
+                } // end loop over old configuration
+            #ifdef ENABLE_TBB
+                );
+            #endif
+            }
+
         // loop over new configuration
         #ifdef ENABLE_TBB
         tbb::parallel_for((unsigned int)0,nptl, [&](unsigned int i)
@@ -857,14 +864,21 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                                                 U = it_energy->second;
                                             }
 
-                                        U += patch->energy(r_ij, typ_i,
-                                                                quat<float>(shape_i.orientation),
-                                                                h_diameter.data[i],
-                                                                h_charge.data[i],
-                                                                typ_j,
-                                                                quat<float>(m_orientation_backup[j]),
-                                                                m_diameter_backup[j],
-                                                                m_charge_backup[j]);
+                                        U += patch->energy(r_ij,
+                                                            typ_i,
+                                                            quat<float>(shape_i.orientation),
+                                                            h_diameter.data[i],
+                                                            h_charge.data[i],
+                                                            quat<float>(), // quat_l_i
+                                                            quat<float>(), // quat_r_i
+                                                            typ_j,
+                                                            quat<float>(m_orientation_backup[j]),
+                                                            m_diameter_backup[j],
+                                                            m_charge_backup[j],
+                                                            quat<float>(), // quat_l_j
+                                                            quat<float>(), // quat_r_j
+                                                            0.0 //R
+                                                            );
 
                                         // update map
                                         m_energy_new_old[p] = U;
@@ -897,6 +911,116 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
         }
     else if (boundary == ParticleData::hyperspherical)
         {
+        if (patch)
+            {
+            // test old configuration against itself
+            #ifdef ENABLE_TBB
+            tbb::parallel_for((unsigned int)0,m_n_particles_old, [&](unsigned int i)
+            #else
+            for (unsigned int i = 0; i < m_n_particles_old; ++i)
+            #endif
+                {
+                unsigned int typ_i = __scalar_as_int(m_postype_backup[i].w);
+
+                quat<Scalar> quat_l_i(m_quat_l_backup[i]);
+                quat<Scalar> quat_r_i(m_quat_r_backup[i]);
+
+                Scalar d_i(m_diameter_backup[i]);
+                Scalar charge_i(m_charge_backup[i]);
+
+                // subtract minimum AABB extent from search radius
+                Scalar extent_i = 0.5*patch->getAdditiveCutoff(typ_i);
+                OverlapReal R_query = std::max(0.0,r_cut_patch+extent_i-min_core_diameter/(OverlapReal)2.0);
+                detail::AABB aabb_i = detail::AABB(sphere.sphericalToCartesian(quat_l_i,quat_r_i),R_query);
+
+                // stackless search
+                for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
+                    {
+                    if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i))
+                        {
+                        if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
+                            {
+                            for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
+                                {
+                                // read in its position and orientation
+                                unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+
+                                if (m_tag_backup[i] == m_tag_backup[j])
+                                    continue;
+
+                                // load the position and orientation of the j particle
+                                unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+
+                                // put particles in coordinate system of particle i
+                                quat<Scalar> quat_l_j(m_quat_l_backup[j]);
+                                quat<Scalar> quat_r_j(m_quat_r_backup[j]);
+
+                                OverlapReal arc_length = detail::get_arclength_sphere(quat_l_i, quat_r_i, quat_l_j, quat_r_j, sphere);
+                                OverlapReal rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
+
+                                if (arc_length <= rcut_ij)
+                                    {
+                                    // the particle pair
+                                    unsigned int new_tag_i;
+                                        {
+                                        auto it = map.find(m_tag_backup[i]);
+                                        assert(it != map.end());
+                                        new_tag_i = it->second;
+                                        }
+
+                                    unsigned int new_tag_j;
+                                        {
+                                        auto it = map.find(m_tag_backup[j]);
+                                        assert(it!=map.end());
+                                        new_tag_j = it->second;
+                                        }
+                                    auto p = std::make_pair(new_tag_i,new_tag_j);
+
+                                    // if particle interacts in different image already, add to that energy
+                                    float U = 0.0;
+                                        {
+                                        auto it_energy = m_energy_old_old.find(p);
+                                        if (it_energy != m_energy_old_old.end())
+                                            U = it_energy->second;
+                                        }
+
+                                    U += patch->energy(vec3<Scalar>(0,0,0), // r_ij
+                                                        typ_i,
+                                                        quat<float>(), // orientation_i
+                                                        d_i,
+                                                        charge_i,
+                                                        quat<float>(quat_l_i),
+                                                        quat<float>(quat_r_i),
+                                                        typ_j,
+                                                        quat<float>(), // orientation_j
+                                                        m_diameter_backup[j],
+                                                        m_charge_backup[j],
+                                                        quat<float>(quat_l_j),
+                                                        quat<float>(quat_r_j),
+                                                        sphere.getR()
+                                                        );
+
+                                    // update map
+                                    m_energy_old_old[p] = U;
+                                    } // end if overlap
+
+                                } // end loop over AABB tree leaf
+                            } // end is leaf
+                        } // end if overlap
+                    else
+                        {
+                        // skip ahead
+                        cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
+                        }
+
+                    } // end loop over nodes
+
+                } // end loop over old configuration
+            #ifdef ENABLE_TBB
+                );
+            #endif
+            } // end if patch
+
         // loop over new configuration
         #ifdef ENABLE_TBB
         tbb::parallel_for((unsigned int)0,nptl, [&](unsigned int i)
@@ -963,100 +1087,86 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
 
                 } // end loop over nodes
 
-            #if 0
             if (patch)
                 {
                 // subtract minimum AABB extent from search radius
                 Scalar extent_i = 0.5*patch->getAdditiveCutoff(typ_i);
                 OverlapReal R_query = std::max(0.0,r_cut_patch+extent_i-min_core_diameter/(OverlapReal)2.0);
-                detail::AABB aabb_local = detail::AABB(vec3<Scalar>(0,0,0),R_query);
+                aabb_i = detail::AABB(sphere.sphericalToCartesian(shape_i.quat_l, shape_i.quat_r),R_query);
 
-                // compute V(r'-r)
-                for (unsigned int cur_image = 0; cur_image < n_images; cur_image++)
+                // compute V(r'-r), stackless search
+                for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
                     {
-                    vec3<Scalar> pos_i_image = pos_i_new + image_list[cur_image];
-
-                    detail::AABB aabb_i_image = aabb_local;
-                    aabb_i_image.translate(pos_i_image);
-
-                    // stackless search
-                    for (unsigned int cur_node_idx = 0; cur_node_idx < m_aabb_tree_old.getNumNodes(); cur_node_idx++)
+                    if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i))
                         {
-                        if (detail::overlap(m_aabb_tree_old.getNodeAABB(cur_node_idx), aabb_i_image))
+                        if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
                             {
-                            if (m_aabb_tree_old.isNodeLeaf(cur_node_idx))
+                            for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
                                 {
-                                for (unsigned int cur_p = 0; cur_p < m_aabb_tree_old.getNodeNumParticles(cur_node_idx); cur_p++)
+                                // read in its position and orientation
+                                unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+
+                                unsigned int new_tag_j;
                                     {
-                                    // read in its position and orientation
-                                    unsigned int j = m_aabb_tree_old.getNodeParticle(cur_node_idx, cur_p);
+                                    auto it = map.find(m_tag_backup[j]);
+                                    assert(it != map.end());
+                                    new_tag_j = it->second;
+                                    }
 
-                                    unsigned int new_tag_j;
+                                if (h_tag.data[i] == new_tag_j)
+                                    continue;
+
+                                unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+
+                                quat<Scalar> quat_l_j(m_quat_l_backup[j]);
+                                quat<Scalar> quat_r_j(m_quat_r_backup[j]);
+
+                                Scalar rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
+
+                                OverlapReal arc_length = detail::get_arclength_sphere(shape_i.quat_l, shape_i.quat_r,
+                                    quat_l_j, quat_r_j, sphere);
+
+                                if (arc_length <= rcut_ij)
+                                    {
+                                    auto p = std::make_pair(h_tag.data[i], new_tag_j);
+
+                                    // if particle interacts in different image already, add to that energy
+                                    float U = 0.0;
                                         {
-                                        auto it = map.find(m_tag_backup[j]);
-                                        assert(it != map.end());
-                                        new_tag_j = it->second;
+                                        auto it_energy = m_energy_new_old.find(p);
+                                        if (it_energy != m_energy_new_old.end())
+                                            U = it_energy->second;
                                         }
 
-                                    if (h_tag.data[i] == new_tag_j && cur_image == 0) continue;
+                                    U += patch->energy(vec3<Scalar>(0,0,0),  //r_ij
+                                                        typ_i,
+                                                        quat<float>(),       // orientation_i
+                                                        h_diameter.data[i],
+                                                        h_charge.data[i],
+                                                        quat<float>(shape_i.quat_l),
+                                                        quat<float>(shape_i.quat_r),
+                                                        typ_j,
+                                                        quat<float>(),      // orientation_j
+                                                        m_diameter_backup[j],
+                                                        m_charge_backup[j],
+                                                        quat<float>(quat_l_j),
+                                                        quat<float>(quat_r_j),
+                                                        sphere.getR());
 
-                                    vec3<Scalar> pos_j(m_postype_backup[j]);
-                                    unsigned int typ_j = __scalar_as_int(m_postype_backup[j].w);
+                                    // update map
+                                    m_energy_new_old[p] = U;
+                                    }
+                                } // end loop over AABB tree leaf
+                            } // end is leaf
+                        } // end if overlap
+                    else
+                        {
+                        // skip ahead
+                        cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
+                        }
 
-                                    // put particles in coordinate system of particle i
-                                    vec3<Scalar> r_ij = pos_j - pos_i_image;
-
-                                    // check for excluded volume sphere overlap
-                                    Scalar rsq_ij = dot(r_ij, r_ij);
-
-                                    Scalar rcut_ij = r_cut_patch + extent_i + 0.5*patch->getAdditiveCutoff(typ_j);
-
-                                    if (rsq_ij <= rcut_ij*rcut_ij)
-                                        {
-                                        auto p = std::make_pair(h_tag.data[i], new_tag_j);
-
-                                        // if particle interacts in different image already, add to that energy
-                                        float U = 0.0;
-                                            {
-                                            auto it_energy = m_energy_new_old.find(p);
-                                            if (it_energy != m_energy_new_old.end())
-                                                U = it_energy->second;
-                                            }
-
-                                        U += patch->energy(r_ij, typ_i,
-                                                                quat<float>(shape_i.orientation),
-                                                                h_diameter.data[i],
-                                                                h_charge.data[i],
-                                                                typ_j,
-                                                                quat<float>(m_orientation_backup[j]),
-                                                                m_diameter_backup[j],
-                                                                m_charge_backup[j]);
-
-                                        // update map
-                                        m_energy_new_old[p] = U;
-
-                                        int3 delta_img = -image_hkl[cur_image] + h_image.data[i] - m_image_backup[j];
-                                        if (line && !swap && (delta_img.x || delta_img.y || delta_img.z))
-                                            {
-                                            // if interaction across PBC, reject cluster move
-                                            m_local_reject.insert(h_tag.data[i]);
-                                            m_local_reject.insert(new_tag_j);
-                                            }
-                                        }
-                                    } // end loop over AABB tree leaf
-                                } // end is leaf
-                            } // end if overlap
-                        else
-                            {
-                            // skip ahead
-                            cur_node_idx += m_aabb_tree_old.getNodeSkip(cur_node_idx);
-                            }
-
-                        } // end loop over nodes
-
-                    } // end loop over images
+                    } // end loop over nodes
                 } // end if patch
-            #endif
             } // end loop over local particles
         #ifdef ENABLE_TBB
             );

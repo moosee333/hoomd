@@ -13,7 +13,8 @@ class PatchEnergyJITUnion : public PatchEnergyJIT
         /*! \param r_cut Max rcut for constituent particles
          */
         PatchEnergyJITUnion(std::shared_ptr<SystemDefinition> sysdef, std::shared_ptr<ExecutionConfiguration> exec_conf, const std::string& fname, Scalar r_cut)
-            : PatchEnergyJIT(exec_conf, fname, r_cut), m_sysdef(sysdef)
+            : PatchEnergyJIT(exec_conf, fname, r_cut), m_sysdef(sysdef),
+              m_on_hypersphere(sysdef->getParticleData()->getBoundaryConditions() == ParticleData::hyperspherical)
             {
             // Connect to number of types change signal
             m_sysdef->getParticleData()->getNumTypesChangeSignal().connect<PatchEnergyJITUnion, &PatchEnergyJITUnion::slotNumTypesChange>(this);
@@ -74,23 +75,32 @@ class PatchEnergyJITUnion : public PatchEnergyJIT
             \param type_i Integer type index of particle i
             \param d_i Diameter of particle i
             \param charge_i Charge of particle i
+            \param quat_l_i Left quaternion of particle i
+            \param quat_r_i Right quaternion of particle i
             \param q_i Orientation quaternion of particle i
             \param type_j Integer type index of particle j
             \param q_j Orientation quaternion of particle j
             \param d_j Diameter of particle j
             \param charge_j Charge of particle j
-
+            \param quat_l_j Left quaternion of particle j
+            \param quat_r_j Right quaternion of particle j
+            \param R radius of hypersphere
             \returns Energy of the patch interaction.
         */
         virtual float energy(const vec3<float>& r_ij,
             unsigned int type_i,
             const quat<float>& q_i,
-            float diameter_i,
+            float d_i,
             float charge_i,
+            const quat<float>& quat_l_i,
+            const quat<float>& quat_r_i,
             unsigned int type_j,
             const quat<float>& q_j,
             float d_j,
-            float charge_j);
+            float charge_j,
+            const quat<float>& quat_l_j,
+            const quat<float>& quat_r_j,
+            float R);
 
         //! Method to be called when number of types changes
         virtual void slotNumTypesChange()
@@ -117,14 +127,21 @@ class PatchEnergyJITUnion : public PatchEnergyJIT
         std::vector< std::vector<float> > m_charge;               // The charges of the constituent particles
         std::vector< std::vector<unsigned int> > m_type;          // The type identifiers of the constituent particles
 
+        bool m_on_hypersphere;                                   //!< If we use hyperspherical boundary conditions
+
         //! Compute the energy of two overlapping leaf nodes
         float compute_leaf_leaf_energy(vec3<float> dr,
-                                     unsigned int type_a,
-                                     unsigned int type_b,
-                                     const quat<float>& orientation_a,
-                                     const quat<float>& orientation_b,
-                                     unsigned int cur_node_a,
-                                     unsigned int cur_node_b);
+                             unsigned int type_a,
+                             unsigned int type_b,
+                             const quat<float>& orientation_a,
+                             const quat<float>& orientation_b,
+                             unsigned int cur_node_a,
+                             unsigned int cur_node_b,
+                             const quat<float>& quat_l_a,
+                             const quat<float>& quat_r_a,
+                             const quat<float>& quat_l_b,
+                             const quat<float>& quat_r_b,
+                             float R);
     };
 
 //! Exports the PatchEnergyJITUnion class to python
