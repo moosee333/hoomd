@@ -300,8 +300,19 @@ DEVICE inline bool overlap_sphere(const OBB& a,
         OverlapReal r_a = fast::sqrt(dot(ca,ca));
         OverlapReal r_b = fast::sqrt(dot(cb,cb));
 
-        quat<OverlapReal> pos4_a(R*fast::cos(r_a/R), R*fast::sin(r_a/R)/r_a*ca);
-        quat<OverlapReal> pos4_b(R*fast::cos(r_b/R), R*fast::sin(r_b/R)/r_b*cb);
+        quat<OverlapReal> pos4_a;
+        if (r_a != 0.0)
+            pos4_a = quat<OverlapReal>(R*fast::cos(r_a/R), R*fast::sin(r_a/R)/r_a*ca);
+        else
+            // handle singularity
+            pos4_a = quat<OverlapReal>(R,vec3<OverlapReal>(0,0,0));
+
+        quat<OverlapReal> pos4_b;
+        if (r_b != 0.0)
+            pos4_b = quat<OverlapReal>(R*fast::cos(r_b/R), R*fast::sin(r_b/R)/r_b*cb);
+        else
+            // handle singularity
+            pos4_b = quat<OverlapReal>(R,vec3<OverlapReal>(0,0,0));
 
         // Transform both spheres on the hypersphere
         pos4_a = quat_l_a*pos4_a*quat_r_a;

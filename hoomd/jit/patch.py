@@ -272,16 +272,40 @@ class user_union(user):
         code (str): C++ code to compile
         llvm_ir_fname (str): File name of the llvm IR file to load.
 
+    Note:
+        With hyperspherical boundary conditions, HOOMD internally defines a projection of the 3d molecular coordinate
+        into 4d space, where radial distances and directions from the center of the
+        particle are preserved. This makes the constituent particle orientation meaningless.
+        Instead, the 4d world coordinates of the two interacting particles are directly passed to the evaluator
+        function as quaternions in the q_i and q_j fields.
+
     Example:
 
     .. code-block:: python
 
+        # with periodic boundary conditions
         square_well = """float rsq = dot(r_ij, r_ij);
-                            if (rsq < 1.21f)
-                                return -1.0f;
-                            else
-                                return 0.0f;
+                         if (rsq < 1.21f)
+                             return -1.0f;
+                         else
+                             return 0.0f;
                       """
+
+        # with hyperspherical boundary conditions (note, this evaluator differs from the single patch one)
+        square_well_hypersphere = """
+              // normalize the positions
+              quat<Scalar> pos4_i_norm(q_i*fast::rsqrt(norm2(q_i)));
+              quat<Scalar> pos4_j_norm(q_j*fast::rsqrt(norm2(q_j)));
+
+              // compute the arc-length on the hypersphere
+              float arc_length = R*fast::acos(dot(pos4_i_norm,pos4_j_norm));
+
+              if (arc_length < 1.23f)
+                  return -1.0f;
+              else
+                  return 0.0f;
+              """
+
         patch = hoomd.jit.patch.user_union(r_cut=1.1, code=square_well)
         patch.set_params('A',positions=[(0,0,-5.),(0,0,.5)], typeids=[0,0])
 

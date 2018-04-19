@@ -115,8 +115,29 @@ float PatchEnergyJITUnion::compute_leaf_leaf_energy(vec3<float> dr,
         unsigned int ileaf = m_tree[type_a].getParticle(cur_node_a, i);
 
         unsigned int type_i = m_type[type_a][ileaf];
-        quat<float> orientation_i = conj(quat<float>(orientation_b))*quat<float>(orientation_a) * m_orientation[type_a][ileaf];
-        vec3<float> pos_i(rotate(conj(quat<float>(orientation_b))*quat<float>(orientation_a),m_position[type_a][ileaf])-r_ab);
+        quat<float> orientation_i;
+        vec3<float> pos_i;
+
+        if (!m_on_hypersphere)
+            {
+            orientation_i = conj(quat<float>(orientation_b))*quat<float>(orientation_a) * m_orientation[type_a][ileaf];
+            pos_i  = rotate(conj(quat<float>(orientation_b))*quat<float>(orientation_a),m_position[type_a][ileaf])-r_ab;
+            }
+        else
+            {
+            // 3d position
+            pos_i = m_position[type_a][ileaf];
+            float r = fast::sqrt(dot(pos_i,pos_i));
+
+            // project in 4d and transform
+            if (r != 0.0)
+                orientation_i = quat<float>(R*fast::cos(r/R), R*fast::sin(r/R)/r*pos_i);
+            else
+                // handle singularity
+                orientation_i = quat<float>(R,vec3<float>(0,0,0));
+
+            orientation_i = quat_l_a*orientation_i*quat_r_a;
+            }
 
         // loop through leaf particles of cur_node_b
         for (unsigned int j= 0; j < nb; j++)
@@ -124,11 +145,32 @@ float PatchEnergyJITUnion::compute_leaf_leaf_energy(vec3<float> dr,
             unsigned int jleaf = m_tree[type_b].getParticle(cur_node_b, j);
 
             unsigned int type_j = m_type[type_b][jleaf];
-            quat<float> orientation_j = m_orientation[type_b][jleaf];
-            vec3<float> r_ij = m_position[type_b][jleaf] - pos_i;
+            quat<float> orientation_j;
+            vec3<float> r_ij;
+            if (! m_on_hypersphere)
+                {
+                orientation_j = m_orientation[type_b][jleaf];
+                r_ij = m_position[type_b][jleaf] - pos_i;
+                }
+            else
+                {
+                // 3d position
+                vec3<float> pos_j = m_position[type_b][jleaf];
+                float r = fast::sqrt(dot(pos_j,pos_j));
 
-            float rsq = dot(r_ij,r_ij);
-            if (rsq <= m_r_cut*m_r_cut)
+                // project in 4d and transform
+                if (r != 0.0)
+                    orientation_j = quat<float>(R*fast::cos(r/R), R*fast::sin(r/R)/r*pos_j);
+                else
+                    // handle singularity
+                    orientation_j = quat<float>(R,vec3<float>(0,0,0));
+
+                orientation_j = quat_l_b*orientation_j*quat_r_b;
+                }
+
+            // on the hypersphere, the slightly more expensive arc-length check is performed only in the user function
+            bool within_rcut = m_on_hypersphere || (dot(r_ij,r_ij) <= m_r_cut*m_r_cut);
+            if (within_rcut)
                 {
                 // evaluate energy via JIT function
                 energy += m_eval(r_ij,
