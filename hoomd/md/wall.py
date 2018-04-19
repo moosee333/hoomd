@@ -628,6 +628,7 @@ class wallpotential(external._external_force):
         from hoomd import *
         from hoomd.md import *
         import hoomd.deprecated as deprecated
+        import random
 
         c=context.initialize()
 
@@ -672,7 +673,7 @@ class wallpotential(external._external_force):
         walls.add_plane((0,0,7.0),(0.,0.,1.))
         walls.add_plane((0,0,-7.0),(0.,0.,-1.))
         wall_force_slj=wall.slj(walls, r_cut=2.0)
-        wall_force_slj.force_coeff.set('A', epsilon= 1,r_cut=2**(1.6),sigma=sigma,r_extrap = 0.05)
+        wall_force_slj.force_coeff.set('A', epsilon= 1,r_cut=2**(1.6),sigma=1.0,r_extrap = 0.05)
 
         #log Thermos
         logger = analyze.log(quantities=['temperature' , 'potential_energy', 'kinetic_energy'],
