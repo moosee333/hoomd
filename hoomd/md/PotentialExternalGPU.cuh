@@ -24,7 +24,9 @@ struct external_potential_args_t
               Scalar *_d_virial,
               const unsigned int _virial_pitch,
               const unsigned int _N,
+              const Scalar _deltaT,
               const Scalar4 *_d_pos,
+              const Scalar4 *_d_vel,
               const Scalar *_d_diameter,
               const Scalar *_d_charge,
               const BoxDim& _box,
@@ -34,7 +36,9 @@ struct external_potential_args_t
                   virial_pitch(_virial_pitch),
                   box(_box),
                   N(_N),
+                  deltaT(_deltaT),
                   d_pos(_d_pos),
+                  d_vel(_d_vel),
                   d_diameter(_d_diameter),
                   d_charge(_d_charge),
                   block_size(_block_size)
@@ -46,7 +50,9 @@ struct external_potential_args_t
     const unsigned int virial_pitch; //!< The pitch of the 2D array of virial matrix elements
     const BoxDim& box;         //!< Simulation box in GPU format
     const unsigned int N;           //!< Number of particles
+    const Scalar deltaT;           //!<  timestep
     const Scalar4 *d_pos;           //!< Device array of particle positions
+    const Scalar4 *d_vel;           //!< Device array of particle velocities
     const Scalar *d_diameter;       //!< particle diameters
     const Scalar *d_charge;         //!< particle charges
     const unsigned int block_size;  //!< Block size to execute
@@ -83,7 +89,9 @@ __global__ void gpu_compute_external_forces_kernel(Scalar4 *d_force,
                                                Scalar *d_virial,
                                                const unsigned int virial_pitch,
                                                const unsigned int N,
+                                               const Scalar deltaT,
                                                const Scalar4 *d_pos,
+                                               const Scalar4 *d_vel,
                                                const Scalar *d_diameter,
                                                const Scalar *d_charge,
                                                const BoxDim box,
@@ -120,6 +128,8 @@ __global__ void gpu_compute_external_forces_kernel(Scalar4 *d_force,
     // read in the position of our particle.
     // (MEM TRANSFER: 16 bytes)
     Scalar4 posi = d_pos[idx];
+    // (MEM TRANSFER: 16 bytes)
+    Scalar4 veli = d_vel[idx];
     Scalar di;
     Scalar qi;
     if (evaluator::needsDiameter())
@@ -134,15 +144,17 @@ __global__ void gpu_compute_external_forces_kernel(Scalar4 *d_force,
 
 
     // initialize the force to 0
-    Scalar3 force = make_scalar3(Scalar(0.0), Scalar(0.0), Scalar(0.0));
-    Scalar virial[6];
+     Scalar3 force = make_scalar3(Scalar(0.0), Scalar(0.0), Scalar(0.0));
+     Scalar virial[6];
     for (unsigned int k = 0; k < 6; k++)
         virial[k] = Scalar(0.0);
     Scalar energy = Scalar(0.0);
 
     unsigned int typei = __scalar_as_int(posi.w);
     Scalar3 Xi = make_scalar3(posi.x, posi.y, posi.z);
-    evaluator eval(Xi, box, params[typei], field);
+    Scalar3 Vi = make_scalar3(veli.x, veli.y, veli.z);
+            Vi *= deltaT;
+    evaluator eval(Xi,Vi, box, params[typei], field);
 
     if (evaluator::needsDiameter())
         eval.setDiameter(di);
@@ -190,7 +202,9 @@ cudaError_t gpu_cpef(const external_potential_args_t& external_potential_args,
                                                                                 external_potential_args.d_virial,
                                                                                 external_potential_args.virial_pitch,
                                                                                 external_potential_args.N,
+                                                                                external_potential_args.deltaT,
                                                                                 external_potential_args.d_pos,
+                                                                                external_potential_args.d_vel,
                                                                                 external_potential_args.d_diameter,
                                                                                 external_potential_args.d_charge,
                                                                                 external_potential_args.box,

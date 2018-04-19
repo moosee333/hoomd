@@ -58,8 +58,9 @@ class EvaluatorWalls
         typedef wall_type field_type;
 
         //! Constructs the external wall potential evaluator
-        DEVICE EvaluatorWalls(Scalar3 pos, const BoxDim& box, const param_type& p, const field_type& f)
+        DEVICE EvaluatorWalls(Scalar3 pos, Scalar3 vel, const BoxDim& box, const param_type& p, const field_type& f)
             : m_pos(pos),
+              m_vel(vel),
               m_box(box),
               m_field(f),
               m_params(p)
@@ -342,6 +343,14 @@ class EvaluatorWalls
                         }
                     }
                 }
+						// Due to Elastic collisions with walls the particles lose kinetic energy 
+						// Need to include momentum flux contributions (Force * velocity *deltaT)  to account for stress calculations
+            virial[0] += F.x*m_vel.x;
+            virial[1] += F.x*m_vel.y;
+            virial[2] += F.x*m_vel.z;
+            virial[3] += F.y*m_vel.y;
+            virial[4] += F.y*m_vel.z;
+            virial[5] += F.z*m_vel.z;
 
             }
 
@@ -358,6 +367,7 @@ class EvaluatorWalls
 
     protected:
         Scalar3               m_pos;      //!< particle position
+        Scalar3               m_vel;      //!< particle velocity
         const BoxDim          m_box;      //!<contain box information
         const field_type&     m_field;    //!< contains all information about the walls.
         param_type            m_params;

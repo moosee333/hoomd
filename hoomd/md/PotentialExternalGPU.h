@@ -74,6 +74,7 @@ void PotentialExternalGPU<evaluator>::computeForces(unsigned int timestep)
 
     // access the particle data
     ArrayHandle<Scalar4> d_pos(this->m_pdata->getPositions(), access_location::device, access_mode::read);
+    ArrayHandle<Scalar4> d_vel(this->m_pdata->getVelocities(), access_location::device, access_mode::read);
     ArrayHandle<Scalar> d_diameter(this->m_pdata->getDiameters(), access_location::device, access_mode::read);
     ArrayHandle<Scalar> d_charge(this->m_pdata->getCharges(), access_location::device, access_mode::read);
 
@@ -99,7 +100,9 @@ void PotentialExternalGPU<evaluator>::computeForces(unsigned int timestep)
                          d_virial.data,
                          this->m_virial.getPitch(),
                          this->m_pdata->getN(),
+                         this->m_deltaT,
                          d_pos.data,
+                         d_vel.data,
                          d_diameter.data,
                          d_charge.data,
                          box,

@@ -158,6 +158,7 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
     assert(m_pdata);
     // access the particle data arrays
     ArrayHandle<Scalar4> h_pos(m_pdata->getPositions(), access_location::host, access_mode::read);
+    ArrayHandle<Scalar4> h_vel(m_pdata->getVelocities(), access_location::host, access_mode::read);
 
     ArrayHandle<Scalar4> h_force(m_force,access_location::host, access_mode::overwrite);
     ArrayHandle<Scalar> h_virial(m_virial,access_location::host, access_mode::overwrite);
@@ -196,13 +197,15 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
         {
         // get the current particle properties
         Scalar3 X = make_scalar3(h_pos.data[idx].x, h_pos.data[idx].y, h_pos.data[idx].z);
+        Scalar3 V = make_scalar3(h_vel.data[idx].x, h_vel.data[idx].y, h_vel.data[idx].z);
+				V *= m_deltaT;
         unsigned int type = __scalar_as_int(h_pos.data[idx].w);
         Scalar3 F;
         Scalar energy;
         Scalar virial[6];
 
         param_type params = h_params.data[type];
-        evaluator eval(X, box, params, field);
+        evaluator eval(X,V, box, params, field);
 
         if (evaluator::needsDiameter())
             {
@@ -223,6 +226,7 @@ void PotentialExternal<evaluator>::computeForces(unsigned int timestep)
         h_force.data[idx].w = energy;
         for (int k = 0; k < 6; k++)
             h_virial.data[k*m_virial_pitch+idx]  = virial[k];
+
         }
 
     if (m_prof)

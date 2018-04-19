@@ -51,8 +51,9 @@ class EvaluatorExternalElectricField
             \param box box dimensions
             \param params per-type parameters of external potential
         */
-        DEVICE EvaluatorExternalElectricField(Scalar3 X, const BoxDim& box, const param_type& params, const field_type& field)
+        DEVICE EvaluatorExternalElectricField(Scalar3 X,Scalar3 V, const BoxDim& box, const param_type& params, const field_type& field)
             : m_pos(X),
+              m_vel(V),
               m_box(box),
               m_field(field)
             {
@@ -112,6 +113,7 @@ class EvaluatorExternalElectricField
 
     protected:
         Scalar3 m_pos;                //!< particle position
+        Scalar3 m_vel;                //!< particle velocity
         BoxDim m_box;                 //!< box dimensions
         Scalar m_qi;                  //!< particle charge
         Scalar3 m_field;              //!< the field vector
