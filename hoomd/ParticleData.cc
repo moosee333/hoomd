@@ -2466,7 +2466,7 @@ void export_BoxDim(py::module& m)
 void export_SphereDim(py::module& m)
     {
     py::class_<SphereDim>(m,"SphereDim")
-    .def(py::init<Scalar>())
+    .def(py::init<Scalar, bool>())
     .def("getR", &SphereDim::getR)
     .def("setR", &SphereDim::setR)
     ;

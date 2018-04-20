@@ -170,7 +170,7 @@ Scalar Integrator::getLogValue(const std::string& quantity, unsigned int timeste
         else if (m_pdata->getBoundaryConditions() == ParticleData::hyperspherical)
             {
             SphereDim sphere = m_pdata->getSphere();
-            return sphere.getVolume(m_sysdef->getNDimensions()==2);
+            return sphere.getVolume();
             }
         else
             throw std::runtime_error("Unsupporter boundary conditions in Integrator.\n");

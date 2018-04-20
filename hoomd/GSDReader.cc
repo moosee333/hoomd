@@ -268,7 +268,7 @@ void GSDReader::readHeader()
         {
         float R = 1.0;
         readChunk(&R, m_frame, "configuration/R", 4);
-        m_snapshot->sphere = SphereDim(R);
+        m_snapshot->sphere = SphereDim(R, m_snapshot->dimensions == 2);
         }
 
     unsigned int N = 0;

@@ -789,7 +789,7 @@ class spheredim(hoomd.meta._metadata):
     ## \internal
     # \brief Get a C++ spheredim
     def _getSphereDim(self):
-        s = _hoomd.SphereDim(self.R);
+        s = _hoomd.SphereDim(self.R, self.dimensions == 2);
         return s
 
     def __str__(self):

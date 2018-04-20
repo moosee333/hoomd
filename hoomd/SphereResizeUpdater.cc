@@ -50,10 +50,11 @@ void SphereResizeUpdater::update(unsigned int timestep)
     // first, compute what the current sphere size and tilt factors should be
     Scalar R = m_R->getValue(timestep);
 
-    SphereDim newSphere = SphereDim(R);
+    SphereDim sphere = m_pdata->getSphere();
+    sphere.setR(R);
 
     // set the new sphere
-    m_pdata->setSphere(newSphere);
+    m_pdata->setSphere(sphere);
 
     if (m_prof) m_prof->pop();
     }

@@ -78,6 +78,10 @@ class user(object):
       hyperspherical boundary conditions): compute it accordingly based on the maximum range of the anisotropic
       interaction that you implement.
 
+    Note:
+        To determine the center of the particle on the hypersphere, it is assumed the standard position
+        is (0,0,0,R) (parallel to z-axis) for the 2-sphere, and (R,0,0,0) (purely imaginary) for the 3-sphere
+
     Example:
 
     .. code-block:: python
@@ -91,12 +95,12 @@ class user(object):
                       """
         patch = hoomd.jit.patch.user(mc=mc, r_cut=1.1, code=square_well)
 
-        # with hyperspherical boundary conditions
+        # with hyperspherical boundary conditions on the 3-sphere
         square_well_hyphersphere = """
-              quat<float> vi(0,vec3<float>(0,0,1)); // director of particle i
-              vi = quat_l_i*vi*quat_r_i;                  // apply the transformation to particle i
-              quat<float> vj(0,vec3<float>(0,0,1)); // director of particle j
-              vj = quat_l_j*vj*quat_r_j;                  // apply the transformation to particle j
+              quat<float> vi(1,vec3<float>(0,0,0)); // director of particle i
+              vi = quat_l_i*vi*quat_r_i;            // apply the transformation to particle i
+              quat<float> vj(1,vec3<float>(0,0,0)); // director of particle j
+              vj = quat_l_j*vj*quat_r_j;            // apply the transformation to particle j
 
               // compute the arc-length on the hypersphere
               float arc_length = R*fast::acos(dot(vi,vj));

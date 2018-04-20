@@ -34,7 +34,8 @@
 
     On the 2-sphere, we only need a single quaternion, and we take q_l = conj(q_r) = q.
 
-    The standard position is, by definition, (0,0,0,R), i.e., parallel to the z-axis.
+    For the 2-sphere, the standard position is (0,0,0,R), i.e., parallel to the z-axis. This keeps the quaternion real under rotations.
+    On the 3-sphere, the standard position is a purely imaginary quaternion, (R,0,0,0).
 
     On the hypersphere, improper transformations would require storing an extra parity bit and are currently not implemented.
 
@@ -46,14 +47,15 @@ struct __attribute__((visibility("default"))) SphereDim
     public:
         //! Default constructor
         SphereDim()
-            : R(1.0)
+            : R(1.0), two_sphere(false)
             { }
 
         /*! Define spherical boundary conditions
             \param R Radius of the (hyper-) sphere
+            \param two_sphere True if 2-sphere, false if 3-sphere
          */
-        SphereDim(Scalar _R)
-            : R(_R) {}
+        SphereDim(Scalar _R, bool _two_sphere)
+            : R(_R), two_sphere(_two_sphere) {}
 
         //! Get the sphere radius
         Scalar getR() const
@@ -70,9 +72,9 @@ struct __attribute__((visibility("default"))) SphereDim
         //! Return the simulation volume
         /* \param two_d True if on a 2-sphere, 3-sphere otherwise
          */
-        Scalar getVolume(bool two_d)
+        Scalar getVolume()
             {
-            if (two_d)
+            if (two_sphere)
                 return Scalar(4.0*M_PI*R*R);
             else
                 return Scalar(2.0*M_PI*M_PI*R*R*R);
@@ -87,10 +89,12 @@ struct __attribute__((visibility("default"))) SphereDim
         template<class Real>
         quat<Real> sphericalToCartesian(const quat<Real>& q_l, const quat<Real>& q_r) const
             {
-            return q_l*quat<Real>(0,vec3<Scalar>(0,0,R))*q_r;
+            return two_sphere ?
+                q_l*quat<Real>(0,vec3<Scalar>(0,0,R))*q_r : q_l*quat<Real>(R,vec3<Real>(0,0,0))*q_r;
             }
 
     private:
         Scalar R;        //!< Hypersphere radius
+        bool two_sphere; //!< True if 2-sphere, false if 3-sphere
     };
 #undef HOSTDEVICE
