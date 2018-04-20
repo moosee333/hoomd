@@ -76,7 +76,7 @@ void GSDDumpWriter::initFileIO()
         retval = gsd_create(m_fname.c_str(),
                             o.str().c_str(),
                             "hoomd",
-                            gsd_make_version(1,2));
+                            gsd_make_version(1,3));
         if (retval != 0)
             {
             m_exec_conf->msg->error() << "dump.gsd: " << strerror(errno) << " - " << m_fname << endl;
@@ -303,8 +303,8 @@ void GSDDumpWriter::writeTypeMapping(std::string chunk, std::vector< std::string
 
 /*! \param timestep
 
-    Write the data chunks configuration/step, configuration/box, and particles/N. If this is frame 0, also write
-    configuration/dimensions.
+    Write the data chunks configuration/step, configuration/box, configuration/sphere,
+    and particles/N. If this is frame 0, also write configuration/dimensions and configuration/spherical.
 
     N is not strictly necessary for constant N data, but is always written in case the user fails to select
     dynamic attributes with a variable N file.
@@ -323,6 +323,11 @@ void GSDDumpWriter::writeFrameHeader(unsigned int timestep)
         uint8_t dimensions = m_sysdef->getNDimensions();
         retval = gsd_write_chunk(&m_handle, "configuration/dimensions", GSD_TYPE_UINT8, 1, 1, 0, (void *)&dimensions);
         checkError(retval);
+
+        m_exec_conf->msg->notice(10) << "dump.gsd: writing configuration/spherical" << endl;
+        uint8_t spherical = m_pdata->getBoundaryConditions() == ParticleData::hyperspherical;
+        retval = gsd_write_chunk(&m_handle, "configuration/spherical", GSD_TYPE_UINT8, 1, 1, 0, (void *)&spherical);
+        checkError(retval);
         }
 
     m_exec_conf->msg->notice(10) << "dump.gsd: writing configuration/box" << endl;
@@ -335,6 +340,11 @@ void GSDDumpWriter::writeFrameHeader(unsigned int timestep)
     box_a[4] = box.getTiltFactorXZ();
     box_a[5] = box.getTiltFactorYZ();
     retval = gsd_write_chunk(&m_handle, "configuration/box", GSD_TYPE_FLOAT, 6, 1, 0, (void *)box_a);
+    checkError(retval);
+
+    m_exec_conf->msg->notice(10) << "dump.gsd: writing configuration/R" << endl;
+    float R = m_pdata->getSphere().getR();
+    retval = gsd_write_chunk(&m_handle, "configuration/R", GSD_TYPE_FLOAT, 1, 1, 0, (void *)&R);
     checkError(retval);
 
     m_exec_conf->msg->notice(10) << "dump.gsd: writing particles/N" << endl;
@@ -593,6 +603,80 @@ void GSDDumpWriter::writeProperties(const SnapshotParticleData<float>& snapshot,
             checkError(retval);
             if (nframes == 0)
                 m_nondefault["particles/orientation"] = true;
+            }
+        }
+
+        {
+        std::vector<float> data(N*4);
+        data.reserve(1); //! make sure we allocate
+        bool all_default = true;
+
+        for (unsigned int group_idx = 0; group_idx < N; group_idx++)
+            {
+            unsigned int t = m_group->getMemberTag(group_idx);
+
+            // look up tag in snapshot
+            auto it = map.find(t);
+            assert(it != map.end());
+
+            if (snapshot.quat_l[it->second].s != float(1.0) ||
+                snapshot.quat_l[it->second].v.x != float(0.0) ||
+                snapshot.quat_l[it->second].v.y != float(0.0) ||
+                snapshot.quat_l[it->second].v.z != float(0.0))
+                {
+                all_default = false;
+                }
+
+            data[group_idx*4+0] = float(snapshot.quat_l[it->second].s);
+            data[group_idx*4+1] = float(snapshot.quat_l[it->second].v.x);
+            data[group_idx*4+2] = float(snapshot.quat_l[it->second].v.y);
+            data[group_idx*4+3] = float(snapshot.quat_l[it->second].v.z);
+            }
+
+        if (!all_default || (nframes > 0 && m_nondefault["particles/quat_l"]))
+            {
+            m_exec_conf->msg->notice(10) << "dump.gsd: writing particles/quat_l" << endl;
+            retval = gsd_write_chunk(&m_handle, "particles/quat_l", GSD_TYPE_FLOAT, N, 4, 0, (void *)&data[0]);
+            checkError(retval);
+            if (nframes == 0)
+                m_nondefault["particles/quat_l"] = true;
+            }
+        }
+
+        {
+        std::vector<float> data(N*4);
+        data.reserve(1); //! make sure we allocate
+        bool all_default = true;
+
+        for (unsigned int group_idx = 0; group_idx < N; group_idx++)
+            {
+            unsigned int t = m_group->getMemberTag(group_idx);
+
+            // look up tag in snapshot
+            auto it = map.find(t);
+            assert(it != map.end());
+
+            if (snapshot.quat_r[it->second].s != float(1.0) ||
+                snapshot.quat_r[it->second].v.x != float(0.0) ||
+                snapshot.quat_r[it->second].v.y != float(0.0) ||
+                snapshot.quat_r[it->second].v.z != float(0.0))
+                {
+                all_default = false;
+                }
+
+            data[group_idx*4+0] = float(snapshot.quat_r[it->second].s);
+            data[group_idx*4+1] = float(snapshot.quat_r[it->second].v.x);
+            data[group_idx*4+2] = float(snapshot.quat_r[it->second].v.y);
+            data[group_idx*4+3] = float(snapshot.quat_r[it->second].v.z);
+            }
+
+        if (!all_default || (nframes > 0 && m_nondefault["particles/quat_r"]))
+            {
+            m_exec_conf->msg->notice(10) << "dump.gsd: writing particles/quat_r" << endl;
+            retval = gsd_write_chunk(&m_handle, "particles/quat_r", GSD_TYPE_FLOAT, N, 4, 0, (void *)&data[0]);
+            checkError(retval);
+            if (nframes == 0)
+                m_nondefault["particles/quat_r"] = true;
             }
         }
     }
@@ -904,7 +988,9 @@ void GSDDumpWriter::populateNonDefault()
                                    "particles/orientation",
                                    "particles/velocity",
                                    "particles/angmom",
-                                   "particles/image"};
+                                   "particles/image",
+                                   "particles/quat_l",
+                                   "particles/quat_r"};
 
     for (auto const& chunk : chunks)
         {
