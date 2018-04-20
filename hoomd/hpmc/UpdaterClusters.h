@@ -1452,7 +1452,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
                 pr = quat<Scalar>(0,nr);
                 }
             }
-        else
+        else if (!line && !swap)
             {
             // we shouldn't get here
             throw std::runtime_error("point reflections on sphere not supported.\n");
