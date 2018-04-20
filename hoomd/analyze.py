@@ -276,7 +276,7 @@ class log(_analyzer):
 
     Quantities that can be logged at any time:
 
-    - **volume** - Volume of the simulation box (in volume units)
+    - **volume** - Volume of the simulation box or sphere (in volume units)
     - **N** - Particle nubmer (dimensionless)
     - **lx** - Box length in x direction (in length units)
     - **ly** - Box length in y direction (in length units)

@@ -67,6 +67,17 @@ struct __attribute__((visibility("default"))) SphereDim
             R = _R;
             }
 
+        //! Return the simulation volume
+        /* \param two_d True if on a 2-sphere, 3-sphere otherwise
+         */
+        Scalar getVolume(bool two_d)
+            {
+            if (two_d)
+                return Scalar(4.0*M_PI*R*R);
+            else
+                return Scalar(2.0*M_PI*M_PI*R*R*R);
+            }
+
         /*! Convert a hyperspherical coordinate into a cartesian one
 
             \param q_l The first unit quaternion specifying particle position and orientation
