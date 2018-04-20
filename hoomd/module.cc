@@ -35,6 +35,7 @@
 #include "Integrator.h"
 #include "SFCPackUpdater.h"
 #include "BoxResizeUpdater.h"
+#include "SphereResizeUpdater.h"
 #include "System.h"
 #include "Variant.h"
 #include "Messenger.h"
@@ -405,6 +406,7 @@ PYBIND11_MODULE(_hoomd, m)
     export_Updater(m);
     export_Integrator(m);
     export_BoxResizeUpdater(m);
+    export_SphereResizeUpdater(m);
     export_SFCPackUpdater(m);
 #ifdef ENABLE_CUDA
     export_SFCPackUpdaterGPU(m);

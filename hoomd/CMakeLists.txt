@@ -49,6 +49,7 @@ set(_hoomd_sources Analyzer.cc
                    SFCPackUpdater.cc
                    SignalHandler.cc
                    SnapshotSystemData.cc
+                   SphereResizeUpdater.cc
                    System.cc
                    SystemDefinition.cc
                    Updater.cc
@@ -130,6 +131,7 @@ set(_hoomd_headers
     SharedSignal.h
     SignalHandler.h
     SnapshotSystemData.h
+    SphereResizeUpdater.h
     SystemDefinition.h
     System.h
     TextureTools.h
