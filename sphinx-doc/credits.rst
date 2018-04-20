@@ -199,6 +199,9 @@ Lin Yang, Alex Travesset, Iowa State University
 Tim Moore, Vanderbilt University
   * angle.cosinesq
 
+Jaime Millan, Northwestern University
+ * Wall potential framework support of integrate.npt mode
+
 HPMC developers
 ---------------
 
