@@ -19,6 +19,7 @@
 
 #ifdef ENABLE_TBB
 #include <tbb/tbb.h>
+#include <atomic>
 #endif
 
 namespace hpmc
@@ -27,6 +28,7 @@ namespace hpmc
 namespace detail
 {
 
+#ifdef ENABLE_TBB
 //! Wrapper around std::atomic_flag to allow use in a std::vector
 class my_atomic_flag
     {
@@ -65,7 +67,7 @@ class my_atomic_flag
     private:
         std::atomic_flag f;
     };
-
+#endif
 
 // Graph class represents a undirected graph
 // using adjacency list representation
@@ -1337,7 +1339,7 @@ void UpdaterClusters<Shape>::update(unsigned int timestep)
         ArrayHandle<Scalar4> h_quat_l(m_pdata->getLeftQuaternionArray(), access_location::host, access_mode::read);
         ArrayHandle<Scalar4> h_quat_r(m_pdata->getRightQuaternionArray(), access_location::host, access_mode::read);
         ArrayHandle<Scalar> h_diameter(m_pdata->getDiameters(), access_location::host, access_mode::read);
-        ArrayHandle<Scalar> h_charge(m_pdata->getDiameters(), access_location::host, access_mode::read);
+        ArrayHandle<Scalar> h_charge(m_pdata->getCharges(), access_location::host, access_mode::read);
         ArrayHandle<unsigned int> h_tag(m_pdata->getTags(), access_location::host, access_mode::read);
         ArrayHandle<int3> h_image(m_pdata->getImages(), access_location::host, access_mode::read);
 
