@@ -297,12 +297,8 @@ class user_union(user):
 
         # with hyperspherical boundary conditions (note, this evaluator differs from the single patch one)
         square_well_hypersphere = """
-              // normalize the positions
-              quat<Scalar> pos4_i_norm(q_i*fast::rsqrt(norm2(q_i)));
-              quat<Scalar> pos4_j_norm(q_j*fast::rsqrt(norm2(q_j)));
-
               // compute the arc-length on the hypersphere
-              float arc_length = R*fast::acos(dot(pos4_i_norm,pos4_j_norm));
+              float arc_length = R*fast::acos(dot(q_i,q_j)/(R*R));
 
               if (arc_length < 1.23f)
                   return -1.0f;

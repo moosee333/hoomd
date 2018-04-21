@@ -170,6 +170,7 @@ float PatchEnergyJITUnion::compute_leaf_leaf_energy(vec3<float> dr,
 
             // on the hypersphere, the slightly more expensive arc-length check is performed only in the user function
             bool within_rcut = m_on_hypersphere || (dot(r_ij,r_ij) <= m_r_cut*m_r_cut);
+
             if (within_rcut)
                 {
                 // evaluate energy via JIT function

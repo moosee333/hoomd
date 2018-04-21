@@ -987,15 +987,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                                         }
                                     auto p = std::make_pair(new_tag_i,new_tag_j);
 
-                                    // if particle interacts in different image already, add to that energy
-                                    float U = 0.0;
-                                        {
-                                        auto it_energy = m_energy_old_old.find(p);
-                                        if (it_energy != m_energy_old_old.end())
-                                            U = it_energy->second;
-                                        }
-
-                                    U += patch->energy(vec3<Scalar>(0,0,0), // r_ij
+                                    float U = patch->energy(vec3<Scalar>(0,0,0), // r_ij
                                                         typ_i,
                                                         quat<float>(), // orientation_i
                                                         d_i,
@@ -1010,9 +1002,8 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                                                         quat<float>(quat_r_j),
                                                         sphere.getR()
                                                         );
-
-                                    // update map
                                     m_energy_old_old[p] = U;
+
                                     } // end if overlap
 
                                 } // end loop over AABB tree leaf
@@ -1141,15 +1132,7 @@ void UpdaterClusters<Shape>::findInteractions(unsigned int timestep, vec3<Scalar
                                     {
                                     auto p = std::make_pair(h_tag.data[i], new_tag_j);
 
-                                    // if particle interacts in different image already, add to that energy
-                                    float U = 0.0;
-                                        {
-                                        auto it_energy = m_energy_new_old.find(p);
-                                        if (it_energy != m_energy_new_old.end())
-                                            U = it_energy->second;
-                                        }
-
-                                    U += patch->energy(vec3<Scalar>(0,0,0),  //r_ij
+                                    float U = patch->energy(vec3<Scalar>(0,0,0),  //r_ij
                                                         typ_i,
                                                         quat<float>(),       // orientation_i
                                                         h_diameter.data[i],
